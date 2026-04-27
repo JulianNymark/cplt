@@ -2,6 +2,7 @@ use std::path::Path;
 
 use super::env::build_sandbox_env;
 use super::policy::HardeningCategory;
+use crate::agent::Agent;
 
 /// Validate the profile by running a simple command inside the sandbox.
 pub fn validate(profile_path: &Path, _project_dir: &Path, _home_dir: &Path) -> Result<(), String> {
@@ -42,13 +43,10 @@ pub fn exec(
     disabled_categories: &[HardeningCategory],
     scratch_dir: Option<&Path>,
     proxy_port: Option<u16>,
+    agent: Agent,
 ) -> u8 {
     let mut cmd = std::process::Command::new("sandbox-exec");
     cmd.arg("-f").arg(profile_path).arg(copilot_bin);
-
-    // Prevent Copilot from trying to auto-update inside the sandbox
-    // (writes to ~/.copilot/pkg are denied, so it would fail anyway).
-    cmd.arg("--no-auto-update");
 
     for arg in copilot_args {
         cmd.arg(arg);
@@ -65,6 +63,7 @@ pub fn exec(
         inherit_env,
         disabled_categories,
         scratch_dir,
+        agent,
     );
 
     if sandbox_env.clear_first {

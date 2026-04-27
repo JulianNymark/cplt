@@ -386,6 +386,8 @@ fn profile_contains_deny_default() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(p.contains("(deny default)"));
 }
@@ -411,6 +413,8 @@ fn profile_allows_tty_ioctl() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow file-ioctl)"),
@@ -439,6 +443,8 @@ fn profile_grants_project_access() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(p.contains("(allow file-read* (subpath \"/projects/app\"))"));
     assert!(p.contains("(allow file-write* (subpath \"/projects/app\"))"));
@@ -469,6 +475,8 @@ fn profile_grants_copilot_config_access() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(p.contains("(allow file-read* (subpath \"/Users/test/.copilot\"))"));
 }
@@ -494,6 +502,8 @@ fn profile_denies_sensitive_dirs() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     for dir in &[
         ".ssh",
@@ -544,6 +554,8 @@ fn profile_denies_sensitive_files() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     for file in &[
         ".netrc",
@@ -582,6 +594,8 @@ fn profile_restricts_outbound_tcp() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(deny network-outbound (remote tcp))"),
@@ -630,6 +644,8 @@ fn profile_extra_ports_adds_allows() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"*:8080\"))"),
@@ -666,6 +682,8 @@ fn profile_proxy_port_allows_localhost() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"localhost:18080\"))"),
@@ -698,6 +716,8 @@ fn profile_allow_localhost_opens_specific_ports() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"localhost:3000\"))"),
@@ -745,6 +765,8 @@ fn profile_deny_rules_come_after_allow_rules() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     let allow_pos = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
@@ -779,6 +801,8 @@ fn profile_allows_gh_config_read_only() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow file-read* (literal \"/Users/test/.config/gh/hosts.yml\"))"),
@@ -815,6 +839,8 @@ fn profile_allows_file_map_executable_for_copilot() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow file-map-executable (subpath \"/Users/test/.copilot\"))"),
@@ -847,6 +873,8 @@ fn profile_denies_env_files_by_default() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.env$"))"#),
@@ -887,6 +915,8 @@ fn profile_allows_env_files_when_flag_set() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         !p.contains(r#"deny file-read* (regex #"/projects/app/"#),
@@ -915,6 +945,8 @@ fn profile_env_deny_comes_after_project_allow() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     let project_allow = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
@@ -951,6 +983,8 @@ fn profile_allows_all_localhost_when_flag_set() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         !p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
@@ -996,6 +1030,8 @@ fn profile_denies_write_to_copilot_pkg() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // Must allow write to ~/.copilot (session state, config)
     assert!(
@@ -1168,6 +1204,8 @@ fn profile_denies_exec_from_tmp() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // Must allow read+write to /tmp (needed for temp files)
     assert!(
@@ -1220,6 +1258,8 @@ fn profile_allows_jvm_attach_when_flag_set() {
         allow_gpg_signing: false,
         allow_jvm_attach: true,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // Must allow unix socket bind+inbound+connect for JVM Attach API (.java_pid*)
     // Three operations needed: bind (create socket), inbound (accept), outbound (connect)
@@ -1292,6 +1332,8 @@ fn profile_denies_git_persistence_vectors() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // Must deny writes to .git/hooks (post-checkout etc. run outside sandbox)
     assert!(
@@ -1346,6 +1388,8 @@ fn default_profile() -> String {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     })
 }
 
@@ -1550,7 +1594,7 @@ fn make_env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 #[test]
 fn env_sanitized_injects_hardening_vars() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     let npm = env
         .vars
@@ -1572,7 +1616,14 @@ fn env_sanitized_injects_hardening_vars() {
 fn env_sanitized_lifecycle_opt_out_skips_npm_yarn() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
     let disabled = vec![HardeningCategory::LifecycleScripts];
-    let env = build_sandbox_env(&parent, &[], false, &disabled, None);
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &disabled,
+        None,
+        cplt::agent::Agent::Copilot,
+    );
 
     assert!(
         !env.vars
@@ -1594,7 +1645,7 @@ fn env_sanitized_lifecycle_opt_out_skips_npm_yarn() {
 #[test]
 fn env_inherit_injects_hardening_vars() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
-    let env = build_sandbox_env(&parent, &[], true, &[], None);
+    let env = build_sandbox_env(&parent, &[], true, &[], None, cplt::agent::Agent::Copilot);
 
     assert!(!env.clear_first, "inherit mode should not clear env");
     let npm = env
@@ -1616,7 +1667,14 @@ fn env_pass_env_preserves_user_override() {
         ("npm_config_ignore_scripts", "false"),
     ]);
     let extra = vec!["npm_config_ignore_scripts".to_string()];
-    let env = build_sandbox_env(&parent, &extra, false, &[], None);
+    let env = build_sandbox_env(
+        &parent,
+        &extra,
+        false,
+        &[],
+        None,
+        cplt::agent::Agent::Copilot,
+    );
 
     let npm: Vec<_> = env
         .vars
@@ -1641,7 +1699,14 @@ fn env_inherit_pass_env_preserves_user_override() {
         ("npm_config_ignore_scripts", "false"),
     ]);
     let extra = vec!["npm_config_ignore_scripts".to_string()];
-    let env = build_sandbox_env(&parent, &extra, true, &[], None);
+    let env = build_sandbox_env(
+        &parent,
+        &extra,
+        true,
+        &[],
+        None,
+        cplt::agent::Agent::Copilot,
+    );
 
     // In inherit mode with --pass-env, the user's value is inherited
     // and hardening should NOT override it
@@ -1656,7 +1721,7 @@ fn env_inherit_pass_env_preserves_user_override() {
 #[test]
 fn env_sanitized_clears_first() {
     let parent = make_env(&[("HOME", "/Users/test"), ("SECRET_TOKEN", "abc123")]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     assert!(env.clear_first, "sanitized mode should clear env first");
     assert!(
@@ -1678,7 +1743,7 @@ fn env_lang_prefix_does_not_leak_langchain_keys() {
         ("LANGFUSE_SECRET_KEY", "sk-secret-langfuse"),
         ("LANGSMITH_API_KEY", "sk-secret-langsmith"),
     ]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     // LANG and LANGUAGE should pass through (explicit allowlist)
     assert!(
@@ -1716,7 +1781,7 @@ fn env_yarn_prefix_does_not_bypass_hardening() {
         ("YARN_ENABLE_SCRIPTS", "true"),
         ("YARN_CACHE_FOLDER", "/some/cache"),
     ]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     // YARN_ENABLE_SCRIPTS must be overridden to "false" by hardening
     let yarn: Vec<_> = env
@@ -1766,7 +1831,7 @@ fn env_prefix_denies_secret_suffixes() {
         ("SDKMAN_DIR", "/Users/test/.sdkman"),
         ("SDKMAN_CREDENTIALS", "sdk-secret"),
     ]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     // Safe config vars must pass through
     assert!(
@@ -1828,7 +1893,7 @@ fn env_explicit_allowlist_bypasses_suffix_deny() {
         ("GITHUB_TOKEN", "ghp_def456"),
         ("COPILOT_GITHUB_TOKEN", "ghp_ghi789"),
     ]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     assert!(
         env.vars.iter().any(|(k, _)| k == "GH_TOKEN"),
@@ -1870,6 +1935,8 @@ fn profile_scratch_dir_adds_all_permissions() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
 
     let scratch_str = scratch.to_string_lossy();
@@ -1927,6 +1994,8 @@ fn profile_allow_tmp_exec_removes_denies() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
 
     assert!(
@@ -2081,6 +2150,8 @@ fn profile_allows_copilot_install_dir() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains(
@@ -2120,6 +2191,8 @@ fn profile_allows_vscode_copilot_path() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains(&format!("(allow file-read* (subpath \"{vscode_dir}\"))")),
@@ -2164,6 +2237,8 @@ fn profile_allows_electron_app_bundle() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: Some(std::path::Path::new(electron_dir)),
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains(&format!("(allow file-read* (subpath \"{electron_dir}\"))")),
@@ -2311,6 +2386,8 @@ fn profile_allows_git_hooks_path() {
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow file-read* (subpath \"/Users/test/.config/git/hooks\"))"),
@@ -2342,7 +2419,7 @@ fn profile_no_git_hooks_path_omits_section() {
 #[test]
 fn env_git_signing_disabled_by_default() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
     let get = |name: &str| {
         env.vars
             .iter()
@@ -2359,7 +2436,14 @@ fn env_git_signing_disabled_by_default() {
 #[test]
 fn env_git_signing_enabled_skips_signing_vars() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
-    let env = build_sandbox_env(&parent, &[], false, &[HardeningCategory::GitSigning], None);
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[HardeningCategory::GitSigning],
+        None,
+        cplt::agent::Agent::Copilot,
+    );
     let get = |name: &str| {
         env.vars
             .iter()
@@ -2389,7 +2473,7 @@ fn env_gpg_tty_passed_through() {
         ("PATH", "/usr/bin"),
         ("GPG_TTY", "/dev/ttys001"),
     ]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
     let get = |name: &str| {
         env.vars
             .iter()
@@ -2441,6 +2525,8 @@ fn profile_gpg_signing_allows_public_keyring() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow file-read* (literal \"/Users/test/.gnupg/pubring.kbx\"))"),
@@ -2477,6 +2563,8 @@ fn profile_gpg_signing_allows_agent_socket() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(allow network-outbound (literal \"/Users/test/.gnupg/S.gpg-agent\"))"),
@@ -2510,6 +2598,8 @@ fn profile_gpg_signing_denies_private_keys() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(deny file-read* (subpath \"/Users/test/.gnupg/private-keys-v1.d\"))"),
@@ -2542,6 +2632,8 @@ fn profile_gpg_signing_rules_come_after_deny() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     let deny_pos = p
         .find("(deny file-read* (subpath \"/Users/test/.gnupg\"))")
@@ -2584,6 +2676,8 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // Must use literal (exact file), never subpath (recursive) for GPG allows
     assert!(
@@ -2614,6 +2708,8 @@ fn profile_gpg_signing_deny_path_wins() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // When user explicitly denies ~/.gnupg, GPG allows should NOT appear
     assert!(
@@ -2647,6 +2743,8 @@ fn profile_gpg_signing_denies_legacy_secring() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     assert!(
         p.contains("(deny file-read* (literal \"/Users/test/.gnupg/secring.gpg\"))"),
@@ -2675,6 +2773,8 @@ fn profile_gpg_signing_allows_socket_file_read() {
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
     });
     // Socket needs file-read* for inode lookup before connect(2)
     assert!(
@@ -2695,7 +2795,14 @@ fn env_scratch_dir_sets_tmpdir_vars() {
         ("TMPDIR", "/private/var/folders/old"),
     ]);
     let scratch = std::path::Path::new("/Users/test/Library/Caches/cplt/tmp/session123");
-    let env = build_sandbox_env(&parent, &[], false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let tmpdir = env.vars.iter().find(|(k, _)| k == "TMPDIR");
     assert!(tmpdir.is_some(), "TMPDIR should be set");
@@ -2720,7 +2827,14 @@ fn env_scratch_dir_sets_tmpdir_vars() {
 fn env_scratch_dir_no_duplicate_tmpdir() {
     let parent = make_env(&[("HOME", "/Users/test"), ("TMPDIR", "/old/tmp")]);
     let scratch = std::path::Path::new("/new/scratch");
-    let env = build_sandbox_env(&parent, &[], false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let tmpdir_count = env.vars.iter().filter(|(k, _)| k == "TMPDIR").count();
     assert_eq!(tmpdir_count, 1, "TMPDIR should appear exactly once");
@@ -2731,7 +2845,14 @@ fn env_scratch_dir_respects_pass_env_override() {
     let parent = make_env(&[("HOME", "/Users/test"), ("TMPDIR", "/custom/tmp")]);
     let extra = vec!["TMPDIR".to_string()];
     let scratch = std::path::Path::new("/scratch/dir");
-    let env = build_sandbox_env(&parent, &extra, false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &extra,
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let tmpdir = env.vars.iter().find(|(k, _)| k == "TMPDIR");
     assert!(tmpdir.is_some());
@@ -2748,7 +2869,7 @@ fn env_no_scratch_dir_passes_system_tmpdir() {
         ("HOME", "/Users/test"),
         ("TMPDIR", "/private/var/folders/xx"),
     ]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     let tmpdir = env.vars.iter().find(|(k, _)| k == "TMPDIR");
     assert!(tmpdir.is_some());
@@ -2767,7 +2888,14 @@ fn env_no_scratch_dir_passes_system_tmpdir() {
 fn env_scratch_dir_injects_java_tool_options() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
     let scratch = std::path::Path::new("/scratch/session123");
-    let env = build_sandbox_env(&parent, &[], false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let jto = env.vars.iter().find(|(k, _)| k == "JAVA_TOOL_OPTIONS");
     assert!(jto.is_some(), "JAVA_TOOL_OPTIONS should be injected");
@@ -2794,7 +2922,14 @@ fn env_scratch_dir_injects_java_tool_options() {
 fn env_scratch_dir_appends_to_existing_java_tool_options() {
     let parent = make_env(&[("HOME", "/Users/test"), ("JAVA_TOOL_OPTIONS", "-Xmx512m")]);
     let scratch = std::path::Path::new("/scratch/session123");
-    let env = build_sandbox_env(&parent, &[], false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let jto = env.vars.iter().find(|(k, _)| k == "JAVA_TOOL_OPTIONS");
     assert!(jto.is_some());
@@ -2814,7 +2949,14 @@ fn env_scratch_dir_java_tool_options_respects_pass_env() {
     let parent = make_env(&[("HOME", "/Users/test"), ("JAVA_TOOL_OPTIONS", "-Xmx1g")]);
     let extra = vec!["JAVA_TOOL_OPTIONS".to_string()];
     let scratch = std::path::Path::new("/scratch/session123");
-    let env = build_sandbox_env(&parent, &extra, false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &extra,
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let jto = env.vars.iter().find(|(k, _)| k == "JAVA_TOOL_OPTIONS");
     assert!(jto.is_some());
@@ -2828,7 +2970,7 @@ fn env_scratch_dir_java_tool_options_respects_pass_env() {
 #[test]
 fn env_no_scratch_dir_no_java_tool_options_injected() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
-    let env = build_sandbox_env(&parent, &[], false, &[], None);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
 
     let jto = env.vars.iter().find(|(k, _)| k == "JAVA_TOOL_OPTIONS");
     assert!(
@@ -2843,7 +2985,14 @@ fn env_scratch_dir_no_jansi_tmpdir_env_var() {
     // Verify we don't set it as an env var anymore.
     let parent = make_env(&[("HOME", "/Users/test")]);
     let scratch = std::path::Path::new("/scratch/session123");
-    let env = build_sandbox_env(&parent, &[], false, &[], Some(scratch));
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
 
     let jansi = env.vars.iter().find(|(k, _)| k == "JANSI_TMPDIR");
     assert!(

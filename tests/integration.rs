@@ -386,6 +386,8 @@ mod macos_tests {
             allow_gpg_signing: false,
             allow_jvm_attach: false,
             electron_app_dir: None,
+            agent: cplt::agent::Agent::Copilot,
+            agent_dirs: &[],
         }
     }
 

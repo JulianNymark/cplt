@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::agent::Agent;
+
 use super::policy::{
     ENV_ALLOWLIST, ENV_ALWAYS_DENY, ENV_PREFIX_ALLOWLIST, HARDENING_ENV_VARS, HardeningCategory,
     SCRATCH_DIR_ENV_VARS, is_secret_suffix,
@@ -15,6 +17,30 @@ pub struct SandboxEnv {
     pub clear_first: bool,
 }
 
+/// Environment variables that are Copilot-specific and should not be exposed
+/// to other agents. These contain GitHub auth tokens that OpenCode doesn't need.
+const COPILOT_ONLY_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"];
+
+/// Environment variable prefix that is Copilot-specific.
+const COPILOT_ONLY_PREFIXES: &[&str] = &["COPILOT_"];
+
+/// Returns true if this env var should be suppressed for the given agent.
+fn is_agent_suppressed(key: &str, agent: Agent) -> bool {
+    if agent == Agent::Copilot {
+        return false; // Copilot gets everything in the allowlist
+    }
+    if COPILOT_ONLY_VARS.contains(&key) {
+        return true;
+    }
+    if COPILOT_ONLY_PREFIXES
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+    {
+        return true;
+    }
+    false
+}
+
 /// Build the environment variable map for the sandboxed process.
 ///
 /// Pure function (takes parent env as input) for testability.
@@ -24,12 +50,14 @@ pub struct SandboxEnv {
 /// - `vars_to_remove`: only relevant when `should_clear` is false (inherit mode).
 /// - `scratch_dir`: if Some, TMPDIR/TMP/TEMP/GOTMPDIR are redirected to this path
 ///   (unless explicitly overridden by user via `extra_pass_env`).
+/// - `agent`: which agent is being sandboxed — Copilot-specific env vars are suppressed for other agents.
 pub fn build_sandbox_env(
     parent_env: &[(String, String)],
     extra_pass_env: &[String],
     inherit_env: bool,
     disabled_categories: &[HardeningCategory],
     scratch_dir: Option<&Path>,
+    agent: Agent,
 ) -> SandboxEnv {
     let mut env = SandboxEnv {
         vars: Vec::new(),
@@ -42,14 +70,26 @@ pub fn build_sandbox_env(
         for var in ENV_ALWAYS_DENY {
             env.remove.push(var.to_string());
         }
+        // Also strip agent-specific vars in inherit mode
+        for (key, _) in parent_env {
+            if is_agent_suppressed(key, agent) {
+                env.remove.push(key.clone());
+            }
+        }
     } else {
-        // Secure mode: only allowlisted vars
+        // Secure mode: only allowlisted vars, filtered by agent
         for &var in ENV_ALLOWLIST {
+            if is_agent_suppressed(var, agent) {
+                continue;
+            }
             if let Some((_, val)) = parent_env.iter().find(|(k, _)| k == var) {
                 env.vars.push((var.to_string(), val.clone()));
             }
         }
         for (key, val) in parent_env {
+            if is_agent_suppressed(key, agent) {
+                continue;
+            }
             if ENV_PREFIX_ALLOWLIST
                 .iter()
                 .any(|prefix| key.starts_with(prefix))

@@ -1358,8 +1358,9 @@ mod e2e_tests {
             "cplt should fail when only a self-symlink is in PATH.\nstderr: {stderr}"
         );
         assert!(
-            stderr.contains("Copilot CLI not found"),
-            "error should mention Copilot CLI not found.\nstderr: {stderr}"
+            stderr.contains("No supported AI coding agent found")
+                || stderr.contains("not found in PATH"),
+            "error should mention agent not found.\nstderr: {stderr}"
         );
     }
 

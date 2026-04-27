@@ -2,9 +2,30 @@
 
 This document describes the security architecture of cplt, the threat model it addresses, the defense layers it implements, and how they are validated through automated testing.
 
+## Supported Agents
+
+cplt sandboxes AI coding agents — currently **GitHub Copilot CLI** and **OpenCode** (anomalyco/opencode). Both share the same core sandbox infrastructure (deny-default Seatbelt profile, env sanitization, scratch dir), with agent-specific adaptations:
+
+| Property | Copilot | OpenCode |
+|---|---|---|
+| Auth mechanism | GitHub token (Keychain, `GH_TOKEN`) | API keys (`ANTHROPIC_API_KEY`, etc.) |
+| Auth in sandbox | Token auto-passed via env allowlist | Keys NOT passed — must use `--pass-env` |
+| Config dir | `~/.copilot` (read/write) | `~/.config/opencode` (read-only) |
+| Data dir | `~/Library/Caches/copilot` | `~/.local/share/opencode` (write, no exec) |
+| Keychain access | Yes (required for token storage) | No |
+| SEA extraction | Yes (pre-sandbox) | No |
+| Env isolation | `GH_TOKEN`, `COPILOT_*` passed | `GH_TOKEN`, `COPILOT_*` suppressed |
+
+### OpenCode-specific security notes
+
+- **API keys are opt-in**: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and other provider keys are never passed through by default. Users must explicitly use `--pass-env` for each key. This prevents accidental exposure of credentials to a sandboxed process.
+- **Data dir is write+no-exec**: `~/.local/share/opencode/` (sessions, SQLite DB) is writable but has both `(deny process-exec)` and `(deny file-map-executable)` to prevent write+exec persistence attacks.
+- **Config dir is read-only**: `~/.config/opencode/opencode.json` and related config are readable but not writable, preventing config tampering across unsandboxed runs.
+- **Copilot credentials isolated**: `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN`, and all `COPILOT_*` env vars are suppressed for non-Copilot agents.
+
 ## Threat Model
 
-cplt assumes Copilot CLI is an **untrusted agent** executing arbitrary code suggestions on your machine. The threat model covers:
+cplt assumes the sandboxed agent is **untrusted** — executing arbitrary code suggestions on your machine. The threat model covers:
 
 | Threat | Example | Defense layer |
 |---|---|---|

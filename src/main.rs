@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use cplt::{config, discover, proxy, sandbox, scratch, update};
+use cplt::{agent, config, discover, proxy, sandbox, scratch, update};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -10,14 +10,14 @@ const LONG_VERSION: &str = match option_env!("CPLT_LONG_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// Run GitHub Copilot CLI inside a macOS sandbox.
+/// Run AI coding agents inside a macOS sandbox.
 ///
-/// Copilot can read and write your project files, but cannot access your
+/// The agent can read and write your project files, but cannot access your
 /// SSH keys, cloud credentials, or other secrets. The sandbox is enforced
-/// by the macOS kernel — Copilot (and any process it spawns) cannot bypass it.
+/// by the macOS kernel — the agent (and any process it spawns) cannot bypass it.
 ///
-/// Network: Outbound TCP is allowed (Copilot needs to reach its API).
-/// The filesystem isolation is the primary security control.
+/// Supports GitHub Copilot CLI and OpenCode. Auto-detects which agent to use,
+/// or specify explicitly with --agent.
 ///
 /// Defaults can be saved to ~/.config/cplt/config.toml
 /// so you don't need to pass flags every time. Run `cplt config init` to
@@ -32,11 +32,14 @@ EXAMPLES:
   cplt -- -p \"fix the tests\"
     Run Copilot in sandbox (credentials protected, network allowed)
 
+  cplt --agent opencode --pass-env ANTHROPIC_API_KEY
+    Run OpenCode in sandbox with Anthropic API key
+
   cplt --with-proxy -- -p \"fix the tests\"
     Run with proxy for connection logging and domain blocking
 
   cplt --allow-read ~/shared-libs -- -p \"use shared-libs\"
-    Let Copilot read files outside the project directory
+    Let the agent read files outside the project directory
 
   cplt --deny-path ~/.config/gh -- -p \"refactor auth\"
     Block access to a path that is normally allowed
@@ -58,14 +61,20 @@ EXAMPLES:
 "
 )]
 struct Cli {
-    /// Which directory Copilot can read and write to.
+    /// Which AI coding agent to sandbox.
+    /// Auto-detected from PATH if not specified (prefers copilot, falls back to opencode).
+    /// Supported: copilot, opencode
+    #[arg(long, value_name = "AGENT")]
+    agent: Option<String>,
+
+    /// Which directory the agent can read and write to.
     /// Defaults to the current git repository root, or the working directory
     /// if you're not inside a git repo.
     #[arg(long, short = 'd', value_name = "DIR")]
     project_dir: Option<PathBuf>,
 
     /// Enable a local CONNECT proxy that logs and filters outbound connections.
-    /// All traffic (Copilot, gh, curl) is routed through the proxy via
+    /// All agent traffic is routed through the proxy via
     /// HTTP_PROXY/HTTPS_PROXY env vars. Can block known-bad domains with
     /// --blocked-domains. The proxy enforces the same port restrictions as
     /// the sandbox (443 + --allow-port values).
@@ -99,15 +108,15 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     proxy_log: Option<PathBuf>,
 
-    /// Let Copilot read files outside the project directory.
-    /// Use this when Copilot needs to reference shared libraries,
+    /// Let the agent read files outside the project directory.
+    /// Use when the agent needs to reference shared libraries,
     /// monorepo siblings, or documentation stored elsewhere.
     /// Can be specified multiple times.
     #[arg(long = "allow-read", value_name = "PATH")]
     allow_read: Vec<PathBuf>,
 
-    /// Let Copilot read AND write files outside the project directory.
-    /// Use carefully — this gives Copilot full access to modify these paths.
+    /// Let the agent read AND write files outside the project directory.
+    /// Use carefully — this gives the agent full access to modify these paths.
     /// Can be specified multiple times.
     #[arg(long = "allow-write", value_name = "PATH")]
     allow_write: Vec<PathBuf>,
@@ -120,14 +129,14 @@ struct Cli {
     deny_paths: Vec<PathBuf>,
 
     /// Allow outbound TCP to an additional port beyond 443.
-    /// Use for external services that Copilot needs to reach.
+    /// Use for external services the agent needs to reach.
     /// Can be specified multiple times.
     #[arg(long = "allow-port", value_name = "PORT")]
     allow_ports: Vec<u16>,
 
     /// Allow outbound TCP to localhost on a specific port.
     /// Localhost is blocked by default to prevent SSRF. Use this for
-    /// MCP servers, dev servers, or other local services Copilot needs.
+    /// MCP servers, dev servers, or other local services the agent needs.
     /// Can be specified multiple times.
     #[arg(long = "allow-localhost", value_name = "PORT")]
     allow_localhost: Vec<u16>,
@@ -140,7 +149,7 @@ struct Cli {
     #[arg(long)]
     allow_localhost_any: bool,
 
-    /// Allow Copilot to read .env files, private keys (.pem, .key), and
+    /// Allow the agent to read .env files, private keys (.pem, .key), and
     /// other sensitive files in the project directory. These are blocked
     /// by default because they often contain secrets that a rogue agent
     /// could exfiltrate via HTTPS.
@@ -149,9 +158,9 @@ struct Cli {
 
     /// Pass an additional environment variable through to the sandbox.
     /// By default, only a safe allowlist of env vars is passed (PATH, HOME,
-    /// TERM, Go/Java/Rust/Node paths, Copilot auth tokens, etc.).
-    /// Cloud credentials (AWS_*, DATABASE_URL, NPM_TOKEN) are stripped.
-    /// Use this to pass specific vars your tools need.
+    /// TERM, Go/Java/Rust/Node paths, etc.). Cloud credentials (AWS_*,
+    /// DATABASE_URL, NPM_TOKEN) are stripped. For OpenCode, use this to pass
+    /// API keys: --pass-env ANTHROPIC_API_KEY
     /// Can be specified multiple times.
     #[arg(long = "pass-env", value_name = "VAR")]
     pass_env: Vec<String>,
@@ -268,34 +277,35 @@ struct Cli {
     // --- Copilot pass-through flags ---
     // These are forwarded directly to the copilot process for convenience,
     // avoiding the need for -- when using common session-level flags.
-    /// Resume a previous copilot session. Use --resume to pick interactively,
+    // Ignored when --agent opencode is used.
+    /// Resume a previous Copilot session. Use --resume to pick interactively,
     /// or --resume=NAME to resume a specific session by name or ID.
-    /// Forwarded to copilot as --resume[=SESSION].
+    /// Copilot-only (ignored for other agents).
     #[arg(long, value_name = "SESSION", num_args = 0..=1, require_equals = true, default_missing_value = "")]
     resume: Option<String>,
 
-    /// Resume the most recent copilot session in this directory.
-    /// Forwarded to copilot as --continue.
+    /// Resume the most recent Copilot session in this directory.
+    /// Copilot-only (ignored for other agents).
     #[arg(long = "continue", conflicts_with = "resume")]
     continue_session: bool,
 
-    /// Enable remote control for the copilot session.
+    /// Enable remote control for the Copilot session.
     /// Allows monitoring and steering from GitHub.com or mobile.
-    /// Forwarded to copilot as --remote.
+    /// Copilot-only (ignored for other agents).
     #[arg(long)]
     remote: bool,
 
-    /// Name the copilot session for later resumption with --resume=NAME.
-    /// Forwarded to copilot as --name SESSION.
+    /// Name the Copilot session for later resumption with --resume=NAME.
+    /// Copilot-only (ignored for other agents).
     #[arg(long = "name", value_name = "SESSION")]
     session_name: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Everything after -- is passed directly to the copilot command.
+    /// Everything after -- is passed directly to the agent process.
     /// Example: cplt -- -p "fix the tests"
-    #[arg(last = true)]
+    #[arg(last = true, value_name = "AGENT_ARGS")]
     copilot_args: Vec<String>,
 }
 
@@ -678,6 +688,76 @@ fn main() -> ExitCode {
         }
     }
 
+    // Resolve which agent to sandbox
+    let active_agent = match &cli.agent {
+        Some(name) => match name.parse::<agent::Agent>() {
+            Ok(a) => a,
+            Err(e) => {
+                error(&e);
+                return ExitCode::FAILURE;
+            }
+        },
+        None => match agent::Agent::auto_detect() {
+            Some(a) => a,
+            None => {
+                error(
+                    "No supported AI coding agent found in PATH. \
+                     Install one of:\n\
+                     [cplt]   Copilot CLI: brew install --cask copilot-cli\n\
+                     [cplt]   OpenCode:    npm i -g opencode-ai\n\
+                     [cplt] Or specify explicitly: cplt --agent copilot|opencode",
+                );
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+
+    if !resolved.quiet {
+        info(&format!("Agent:    {}", active_agent.display_name()));
+    }
+
+    // Hint about API keys for agents that need them
+    if active_agent != agent::Agent::Copilot {
+        let hints = active_agent.auth_env_hint();
+        let parent_env: Vec<(String, String)> = std::env::vars().collect();
+        let has_api_key = hints.iter().any(|key| {
+            parent_env.iter().any(|(k, _)| k == *key) && resolved.pass_env.iter().any(|v| v == *key)
+        });
+        if !has_api_key && !resolved.inherit_env && !hints.is_empty() {
+            warn(&format!(
+                "No API keys passed. {} needs auth — use --pass-env, e.g.:",
+                active_agent.display_name()
+            ));
+            warn(&format!(
+                "  cplt --agent {} --pass-env {}",
+                active_agent.binary_name(),
+                hints[0]
+            ));
+        }
+
+        // Warn if Copilot-only flags are used with a non-Copilot agent
+        let copilot_flags_used: Vec<&str> = [
+            cli.resume.as_ref().map(|_| "--resume"),
+            if cli.continue_session {
+                Some("--continue")
+            } else {
+                None
+            },
+            if cli.remote { Some("--remote") } else { None },
+            cli.session_name.as_ref().map(|_| "--name"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !copilot_flags_used.is_empty() {
+            warn(&format!(
+                "Ignoring Copilot-only flags for {}: {}",
+                active_agent.display_name(),
+                copilot_flags_used.join(", ")
+            ));
+        }
+    }
+
     // Run auto-discovery to tighten the sandbox profile
     let tool_discovery = discover::discover_tools(&home_dir);
     let existing_dirs = tool_discovery.existing_home_tool_dirs;
@@ -704,22 +784,31 @@ fn main() -> ExitCode {
     };
     let scratch_path = scratch_guard.as_ref().map(|s| s.path());
 
-    // Resolve the Copilot CLI binary early so its installation directory
+    // Resolve the agent binary early so its installation directory
     // can be included in the sandbox profile. Failure is deferred —
     // --print-profile doesn't need the binary.
-    let copilot_bin_result = resolve_copilot_binary();
-    let copilot_install_dir = copilot_bin_result
-        .as_ref()
-        .ok()
-        .and_then(|p| {
-            // Try package.json discovery first (npm/Homebrew installs)
-            discover::copilot_pkg_dir(p, &home_dir).or_else(|| {
-                // Fallback: use the binary's parent directory (VS Code extension installs
-                // at ~/Library/Application Support/Code/.../copilotCli/copilot)
-                p.parent().map(|d| d.to_path_buf())
+    let agent_bin_result = active_agent.resolve_binary();
+    let copilot_install_dir = if active_agent == agent::Agent::Copilot {
+        agent_bin_result
+            .as_ref()
+            .ok()
+            .and_then(|p| {
+                // Try package.json discovery first (npm/Homebrew installs)
+                discover::copilot_pkg_dir(p, &home_dir).or_else(|| {
+                    // Fallback: use the binary's parent directory (VS Code extension installs
+                    // at ~/Library/Application Support/Code/.../copilotCli/copilot)
+                    p.parent().map(|d| d.to_path_buf())
+                })
             })
-        })
-        .filter(|d| !crate::is_unsafe_root(d, &home_dir));
+            .filter(|d| !crate::is_unsafe_root(d, &home_dir))
+    } else {
+        // Non-Copilot agents: use binary's parent dir for read + map-exec
+        agent_bin_result
+            .as_ref()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .filter(|d| !crate::is_unsafe_root(d, &home_dir))
+    };
 
     // Discover global git hooks path from core.hooksPath
     let git_hooks_path = discover::git_hooks_path(&home_dir);
@@ -727,10 +816,17 @@ fn main() -> ExitCode {
     // Discover Electron app bundle when Copilot CLI is installed via VS Code.
     // The shim invokes VS Code's Electron runtime, which needs dyld access to
     // load Electron Framework from within the .app bundle.
-    let electron_app_dir = copilot_bin_result
-        .as_ref()
-        .ok()
-        .and_then(|p| discover::discover_electron_app(p));
+    let electron_app_dir = if active_agent == agent::Agent::Copilot {
+        agent_bin_result
+            .as_ref()
+            .ok()
+            .and_then(|p| discover::discover_electron_app(p))
+    } else {
+        None
+    };
+
+    // Compute agent-specific sandbox directories
+    let agent_dirs = active_agent.config_dirs(&home_dir);
 
     // Prepare the sandbox — validates paths, generates platform-specific profile.
     // Path validation (SBPL injection checks on macOS) is handled internally
@@ -759,6 +855,8 @@ fn main() -> ExitCode {
         allow_gpg_signing: resolved.allow_gpg_signing,
         allow_jvm_attach: resolved.allow_jvm_attach,
         electron_app_dir: electron_app_dir.as_deref(),
+        agent: active_agent,
+        agent_dirs: &agent_dirs,
     }) {
         Ok(s) => s,
         Err(e) => {
@@ -779,14 +877,13 @@ fn main() -> ExitCode {
     if std::env::var("__CPLT_WRAPPED").is_ok() {
         error(
             "cplt is already running (recursion detected). \
-             If 'copilot' is aliased to cplt, ensure the real Copilot CLI \
-             is also in PATH.",
+             Ensure the real agent binary is in PATH and not aliased to cplt.",
         );
         return ExitCode::FAILURE;
     }
 
-    // Unwrap the copilot binary resolution (deferred from above).
-    let copilot_bin = match copilot_bin_result {
+    // Unwrap the agent binary resolution (deferred from above).
+    let agent_bin = match agent_bin_result {
         Ok(path) => path,
         Err(msg) => {
             error(&msg);
@@ -797,9 +894,11 @@ fn main() -> ExitCode {
     // Ensure Copilot's bundled runtime is extracted before entering the sandbox.
     // Writes to copilot/pkg are denied inside the sandbox (write-then-exec defense),
     // so extraction must happen here, outside. macOS-only: SEA extraction is an
-    // macOS Copilot packaging detail.
+    // macOS Copilot packaging detail. Skipped for other agents.
     #[cfg(target_os = "macos")]
-    ensure_copilot_extracted(&copilot_bin, &home_dir);
+    if active_agent.needs_sea_extraction() {
+        ensure_copilot_extracted(&agent_bin, &home_dir);
+    }
 
     // Preflight: verify the sandbox mechanism works on this system
     if !resolved.no_validate {
@@ -818,7 +917,7 @@ fn main() -> ExitCode {
 
     // Print comprehensive summary and confirm before launching Copilot
     if !resolved.quiet {
-        resolved.print_summary(&project_dir, &home_dir);
+        resolved.print_summary(&project_dir, &home_dir, active_agent);
     }
     if let Err(e) = prompt_confirm(cli.yes, resolved.quiet) {
         error(&e);
@@ -905,7 +1004,10 @@ fn main() -> ExitCode {
         }
     }
 
-    ok("Starting Copilot in sandbox...");
+    ok(&format!(
+        "Starting {} in sandbox...",
+        active_agent.display_name()
+    ));
 
     // --show-denials: stream macOS sandbox denial logs in the background
     let mut denial_proc = None;
@@ -932,13 +1034,13 @@ fn main() -> ExitCode {
     eprintln!("{YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}");
     eprintln!();
 
-    // Build copilot args: forwarded convenience flags + explicit -- args
-    let copilot_args = build_copilot_args(&cli);
+    // Build agent args: extra args (e.g. --no-auto-update) + forwarded convenience flags + explicit -- args
+    let copilot_args = build_copilot_args(&cli, &active_agent);
 
-    // Run copilot inside sandbox
+    // Run agent inside sandbox
     let exit_code = sandbox::exec_sandboxed(
         &prepared,
-        &copilot_bin,
+        &agent_bin,
         &copilot_args,
         &resolved.pass_env,
         resolved.inherit_env,
@@ -957,27 +1059,36 @@ fn main() -> ExitCode {
     ExitCode::from(exit_code)
 }
 
-/// Build the copilot argument vector by prepending forwarded convenience
-/// flags (--resume, --continue, --remote, --name) before explicit -- args.
-fn build_copilot_args(cli: &Cli) -> Vec<String> {
+/// Build the argument vector for the agent binary.
+/// Prepends agent-specific args (e.g. --no-auto-update for Copilot),
+/// then forwarded convenience flags, then explicit -- args.
+fn build_copilot_args(cli: &Cli, agent: &agent::Agent) -> Vec<String> {
     let mut args = Vec::new();
 
-    if cli.remote {
-        args.push("--remote".into());
+    // Agent-specific args (e.g. --no-auto-update for Copilot)
+    for extra in agent.extra_args() {
+        args.push((*extra).to_string());
     }
-    if let Some(ref session) = cli.resume {
-        if session.is_empty() {
-            args.push("--resume".into());
-        } else {
-            args.push(format!("--resume={session}"));
+
+    // Copilot-specific convenience flags (only forward when using Copilot)
+    if matches!(agent, agent::Agent::Copilot) {
+        if cli.remote {
+            args.push("--remote".into());
         }
-    }
-    if cli.continue_session {
-        args.push("--continue".into());
-    }
-    if let Some(ref name) = cli.session_name {
-        args.push("--name".into());
-        args.push(name.clone());
+        if let Some(ref session) = cli.resume {
+            if session.is_empty() {
+                args.push("--resume".into());
+            } else {
+                args.push(format!("--resume={session}"));
+            }
+        }
+        if cli.continue_session {
+            args.push("--continue".into());
+        }
+        if let Some(ref name) = cli.session_name {
+            args.push("--name".into());
+            args.push(name.clone());
+        }
     }
 
     args.extend(cli.copilot_args.iter().cloned());
@@ -1681,69 +1792,6 @@ fn find_any_complete_dir(pkg_base: &Path) -> Option<String> {
     dirs.into_iter().next().map(|(name, _)| name)
 }
 
-/// Resolve the real Copilot CLI binary, skipping any symlinks that point back to cplt.
-///
-/// Walks PATH entries looking for a `copilot` executable. Each candidate is
-/// canonicalized and compared to cplt's own binary path. Prefers standalone
-/// binaries (Homebrew, npm global) over VS Code editor shims, since standalone
-/// binaries don't require Electron Framework access in the sandbox.
-///
-/// Falls back to a VS Code shim if no standalone binary is found.
-fn resolve_copilot_binary() -> Result<PathBuf, String> {
-    let self_exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| std::fs::canonicalize(&p).ok());
-
-    let path_var = std::env::var("PATH").unwrap_or_default();
-
-    let mut editor_shim: Option<PathBuf> = None;
-
-    for dir in path_var.split(':') {
-        let candidate = PathBuf::from(dir).join("copilot");
-
-        // Must exist and be executable
-        if !candidate.is_file() {
-            continue;
-        }
-
-        // Resolve symlinks and compare to self
-        let resolved = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
-        if self_exe.as_ref() == Some(&resolved) {
-            continue; // skip — this is cplt aliased as copilot
-        }
-
-        // Prefer standalone binaries over editor shims (VS Code, Cursor, etc.)
-        // Editor shims invoke an Electron runtime that needs extra sandbox rules.
-        if is_editor_shim(&resolved) {
-            if editor_shim.is_none() {
-                editor_shim = Some(resolved);
-            }
-            continue;
-        }
-
-        return Ok(resolved);
-    }
-
-    // Fall back to editor shim if no standalone binary found
-    if let Some(shim) = editor_shim {
-        return Ok(shim);
-    }
-
-    Err("GitHub Copilot CLI not found in PATH. \
-         If you installed cplt as a 'copilot' alias, the real Copilot CLI \
-         must also be in PATH (e.g. brew install --cask copilot-cli)."
-        .to_string())
-}
-
-/// Check if a copilot binary is a VS Code/Cursor/editor shim script.
-/// These are shell scripts that invoke the editor's Electron runtime.
-fn is_editor_shim(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    content.starts_with("#!") && content.contains("copilotCLIShim.js")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1756,50 +1804,61 @@ mod tests {
     #[test]
     fn no_forwarded_flags() {
         let cli = parse(&["--", "-p", "fix tests"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["-p", "fix tests"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        // --no-auto-update is injected as Copilot extra arg
+        assert_eq!(args, vec!["--no-auto-update", "-p", "fix tests"]);
     }
 
     #[test]
     fn resume_interactive() {
         let cli = parse(&["--resume"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--resume"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(args, vec!["--no-auto-update", "--resume"]);
     }
 
     #[test]
     fn resume_with_session_name() {
         let cli = parse(&["--resume=my-task"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--resume=my-task"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(args, vec!["--no-auto-update", "--resume=my-task"]);
     }
 
     #[test]
     fn continue_session() {
         let cli = parse(&["--continue"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--continue"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(args, vec!["--no-auto-update", "--continue"]);
     }
 
     #[test]
     fn remote_flag() {
         let cli = parse(&["--remote"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--remote"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(args, vec!["--no-auto-update", "--remote"]);
     }
 
     #[test]
     fn name_session() {
         let cli = parse(&["--name", "my-refactor"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--name", "my-refactor"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(args, vec!["--no-auto-update", "--name", "my-refactor"]);
     }
 
     #[test]
     fn combined_forwarded_and_passthrough() {
         let cli = parse(&["--remote", "--name", "task", "--", "-p", "fix tests"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--remote", "--name", "task", "-p", "fix tests"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(
+            args,
+            vec![
+                "--no-auto-update",
+                "--remote",
+                "--name",
+                "task",
+                "-p",
+                "fix tests"
+            ]
+        );
     }
 
     #[test]
@@ -1811,7 +1870,25 @@ mod tests {
     #[test]
     fn forwarded_flags_prepended_before_passthrough() {
         let cli = parse(&["--resume=s1", "--remote", "--", "--other"]);
-        let args = build_copilot_args(&cli);
-        assert_eq!(args, vec!["--remote", "--resume=s1", "--other"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(
+            args,
+            vec!["--no-auto-update", "--remote", "--resume=s1", "--other"]
+        );
+    }
+
+    #[test]
+    fn opencode_no_copilot_flags() {
+        let cli = parse(&["--resume", "--remote", "--", "-p", "fix"]);
+        let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
+        // OpenCode has no extra args and doesn't forward copilot flags
+        assert_eq!(args, vec!["-p", "fix"]);
+    }
+
+    #[test]
+    fn opencode_passthrough_only() {
+        let cli = parse(&["--", "run", "fix tests"]);
+        let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
+        assert_eq!(args, vec!["run", "fix tests"]);
     }
 }

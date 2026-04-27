@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 
-macOS Seatbelt sandbox wrapper for GitHub Copilot CLI. Runs Copilot inside Apple's kernel-level sandbox (`sandbox-exec`) so the agent can work on your project but cannot access your secrets.
+macOS Seatbelt sandbox wrapper for AI coding agents. Runs GitHub Copilot CLI or OpenCode inside Apple's kernel-level sandbox (`sandbox-exec`) so the agent can work on your project but cannot access your secrets.
 
 ![cplt banner](./assets/cplt.png)
 
@@ -41,9 +41,12 @@ cplt --doctor
 
 # Run Copilot in sandbox
 cplt -- -p "fix the tests"
+
+# Or run OpenCode in sandbox (pass your API key explicitly)
+cplt --agent opencode --pass-env ANTHROPIC_API_KEY
 ```
 
-**Primary control: filesystem isolation.** The sandbox blocks access to credentials and secrets at the kernel level. All restrictions apply to Copilot and every process it spawns.
+**Primary control: filesystem isolation.** The sandbox blocks access to credentials and secrets at the kernel level. All restrictions apply to the agent and every process it spawns.
 
 | Resource                                                                         | Status                                   | Notes                                                                                   |
 | -------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -165,10 +168,10 @@ This is the same pattern used by tools like mise, direnv, and starship.
 ## Usage
 
 ```
-cplt [OPTIONS] [-- <COPILOT_ARGS>...]
+cplt [OPTIONS] [-- <AGENT_ARGS>...]
 ```
 
-Everything after `--` is passed directly to the `copilot` command.
+Everything after `--` is passed directly to the agent process (copilot or opencode).
 
 ### File access
 
@@ -313,6 +316,32 @@ cplt --resume=my-task                          # resume by name
 cplt --remote --name my-task -- -p "fix tests" # remote + named + prompt
 ```
 
+### OpenCode support
+
+cplt can sandbox [OpenCode](https://github.com/anomalyco/opencode) in addition to GitHub Copilot CLI.
+
+```bash
+# Explicit agent selection
+cplt --agent opencode
+
+# Auto-detect: if only opencode is in PATH, cplt uses it automatically
+cplt
+```
+
+**Security notes for OpenCode:**
+- API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) are **not** passed through by default
+- Use `--pass-env` to explicitly allow the keys your provider needs:
+
+```bash
+cplt --agent opencode --pass-env ANTHROPIC_API_KEY
+cplt --agent opencode --pass-env OPENAI_API_KEY --pass-env OPENAI_ORG_ID
+```
+
+- OpenCode config (`~/.config/opencode/`) is read-only in the sandbox
+- OpenCode data (`~/.local/share/opencode/`) is writable but execution is denied (write+exec prevention)
+- Keychain access is disabled (OpenCode uses API keys, not GitHub tokens)
+- `--resume`, `--continue`, `--remote`, `--name` flags are Copilot-specific and ignored for OpenCode
+
 ### Examples
 
 ```bash
@@ -369,6 +398,12 @@ cplt --print-profile
 
 # Debug: see what the sandbox blocks in real time
 cplt --show-denials -- -p "fix the tests"
+
+# Run OpenCode with Anthropic API key
+cplt --agent opencode --pass-env ANTHROPIC_API_KEY
+
+# Run OpenCode with auto-detection (if copilot not in PATH)
+cplt --pass-env ANTHROPIC_API_KEY
 ```
 
 ## Configuration file

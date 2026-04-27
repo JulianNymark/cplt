@@ -427,7 +427,12 @@ impl Resolved {
     /// Shows ALL effective settings including defaults so the user can make
     /// an informed decision before Copilot is launched. This is a security
     /// tool — the sandbox boundary must never be hidden.
-    pub fn print_summary(&self, project_dir: &std::path::Path, home_dir: &std::path::Path) {
+    pub fn print_summary(
+        &self,
+        project_dir: &std::path::Path,
+        home_dir: &std::path::Path,
+        agent: crate::agent::Agent,
+    ) {
         let blue = "\x1b[0;34m";
         let dim = "\x1b[2m";
         let green = "\x1b[0;32m";
@@ -513,10 +518,16 @@ impl Resolved {
                 "{blue}[cplt]{nc}    JVM attach:    {yellow}allowed{nc}     {dim}.java_pid* sockets (--allow-jvm-attach){nc}"
             );
         }
-        eprintln!("{blue}[cplt]{nc}    Copilot dir:   {green}allowed{nc}     {dim}~/.copilot{nc}");
-        eprintln!(
-            "{blue}[cplt]{nc}    Keychain:      {green}allowed{nc}     {dim}~/Library/Keychains{nc}"
-        );
+        if agent.needs_copilot_dir() {
+            eprintln!(
+                "{blue}[cplt]{nc}    Copilot dir:   {green}allowed{nc}     {dim}~/.copilot{nc}"
+            );
+        }
+        if agent.needs_keychain() {
+            eprintln!(
+                "{blue}[cplt]{nc}    Keychain:      {green}allowed{nc}     {dim}~/Library/Keychains{nc}"
+            );
+        }
         eprintln!(
             "{blue}[cplt]{nc}    GH CLI config: {green}read-only{nc}   {dim}~/.config/gh/{{hosts,config}}.yml{nc}"
         );

@@ -35,6 +35,7 @@ Always run `mise run check` at the end of a coding session.
 - `src/scratch.rs` — per-session scratch directory with TMPDIR redirect
 - `src/config.rs` — config file parsing, CLI/config merging, `Resolved` struct
 - `src/discover.rs` — runtime environment probing (`--doctor`)
+- `src/agent.rs` — agent abstraction (Copilot, OpenCode): binary discovery, config dirs, auth hints
 - `src/main.rs` — CLI entry point, orchestration
 - `src/lib.rs` — library crate root (re-exports modules for test access)
 - `src/proxy.rs` + `src/proxy/` — CONNECT proxy, domain blocking
@@ -42,6 +43,7 @@ Always run `mise run check` at the end of a coding session.
 - `tests/integration.rs` — macOS sandbox-exec kernel-level tests (37 tests)
 - `tests/e2e.rs` — end-to-end with compiled binary + smoke tests (67 tests)
 - `tests/e2e_projects.rs` — e2e tests with realistic project scaffolding (37 tests)
+- `src/agent.rs` — includes 10 agent unit tests (in lib tests)
 - `SECURITY.md` — threat model, defense layers, honest gaps
 
 ## Testing

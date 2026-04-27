@@ -1,6 +1,8 @@
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
+use crate::agent::{Agent, AgentDir};
+
 use super::policy::{
     DENIED_CACHE_PREFIXES, DENIED_DOTFILES, DENIED_FILES, GPG_SIGNING_ALLOW_FILES, HOME_TOOL_DIRS,
     HomeToolDir, SENSITIVE_PROJECT_PATTERNS, SYSTEM_READ_FILES, TOOL_READ_DIRS,
@@ -47,6 +49,10 @@ pub struct ProfileOptions<'a> {
     /// VS Code's Electron runtime. Allows read + file-map-executable so dyld
     /// can load the Electron Framework.
     pub electron_app_dir: Option<&'a Path>,
+    /// Which AI coding agent is being sandboxed.
+    pub agent: Agent,
+    /// Agent-specific directories that need sandbox access.
+    pub agent_dirs: &'a [AgentDir],
 }
 
 /// Generate a complete SBPL sandbox profile from the given options.
@@ -62,10 +68,10 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_header(&mut sb, &project);
     emit_process_rules(&mut sb);
     emit_project_access(&mut sb, &project, opts.allow_env_files);
-    emit_home_access(&mut sb, &home);
+    emit_home_access(&mut sb, &home, opts.agent, opts.agent_dirs);
     emit_git_hooks(&mut sb, opts.git_hooks_path);
     emit_system_access(&mut sb, &home);
-    emit_tool_dirs(&mut sb, &home, opts.existing_home_tool_dirs);
+    emit_tool_dirs(&mut sb, &home, opts.existing_home_tool_dirs, opts.agent);
     emit_copilot_install(&mut sb, opts.copilot_install_dir);
     emit_electron_app(&mut sb, opts.electron_app_dir);
     emit_system_files(&mut sb);
@@ -167,27 +173,53 @@ fn emit_project_access(sb: &mut String, project: &str, allow_env_files: bool) {
     }
 }
 
-fn emit_home_access(sb: &mut String, home: &str) {
-    // Copilot config — the CLI needs its auth tokens and settings.
-    // file-map-executable is needed for native Node.js addons (keytar.node, pty.node, computer.node)
-    // which are loaded via dlopen() from ~/.copilot/pkg/universal/*/prebuilds/
-    writeln!(sb, ";; Copilot config + native modules").unwrap();
-    writeln!(sb, "(allow file-read* (subpath \"{home}/.copilot\"))").unwrap();
-    writeln!(sb, "(allow file-write* (subpath \"{home}/.copilot\"))").unwrap();
-    writeln!(
-        sb,
-        "(allow file-map-executable (subpath \"{home}/.copilot\"))"
-    )
-    .unwrap();
-    // Deny writes to Copilot's installed packages (native modules).
-    // Prevents persistence: a rogue agent could replace keytar.node with a
-    // malicious version that runs unsandboxed next time Copilot is launched.
-    // Must come after the allow (last-match-wins).
-    writeln!(sb, "(deny file-write* (subpath \"{home}/.copilot/pkg\"))").unwrap();
-    writeln!(sb).unwrap();
+fn emit_home_access(sb: &mut String, home: &str, agent: Agent, agent_dirs: &[AgentDir]) {
+    // Agent-specific directories (Copilot: ~/.copilot, OpenCode: ~/.config/opencode, etc.)
+    if agent.needs_copilot_dir() {
+        // Copilot config — the CLI needs its auth tokens and settings.
+        // file-map-executable is needed for native Node.js addons (keytar.node, pty.node, computer.node)
+        // which are loaded via dlopen() from ~/.copilot/pkg/universal/*/prebuilds/
+        writeln!(sb, ";; Copilot config + native modules").unwrap();
+        writeln!(sb, "(allow file-read* (subpath \"{home}/.copilot\"))").unwrap();
+        writeln!(sb, "(allow file-write* (subpath \"{home}/.copilot\"))").unwrap();
+        writeln!(
+            sb,
+            "(allow file-map-executable (subpath \"{home}/.copilot\"))"
+        )
+        .unwrap();
+        // Deny writes to Copilot's installed packages (native modules).
+        // Prevents persistence: a rogue agent could replace keytar.node with a
+        // malicious version that runs unsandboxed next time Copilot is launched.
+        // Must come after the allow (last-match-wins).
+        writeln!(sb, "(deny file-write* (subpath \"{home}/.copilot/pkg\"))").unwrap();
+        writeln!(sb).unwrap();
+    }
+
+    // Agent-specific directories from the Agent trait
+    if !agent_dirs.is_empty() {
+        writeln!(sb, ";; {} directories", agent.display_name()).unwrap();
+        for dir in agent_dirs {
+            let path = dir.path.display();
+            writeln!(sb, "(allow file-read* (subpath \"{path}\"))").unwrap();
+            if dir.write {
+                writeln!(sb, "(allow file-write* (subpath \"{path}\"))").unwrap();
+            }
+            if dir.map_exec {
+                writeln!(sb, "(allow file-map-executable (subpath \"{path}\"))").unwrap();
+            }
+            // Explicitly deny exec on writable agent data dirs (write+exec = persistence risk)
+            if dir.write && !dir.process_exec {
+                writeln!(sb, "(deny process-exec (subpath \"{path}\"))").unwrap();
+            }
+            if dir.write && !dir.map_exec {
+                writeln!(sb, "(deny file-map-executable (subpath \"{path}\"))").unwrap();
+            }
+        }
+        writeln!(sb).unwrap();
+    }
 
     // GitHub CLI auth — Copilot spawns `gh auth token` which reads these specific files.
-    // Only the auth files, not the entire ~/.config/gh directory.
+    // OpenCode may also use `gh` for auth. Allow for all agents.
     writeln!(sb, ";; GitHub CLI auth (specific files only)").unwrap();
     writeln!(
         sb,
@@ -216,19 +248,21 @@ fn emit_home_access(sb: &mut String, home: &str) {
     .unwrap();
     writeln!(sb).unwrap();
 
-    // macOS Keychain access — Copilot stores auth tokens here
-    // Security framework needs read+write (locks the db file during access)
-    writeln!(sb, ";; macOS Keychain (Copilot auth tokens)").unwrap();
-    writeln!(
-        sb,
-        "(allow file-read* (subpath \"{home}/Library/Keychains\"))"
-    )
-    .unwrap();
-    writeln!(
-        sb,
-        "(allow file-write* (subpath \"{home}/Library/Keychains\"))"
-    )
-    .unwrap();
+    // macOS Keychain access — Copilot stores auth tokens here.
+    // OpenCode uses API keys from env/config files, no Keychain needed.
+    if agent.needs_keychain() {
+        writeln!(sb, ";; macOS Keychain (Copilot auth tokens)").unwrap();
+        writeln!(
+            sb,
+            "(allow file-read* (subpath \"{home}/Library/Keychains\"))"
+        )
+        .unwrap();
+        writeln!(
+            sb,
+            "(allow file-write* (subpath \"{home}/Library/Keychains\"))"
+        )
+        .unwrap();
+    }
     writeln!(sb).unwrap();
 }
 
@@ -291,7 +325,12 @@ fn emit_git_hooks(sb: &mut String, git_hooks_path: Option<&Path>) {
     }
 }
 
-fn emit_tool_dirs(sb: &mut String, home: &str, existing_home_tool_dirs: Option<&[String]>) {
+fn emit_tool_dirs(
+    sb: &mut String,
+    home: &str,
+    existing_home_tool_dirs: Option<&[String]>,
+    agent: Agent,
+) {
     writeln!(sb, ";; Developer tools").unwrap();
     for dir in TOOL_READ_DIRS {
         writeln!(sb, "(allow file-read* (subpath \"{dir}\"))").unwrap();
@@ -373,22 +412,25 @@ fn emit_tool_dirs(sb: &mut String, home: &str, existing_home_tool_dirs: Option<&
     //     is a binary-drop staging risk). Auto-update is already blocked inside
     //     the sandbox (--no-auto-update), so writes are not needed.
     // Must come AFTER the denies (last-match-wins in SBPL).
-    writeln!(
-        sb,
-        "(allow file-map-executable (subpath \"{home}/Library/Caches/copilot/pkg\"))"
-    )
-    .unwrap();
-    writeln!(
-        sb,
-        "(allow process-exec (subpath \"{home}/Library/Caches/copilot/pkg\"))"
-    )
-    .unwrap();
-    writeln!(
-        sb,
-        "(deny file-write* (subpath \"{home}/Library/Caches/copilot/pkg\"))"
-    )
-    .unwrap();
-    writeln!(sb).unwrap();
+    // Only needed for Copilot agent.
+    if agent.needs_copilot_dir() {
+        writeln!(
+            sb,
+            "(allow file-map-executable (subpath \"{home}/Library/Caches/copilot/pkg\"))"
+        )
+        .unwrap();
+        writeln!(
+            sb,
+            "(allow process-exec (subpath \"{home}/Library/Caches/copilot/pkg\"))"
+        )
+        .unwrap();
+        writeln!(
+            sb,
+            "(deny file-write* (subpath \"{home}/Library/Caches/copilot/pkg\"))"
+        )
+        .unwrap();
+        writeln!(sb).unwrap();
+    }
 }
 
 /// Allow reading and dlopen from the Copilot CLI package directory.

@@ -25,6 +25,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::agent::{Agent, AgentDir};
+
 #[path = "sandbox_env.rs"]
 mod env;
 #[path = "sandbox_exec.rs"]
@@ -88,6 +90,10 @@ pub struct SandboxConfig<'a> {
     pub allow_jvm_attach: bool,
     /// Electron app bundle Contents directory (macOS only, ignored on Linux).
     pub electron_app_dir: Option<&'a Path>,
+    /// Which AI coding agent is being sandboxed.
+    pub agent: Agent,
+    /// Agent-specific directories that need sandbox access.
+    pub agent_dirs: &'a [AgentDir],
 }
 
 /// A validated, platform-specific sandbox ready for execution.
@@ -107,6 +113,7 @@ pub struct PreparedSandbox {
     profile_text: String,
     scratch_dir: Option<PathBuf>,
     proxy_port: Option<u16>,
+    agent: Agent,
 }
 
 impl PreparedSandbox {
@@ -158,6 +165,8 @@ pub fn prepare(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         allow_gpg_signing: config.allow_gpg_signing,
         allow_jvm_attach: config.allow_jvm_attach,
         electron_app_dir: config.electron_app_dir,
+        agent: config.agent,
+        agent_dirs: config.agent_dirs,
     });
 
     Ok(PreparedSandbox {
@@ -166,6 +175,7 @@ pub fn prepare(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         profile_text,
         scratch_dir: config.scratch_dir.map(Path::to_path_buf),
         proxy_port: config.proxy_port,
+        agent: config.agent,
     })
 }
 
@@ -225,6 +235,7 @@ pub fn exec_sandboxed(
         disabled_categories,
         sandbox.scratch_dir.as_deref(),
         sandbox.proxy_port,
+        sandbox.agent,
     );
 
     let _ = std::fs::remove_file(&profile_path);
@@ -253,6 +264,9 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
     }
     if let Some(dir) = config.scratch_dir {
         policy::validate_sbpl_path(dir).map_err(|e| format!("Scratch dir: {e}"))?;
+    }
+    for ad in config.agent_dirs {
+        policy::validate_sbpl_path(&ad.path).map_err(|e| format!("Agent dir: {e}"))?;
     }
     for p in config.extra_read {
         policy::validate_sbpl_path(p).map_err(|e| format!("--allow-read path: {e}"))?;
