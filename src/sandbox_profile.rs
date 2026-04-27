@@ -451,22 +451,39 @@ fn emit_temp_rules(
     writeln!(sb, "(allow file-read* (subpath \"/private/var/folders\"))").unwrap();
     writeln!(sb, "(allow file-write* (subpath \"/private/var/folders\"))").unwrap();
     if allow_jvm_attach {
-        // Allow Unix domain socket operations ONLY for JVM Attach API sockets.
-        // The JVM creates a socket at /tmp/.java_pid<PID> for inter-process agent
-        // loading (used by MockK, Mockito inline, ByteBuddy, JMX tools).
-        // SECURITY: regex-restricted to .java_pid<PID> pattern only — a broad
+        // Allow Unix domain socket operations for JVM Attach API.
+        //
+        // ByteBuddy/MockK uses VirtualMachine.attach() which:
+        //   1. Creates .attach_pid<PID> trigger file (covered by file-write* above)
+        //   2. Sends SIGQUIT to target JVM (covered by signal same-sandbox)
+        //   3. Target binds a unix socket at .java_pid<PID>.tmp, renames to .java_pid<PID>
+        //   4. Attacher connects to the socket, loads agent
+        //
+        // All three socket operations are required:
+        //   - network-bind:    target creates the socket
+        //   - network-inbound: target accepts the connection
+        //   - network-outbound: attacher connects to the socket
+        //
+        // On macOS, the JDK uses confstr(_CS_DARWIN_USER_TEMP_DIR) — NOT java.io.tmpdir —
+        // so sockets appear at /var/folders/<xx>/<hash>/T/.java_pid<PID> rather than /tmp.
+        // We allow both paths for compatibility with older JDKs that use /tmp.
+        //
+        // SECURITY: regex-restricted to .java_pid pattern only — a broad
         // (subpath "/private/tmp") would expose SSH_AUTH_SOCK which lives at
         // /private/tmp/com.apple.launchd.*/Listeners on macOS.
-        writeln!(
-            sb,
-            r#"(allow network-bind (local unix-socket (regex #"^/private/tmp/\.java_pid[0-9]+$")))"#
-        )
-        .unwrap();
-        writeln!(
-            sb,
-            r#"(allow network-outbound (remote unix-socket (regex #"^/private/tmp/\.java_pid[0-9]+$")))"#
-        )
-        .unwrap();
+        //
+        // Note: SBPL regex does not reliably support POSIX character classes like
+        // [a-z0-9]{2} in network operations, so we use .+ for the hash directories.
+        for op in &[
+            r#"(allow network-bind (local unix-socket (regex #"^/private/tmp/\.java_pid")))"#,
+            r#"(allow network-inbound (local unix-socket (regex #"^/private/tmp/\.java_pid")))"#,
+            r#"(allow network-outbound (remote unix-socket (regex #"^/private/tmp/\.java_pid")))"#,
+            r#"(allow network-bind (local unix-socket (regex #"^/private/var/folders/.+/T/\.java_pid")))"#,
+            r#"(allow network-inbound (local unix-socket (regex #"^/private/var/folders/.+/T/\.java_pid")))"#,
+            r#"(allow network-outbound (remote unix-socket (regex #"^/private/var/folders/.+/T/\.java_pid")))"#,
+        ] {
+            writeln!(sb, "{op}").unwrap();
+        }
     }
     if !allow_tmp_exec {
         // Deny direct execution and dlopen from writable temp dirs.

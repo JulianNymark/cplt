@@ -937,6 +937,57 @@ t.join(2)
     }
 
     #[test]
+    fn real_profile_allows_jvm_attach_socket_in_var_folders() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let mut opts = default_opts(&project, &home);
+        opts.allow_jvm_attach = true;
+        let profile = write_real_profile(&opts);
+
+        // The JDK on macOS uses confstr(_CS_DARWIN_USER_TEMP_DIR) which returns
+        // /var/folders/<xx>/<hash>/T/ — test bind+accept+connect at this path.
+        let cmd = r#"python3 -c "
+import socket, os, threading, time, ctypes, ctypes.util
+# Get the real darwin user temp dir via confstr(_CS_DARWIN_USER_TEMP_DIR = 65537)
+libc = ctypes.CDLL(ctypes.util.find_library('c'))
+buf = ctypes.create_string_buffer(1024)
+libc.confstr(65537, buf, 1024)
+tmpdir = buf.value.decode().rstrip('/')
+SOCK = tmpdir + '/.java_pid88888'
+try: os.unlink(SOCK)
+except: pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(SOCK)
+s.listen(1)
+s.settimeout(3)
+def accept():
+    try:
+        c,_ = s.accept()
+        c.send(b'OK')
+        c.close()
+    except: pass
+t = threading.Thread(target=accept)
+t.start()
+time.sleep(0.2)
+c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+c.connect(SOCK)
+print(c.recv(10).decode())
+c.close()
+s.close()
+os.unlink(SOCK)
+t.join(2)
+""#;
+        let (output, _) = run_sandboxed(&profile, cmd);
+
+        fs::remove_file(&profile).ok();
+        assert!(
+            output.contains("OK"),
+            "JVM Attach socket in /var/folders should be allowed, got: {output}"
+        );
+    }
+
+    #[test]
     fn real_profile_blocks_ssh_agent_socket() {
         require_sandbox!();
         let project = fs::canonicalize(".").unwrap();

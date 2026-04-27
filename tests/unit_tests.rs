@@ -1221,18 +1221,44 @@ fn profile_allows_jvm_attach_when_flag_set() {
         allow_jvm_attach: true,
         electron_app_dir: None,
     });
-    // Must allow unix socket bind+connect ONLY for JVM Attach API (.java_pid*)
+    // Must allow unix socket bind+inbound+connect for JVM Attach API (.java_pid*)
+    // Three operations needed: bind (create socket), inbound (accept), outbound (connect)
+    // Two paths: /tmp (legacy) and /var/folders (macOS confstr temp dir)
     assert!(
         p.contains(
-            r#"(allow network-bind (local unix-socket (regex #"^/private/tmp/\.java_pid[0-9]+$")))"#
+            r#"(allow network-bind (local unix-socket (regex #"^/private/tmp/\.java_pid")))"#
         ),
-        "Profile must allow unix socket bind for JVM Attach API pattern"
+        "Profile must allow unix socket bind for JVM Attach API in /tmp"
     );
     assert!(
         p.contains(
-            r#"(allow network-outbound (remote unix-socket (regex #"^/private/tmp/\.java_pid[0-9]+$")))"#
+            r#"(allow network-inbound (local unix-socket (regex #"^/private/tmp/\.java_pid")))"#
         ),
-        "Profile must allow unix socket connect for JVM Attach API pattern"
+        "Profile must allow unix socket inbound for JVM Attach API in /tmp"
+    );
+    assert!(
+        p.contains(
+            r#"(allow network-outbound (remote unix-socket (regex #"^/private/tmp/\.java_pid")))"#
+        ),
+        "Profile must allow unix socket connect for JVM Attach API in /tmp"
+    );
+    assert!(
+        p.contains(
+            r#"(allow network-bind (local unix-socket (regex #"^/private/var/folders/.+/T/\.java_pid")))"#
+        ),
+        "Profile must allow unix socket bind for JVM Attach API in /var/folders"
+    );
+    assert!(
+        p.contains(
+            r#"(allow network-inbound (local unix-socket (regex #"^/private/var/folders/.+/T/\.java_pid")))"#
+        ),
+        "Profile must allow unix socket inbound for JVM Attach API in /var/folders"
+    );
+    assert!(
+        p.contains(
+            r#"(allow network-outbound (remote unix-socket (regex #"^/private/var/folders/.+/T/\.java_pid")))"#
+        ),
+        "Profile must allow unix socket connect for JVM Attach API in /var/folders"
     );
     // Must NOT have broad subpath unix socket rules (would expose SSH agent)
     assert!(

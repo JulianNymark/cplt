@@ -429,6 +429,14 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         map_exec: true,
         write: true,
     },
+    // Kotlin compiler daemon: client marker files and run files.
+    // The Kotlin Maven/Gradle plugin uses this for daemon lifecycle management.
+    HomeToolDir {
+        path: "Library/Application Support/kotlin",
+        process_exec: false,
+        map_exec: false,
+        write: true,
+    },
 ];
 
 /// Validate that a path is safe for interpolation into SBPL profile strings.
