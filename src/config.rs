@@ -1192,6 +1192,14 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         default_display: "false",
         description: "Hide the startup configuration summary (sandbox rules, network, env info).",
     },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "allow_jvm_attach",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Allow JVM Attach API unix sockets for ByteBuddy/MockK/Mockito inline mocking.",
+    },
 ];
 
 /// Look up a config key by "section.key" dotted notation.
@@ -2290,6 +2298,7 @@ quiet = false
     #[test]
     fn lookup_key_valid_keys() {
         assert!(lookup_key("sandbox.quiet").is_ok());
+        assert!(lookup_key("sandbox.allow_jvm_attach").is_ok());
         assert!(lookup_key("proxy.port").is_ok());
         assert!(lookup_key("allow.ports").is_ok());
         assert!(lookup_key("deny.paths").is_ok());

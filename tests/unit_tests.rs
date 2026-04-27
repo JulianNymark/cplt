@@ -2784,6 +2784,10 @@ fn env_scratch_dir_injects_java_tool_options() {
         val.contains("-Djava.rmi.server.hostname=localhost"),
         "should contain rmi hostname: {val}"
     );
+    assert!(
+        val.contains("-Djava.net.preferIPv6Addresses=true"),
+        "should contain IPv6 preference: {val}"
+    );
 }
 
 #[test]
