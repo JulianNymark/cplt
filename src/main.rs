@@ -725,7 +725,7 @@ fn main() -> ExitCode {
         });
         if !has_api_key && !resolved.inherit_env && !hints.is_empty() {
             warn(&format!(
-                "No API keys passed. {} needs auth — use --pass-env, e.g.:",
+                "No API keys passed. {} needs auth — either:",
                 active_agent.display_name()
             ));
             warn(&format!(
@@ -733,6 +733,7 @@ fn main() -> ExitCode {
                 active_agent.binary_name(),
                 hints[0]
             ));
+            warn("  or use /connect in OpenCode with your GitHub Copilot subscription");
         }
 
         // Warn if Copilot-only flags are used with a non-Copilot agent

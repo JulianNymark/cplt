@@ -42,7 +42,10 @@ cplt --doctor
 # Run Copilot in sandbox
 cplt -- -p "fix the tests"
 
-# Or run OpenCode in sandbox (pass your API key explicitly)
+# Or run OpenCode in sandbox (with Copilot subscription — no API key needed)
+cplt --agent opencode
+
+# Or with a third-party provider
 cplt --agent opencode --pass-env ANTHROPIC_API_KEY
 ```
 
@@ -318,19 +321,22 @@ cplt --remote --name my-task -- -p "fix tests" # remote + named + prompt
 
 ### OpenCode support
 
-cplt can sandbox [OpenCode](https://github.com/anomalyco/opencode) in addition to GitHub Copilot CLI.
+cplt can sandbox [OpenCode](https://opencode.ai/) in addition to GitHub Copilot CLI. OpenCode is [officially supported](https://github.blog/changelog/2026-01-16-github-copilot-now-supports-opencode/) as a GitHub Copilot client — use your existing Copilot subscription with `/connect` inside OpenCode.
 
 ```bash
-# Explicit agent selection
+# Run OpenCode with Copilot subscription (no API key needed)
 cplt --agent opencode
 
 # Auto-detect: if only opencode is in PATH, cplt uses it automatically
 cplt
+
+# Or use a third-party provider
+cplt --agent opencode --pass-env ANTHROPIC_API_KEY
 ```
 
 **Security notes for OpenCode:**
-- API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) are **not** passed through by default
-- Use `--pass-env` to explicitly allow the keys your provider needs:
+- **Copilot provider**: auth is handled via `/connect` device flow, stored in `~/.local/share/opencode/auth.json` — no env vars needed
+- **Third-party providers**: API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) are **not** passed through by default — use `--pass-env`:
 
 ```bash
 cplt --agent opencode --pass-env ANTHROPIC_API_KEY
@@ -339,7 +345,7 @@ cplt --agent opencode --pass-env OPENAI_API_KEY --pass-env OPENAI_ORG_ID
 
 - OpenCode config (`~/.config/opencode/`) is read-only in the sandbox
 - OpenCode data (`~/.local/share/opencode/`) is writable but execution is denied (write+exec prevention)
-- Keychain access is disabled (OpenCode uses API keys, not GitHub tokens)
+- Keychain access is disabled (OpenCode uses its own auth file, not macOS Keychain)
 - `--resume`, `--continue`, `--remote`, `--name` flags are Copilot-specific and ignored for OpenCode
 
 ### Examples
@@ -399,7 +405,10 @@ cplt --print-profile
 # Debug: see what the sandbox blocks in real time
 cplt --show-denials -- -p "fix the tests"
 
-# Run OpenCode with Anthropic API key
+# Run OpenCode with Copilot subscription (no API key needed)
+cplt --agent opencode
+
+# Run OpenCode with a third-party provider
 cplt --agent opencode --pass-env ANTHROPIC_API_KEY
 
 # Run OpenCode with auto-detection (if copilot not in PATH)

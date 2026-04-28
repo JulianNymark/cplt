@@ -105,14 +105,17 @@ impl Agent {
         }
     }
 
-    /// Environment variable names this agent needs for authentication.
+    /// Environment variable names this agent may need for authentication.
     /// These are NOT added to the default allowlist — they must be
     /// explicitly passed via --pass-env or agent config.
+    /// Note: OpenCode also supports GitHub Copilot as a provider via
+    /// `/connect` — no env key needed for that flow (auth stored in auth.json).
     pub fn auth_env_hint(&self) -> &'static [&'static str] {
         match self {
             // Copilot tokens are in the default allowlist (accepted trade-off)
             Agent::Copilot => &[],
-            // OpenCode provider API keys — user must opt in
+            // OpenCode third-party provider API keys — user must opt in.
+            // Copilot provider uses device flow + auth.json, no env var needed.
             Agent::OpenCode => &[
                 "ANTHROPIC_API_KEY",
                 "OPENAI_API_KEY",
