@@ -702,14 +702,20 @@ fn main() -> ExitCode {
         None => match agent::Agent::auto_detect() {
             Some(a) => a,
             None => {
-                error(
-                    "No supported AI coding agent found in PATH. \
-                     Install one of:\n\
-                     [cplt]   Copilot CLI: brew install --cask copilot-cli\n\
-                     [cplt]   OpenCode:    npm i -g opencode-ai\n\
-                     [cplt] Or specify explicitly: cplt --agent copilot|opencode",
-                );
-                return ExitCode::FAILURE;
+                // --print-profile and --doctor don't need a real agent binary.
+                // Default to Copilot so they work without anything installed.
+                if cli.print_profile || cli.doctor {
+                    agent::Agent::Copilot
+                } else {
+                    error(
+                        "No supported AI coding agent found in PATH. \
+                         Install one of:\n\
+                         [cplt]   Copilot CLI: brew install --cask copilot-cli\n\
+                         [cplt]   OpenCode:    npm i -g opencode-ai\n\
+                         [cplt] Or specify explicitly: cplt --agent copilot|opencode",
+                    );
+                    return ExitCode::FAILURE;
+                }
             }
         },
     };

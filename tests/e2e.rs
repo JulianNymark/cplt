@@ -1322,9 +1322,12 @@ mod e2e_tests {
             .expect("binary should run");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
-            "--print-profile should work even with __CPLT_WRAPPED.\nstdout: {stdout}"
+            "--print-profile should work even with __CPLT_WRAPPED.\n\
+             exit code: {:?}\nstdout: {stdout}\nstderr: {stderr}",
+            output.status.code()
         );
         assert!(
             stdout.contains("deny default"),
