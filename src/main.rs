@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use cplt::{agent, config, discover, proxy, sandbox, scratch, update};
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Build info: if CPLT_LONG_VERSION is set at compile time (via mise tasks),
