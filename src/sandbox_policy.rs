@@ -404,7 +404,9 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         path: "go/pkg",
         process_exec: false,
         map_exec: true,
-        write: false,
+        // Go module cache — `go test`, `go get`, etc. need to download/extract
+        // modules and update the sum DB cache here.
+        write: true,
     },
     // Yarn Berry global cache: packages only, no executables
     HomeToolDir {
