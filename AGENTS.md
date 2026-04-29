@@ -35,7 +35,7 @@ Always run `mise run check` at the end of a coding session.
 - `src/scratch.rs` — per-session scratch directory with TMPDIR redirect
 - `src/config.rs` — config file parsing, CLI/config merging, `Resolved` struct
 - `src/discover.rs` — runtime environment probing (`--doctor`)
-- `src/agent.rs` — agent abstraction (Copilot, OpenCode): binary discovery, config dirs, auth hints
+- `src/agent.rs` — agent abstraction (Copilot, OpenCode, Shell): binary discovery, config dirs, auth hints
 - `src/main.rs` — CLI entry point, orchestration
 - `src/lib.rs` — library crate root (re-exports modules for test access)
 - `src/proxy.rs` + `src/proxy/` — CONNECT proxy, domain blocking

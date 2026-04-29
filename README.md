@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 
-macOS Seatbelt sandbox wrapper for AI coding agents. Runs GitHub Copilot CLI or OpenCode inside Apple's kernel-level sandbox (`sandbox-exec`) so the agent can work on your project but cannot access your secrets.
+macOS Seatbelt sandbox wrapper for AI coding agents. Runs GitHub Copilot CLI, OpenCode, or a plain shell inside Apple's kernel-level sandbox (`sandbox-exec`) so the agent can work on your project but cannot access your secrets.
 
 ![cplt banner](./assets/cplt.png)
 
@@ -47,6 +47,9 @@ cplt --agent opencode
 
 # Or with a third-party provider
 cplt --agent opencode --pass-env ANTHROPIC_API_KEY
+
+# Or just a sandboxed shell (no AI agent, same security restrictions)
+cplt --agent shell
 ```
 
 **Primary control: filesystem isolation.** The sandbox blocks access to credentials and secrets at the kernel level. All restrictions apply to the agent and every process it spawns.
@@ -174,7 +177,7 @@ This is the same pattern used by tools like mise, direnv, and starship.
 cplt [OPTIONS] [-- <AGENT_ARGS>...]
 ```
 
-Everything after `--` is passed directly to the agent process (copilot or opencode).
+Everything after `--` is passed directly to the agent process (copilot, opencode, or shell).
 
 ### File access
 
@@ -348,6 +351,23 @@ cplt --agent opencode --pass-env OPENAI_API_KEY --pass-env OPENAI_ORG_ID
 - Keychain access is disabled (OpenCode uses its own auth file, not macOS Keychain)
 - `--resume`, `--continue`, `--remote`, `--name` flags are Copilot-specific and ignored for OpenCode
 
+### Shell mode
+
+Run a plain sandboxed shell — no AI agent, same security restrictions. Useful for testing build tools, debugging sandbox issues, or working in a secure environment manually.
+
+```bash
+# Interactive sandboxed shell (uses $SHELL — fish, zsh, bash)
+cplt --agent shell
+
+# Run a single command inside the sandbox
+cplt --agent shell -- -c 'go test ./...'
+
+# Inspect what's allowed without entering the shell
+cplt --agent shell --print-profile
+```
+
+The sandbox applies the same deny-by-default rules — filesystem isolation, network restrictions, env sanitization. Shell config directories (fish variables/history, zsh history) are writable.
+
 ### Examples
 
 ```bash
@@ -413,6 +433,12 @@ cplt --agent opencode --pass-env ANTHROPIC_API_KEY
 
 # Run OpenCode with auto-detection (if copilot not in PATH)
 cplt --pass-env ANTHROPIC_API_KEY
+
+# Run a sandboxed shell (no AI agent)
+cplt --agent shell
+
+# Run a one-off command in the sandbox
+cplt --agent shell -- -c 'npm test'
 ```
 
 ## Configuration file
