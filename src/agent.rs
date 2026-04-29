@@ -14,6 +14,8 @@ pub enum Agent {
     Copilot,
     /// OpenCode (anomalyco/opencode) — open source AI coding agent.
     OpenCode,
+    /// Plain sandboxed shell — no AI agent, just a secure shell session.
+    Shell,
 }
 
 impl Agent {
@@ -22,6 +24,7 @@ impl Agent {
         match self {
             Agent::Copilot => "copilot",
             Agent::OpenCode => "opencode",
+            Agent::Shell => "shell",
         }
     }
 
@@ -30,6 +33,7 @@ impl Agent {
         match self {
             Agent::Copilot => "Copilot",
             Agent::OpenCode => "OpenCode",
+            Agent::Shell => "Shell",
         }
     }
 
@@ -45,7 +49,7 @@ impl Agent {
     pub fn extra_args(&self) -> &'static [&'static str] {
         match self {
             Agent::Copilot => &["--no-auto-update"],
-            Agent::OpenCode => &[],
+            Agent::OpenCode | Agent::Shell => &[],
         }
     }
 
@@ -71,6 +75,7 @@ impl Agent {
                     // (needs map-executable for native modules)
                 ]
             }
+            Agent::Shell => vec![],
             Agent::OpenCode => {
                 // Respect XDG_CONFIG_HOME for config dir
                 let config_base = std::env::var("XDG_CONFIG_HOME")
@@ -123,6 +128,7 @@ impl Agent {
                 "OPENROUTER_API_KEY",
                 "GROQ_API_KEY",
             ],
+            Agent::Shell => &[],
         }
     }
 
@@ -130,7 +136,23 @@ impl Agent {
     ///
     /// For Copilot: prefers standalone binaries over VS Code editor shims.
     /// For OpenCode: straightforward PATH search.
+    /// For Shell: uses $SHELL or falls back to /bin/zsh (macOS) or /bin/bash.
     pub fn resolve_binary(&self) -> Result<PathBuf, String> {
+        if matches!(self, Agent::Shell) {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+                if cfg!(target_os = "macos") {
+                    "/bin/zsh".to_string()
+                } else {
+                    "/bin/bash".to_string()
+                }
+            });
+            let path = PathBuf::from(&shell);
+            if path.is_file() {
+                return Ok(path);
+            }
+            return Err(format!("Shell not found: {shell}"));
+        }
+
         let binary_name = self.binary_name();
         let self_exe = std::env::current_exe()
             .ok()
@@ -176,6 +198,7 @@ impl Agent {
             Agent::OpenCode => {
                 "Install OpenCode: npm i -g opencode-ai, or brew install anomalyco/tap/opencode"
             }
+            Agent::Shell => unreachable!("Shell is resolved via $SHELL above"),
         };
 
         Err(format!(
@@ -236,7 +259,10 @@ impl FromStr for Agent {
         match s.to_lowercase().as_str() {
             "copilot" => Ok(Agent::Copilot),
             "opencode" => Ok(Agent::OpenCode),
-            _ => Err(format!("Unknown agent '{s}'. Supported: copilot, opencode")),
+            "shell" | "sh" | "bash" | "zsh" => Ok(Agent::Shell),
+            _ => Err(format!(
+                "Unknown agent '{s}'. Supported: copilot, opencode, shell"
+            )),
         }
     }
 }

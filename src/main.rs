@@ -712,7 +712,7 @@ fn main() -> ExitCode {
                          Install one of:\n\
                          [cplt]   Copilot CLI: brew install --cask copilot-cli\n\
                          [cplt]   OpenCode:    npm i -g opencode-ai\n\
-                         [cplt] Or specify explicitly: cplt --agent copilot|opencode",
+                         [cplt] Or specify explicitly: cplt --agent copilot|opencode|shell",
                     );
                     return ExitCode::FAILURE;
                 }
