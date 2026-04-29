@@ -75,7 +75,48 @@ impl Agent {
                     // (needs map-executable for native modules)
                 ]
             }
-            Agent::Shell => vec![],
+            Agent::Shell => {
+                // Shell needs write access to its config/data dirs for history,
+                // variables, and sourcing config files.
+                let shell_path = std::env::var("SHELL").unwrap_or_default();
+                let shell_name = Path::new(&shell_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                let config_base = std::env::var("XDG_CONFIG_HOME")
+                    .ok()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".config"));
+                let data_base = std::env::var("XDG_DATA_HOME")
+                    .ok()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".local/share"));
+
+                match shell_name {
+                    "fish" => vec![
+                        AgentDir {
+                            path: config_base.join("fish"),
+                            write: true,
+                            map_exec: false,
+                            process_exec: false,
+                        },
+                        AgentDir {
+                            path: data_base.join("fish"),
+                            write: true,
+                            map_exec: false,
+                            process_exec: false,
+                        },
+                    ],
+                    "zsh" => vec![AgentDir {
+                        path: data_base.join("zsh"),
+                        write: true,
+                        map_exec: false,
+                        process_exec: false,
+                    }],
+                    _ => vec![],
+                }
+            }
             Agent::OpenCode => {
                 // Respect XDG_CONFIG_HOME for config dir
                 let config_base = std::env::var("XDG_CONFIG_HOME")
