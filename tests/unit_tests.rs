@@ -389,6 +389,8 @@ fn profile_contains_deny_default() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(p.contains("(deny default)"));
 }
@@ -417,6 +419,8 @@ fn profile_allows_tty_ioctl() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow file-ioctl)"),
@@ -448,6 +452,8 @@ fn profile_grants_project_access() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(p.contains("(allow file-read* (subpath \"/projects/app\"))"));
     assert!(p.contains("(allow file-write* (subpath \"/projects/app\"))"));
@@ -481,6 +487,8 @@ fn profile_grants_copilot_config_access() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(p.contains("(allow file-read* (subpath \"/Users/test/.copilot\"))"));
 }
@@ -509,6 +517,8 @@ fn profile_denies_sensitive_dirs() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     for dir in &[
         ".ssh",
@@ -562,6 +572,8 @@ fn profile_denies_sensitive_files() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     for file in &[
         ".netrc",
@@ -603,6 +615,8 @@ fn profile_restricts_outbound_tcp() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(deny network-outbound (remote tcp))"),
@@ -654,6 +668,8 @@ fn profile_extra_ports_adds_allows() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"*:8080\"))"),
@@ -693,6 +709,8 @@ fn profile_proxy_port_allows_localhost() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"localhost:18080\"))"),
@@ -728,6 +746,8 @@ fn profile_allow_localhost_opens_specific_ports() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"localhost:3000\"))"),
@@ -778,6 +798,8 @@ fn profile_deny_rules_come_after_allow_rules() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     let allow_pos = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
@@ -815,6 +837,8 @@ fn profile_allows_gh_config_read_only() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow file-read* (literal \"/Users/test/.config/gh/hosts.yml\"))"),
@@ -854,6 +878,8 @@ fn profile_allows_file_map_executable_for_copilot() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow file-map-executable (subpath \"/Users/test/.copilot\"))"),
@@ -889,6 +915,8 @@ fn profile_denies_env_files_by_default() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.env$"))"#),
@@ -932,6 +960,8 @@ fn profile_allows_env_files_when_flag_set() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         !p.contains(r#"deny file-read* (regex #"/projects/app/"#),
@@ -963,6 +993,8 @@ fn profile_env_deny_comes_after_project_allow() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     let project_allow = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
@@ -1002,6 +1034,8 @@ fn profile_allows_all_localhost_when_flag_set() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         !p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
@@ -1050,6 +1084,8 @@ fn profile_denies_write_to_copilot_pkg() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Must allow write to ~/.copilot (session state, config)
     assert!(
@@ -1225,6 +1261,8 @@ fn profile_denies_exec_from_tmp() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Must allow read+write to /tmp (needed for temp files)
     assert!(
@@ -1280,6 +1318,8 @@ fn profile_allows_jvm_attach_when_flag_set() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Must allow unix socket bind+inbound+connect for JVM Attach API (.java_pid*)
     // Three operations needed: bind (create socket), inbound (accept), outbound (connect)
@@ -1355,6 +1395,8 @@ fn profile_denies_git_persistence_vectors() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Must deny writes to .git/hooks (post-checkout etc. run outside sandbox)
     assert!(
@@ -1412,6 +1454,8 @@ fn default_profile() -> String {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     })
 }
 
@@ -1960,6 +2004,8 @@ fn profile_scratch_dir_adds_all_permissions() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
 
     let scratch_str = scratch.to_string_lossy();
@@ -2020,6 +2066,8 @@ fn profile_allow_tmp_exec_removes_denies() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
 
     assert!(
@@ -2177,6 +2225,8 @@ fn profile_allows_copilot_install_dir() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains(
@@ -2219,6 +2269,8 @@ fn profile_allows_vscode_copilot_path() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains(&format!("(allow file-read* (subpath \"{vscode_dir}\"))")),
@@ -2266,6 +2318,8 @@ fn profile_allows_electron_app_bundle() {
         electron_app_dir: Some(std::path::Path::new(electron_dir)),
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains(&format!("(allow file-read* (subpath \"{electron_dir}\"))")),
@@ -2416,6 +2470,8 @@ fn profile_allows_git_hooks_path() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow file-read* (subpath \"/Users/test/.config/git/hooks\"))"),
@@ -2556,6 +2612,8 @@ fn profile_gpg_signing_allows_public_keyring() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow file-read* (literal \"/Users/test/.gnupg/pubring.kbx\"))"),
@@ -2595,6 +2653,8 @@ fn profile_gpg_signing_allows_agent_socket() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(allow network-outbound (literal \"/Users/test/.gnupg/S.gpg-agent\"))"),
@@ -2631,6 +2691,8 @@ fn profile_gpg_signing_denies_private_keys() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(deny file-read* (subpath \"/Users/test/.gnupg/private-keys-v1.d\"))"),
@@ -2666,6 +2728,8 @@ fn profile_gpg_signing_rules_come_after_deny() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     let deny_pos = p
         .find("(deny file-read* (subpath \"/Users/test/.gnupg\"))")
@@ -2711,6 +2775,8 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Must use literal (exact file), never subpath (recursive) for GPG allows
     assert!(
@@ -2744,6 +2810,8 @@ fn profile_gpg_signing_deny_path_wins() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // When user explicitly denies ~/.gnupg, GPG allows should NOT appear
     assert!(
@@ -2780,6 +2848,8 @@ fn profile_gpg_signing_denies_legacy_secring() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     assert!(
         p.contains("(deny file-read* (literal \"/Users/test/.gnupg/secring.gpg\"))"),
@@ -2811,6 +2881,8 @@ fn profile_gpg_signing_allows_socket_file_read() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Socket needs file-read* for inode lookup before connect(2)
     assert!(
@@ -3108,6 +3180,8 @@ allow_gpg_signing = false
 allow_tmp_exec = false
 scratch_dir = false
 quiet = false
+allow_cache_exec = []
+allow_cache_exec_any = false
 "#;
     let diagnostics = validate_config(toml);
     let errors: Vec<_> = diagnostics
@@ -3126,6 +3200,7 @@ fn config_from_str_round_trips() {
     assert_eq!(config.proxy.port, Some(1234));
 }
 
+<<<<<<< HEAD
 // ============================================================
 // Docker access (--allow-docker)
 // ============================================================
@@ -3259,5 +3334,190 @@ fn profile_docker_skipped_when_deny_path_overlaps() {
     assert!(
         !p.contains(r#"(allow file-read* (subpath "/Users/test/.docker"))"#),
         "Profile must not allow .docker when deny-path overlaps"
+    );
+}
+
+#[test]
+fn profile_allow_cache_exec_subdir_adds_carveout() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &["ms-playwright".to_string()],
+        allow_cache_exec_any: false,
+    });
+
+    assert!(
+        p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches/ms-playwright\"))"),
+        "allow-cache-exec should add process-exec for the subdir"
+    );
+    assert!(
+        p.contains(
+            "(allow file-map-executable (subpath \"/Users/test/Library/Caches/ms-playwright\"))"
+        ),
+        "allow-cache-exec should add file-map-executable for the subdir"
+    );
+    assert!(
+        !p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches\"))"),
+        "allow-cache-exec should not allow exec from all of Library/Caches"
+    );
+}
+
+#[test]
+fn profile_allow_cache_exec_any_allows_all_caches() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: true,
+    });
+
+    assert!(
+        p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches\"))"),
+        "allow-cache-exec-any should allow exec from all of Library/Caches"
+    );
+    assert!(
+        p.contains("(allow file-map-executable (subpath \"/Users/test/Library/Caches\"))"),
+        "allow-cache-exec-any should allow file-map-executable from all of Library/Caches"
+    );
+}
+
+#[test]
+fn profile_default_denies_cache_exec() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+    });
+
+    assert!(
+        !p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches\"))"),
+        "by default, exec from Library/Caches must be blocked"
+    );
+}
+
+#[test]
+fn profile_allow_cache_exec_multiple_subdirs() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &["ms-playwright".to_string(), "pnpm/dlx".to_string()],
+        allow_cache_exec_any: false,
+    });
+
+    assert!(
+        p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches/ms-playwright\"))")
+    );
+    assert!(p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches/pnpm/dlx\"))"));
+    assert!(!p.contains("(allow process-exec (subpath \"/Users/test/Library/Caches\"))"));
+}
+
+#[test]
+fn config_parses_allow_cache_exec() {
+    use cplt::config::Config;
+    let toml = "[sandbox]\nallow_cache_exec = [\"ms-playwright\", \"pnpm/dlx\"]\n";
+    let config = Config::parse(toml).unwrap();
+    assert_eq!(
+        config.sandbox.allow_cache_exec,
+        vec!["ms-playwright", "pnpm/dlx"]
+    );
+}
+
+#[test]
+fn config_parses_allow_cache_exec_any() {
+    use cplt::config::Config;
+    let toml = "[sandbox]\nallow_cache_exec_any = true\n";
+    let config = Config::parse(toml).unwrap();
+    assert_eq!(config.sandbox.allow_cache_exec_any, Some(true));
+}
+
+#[test]
+fn config_validates_allow_cache_exec_keys() {
+    use cplt::config::{DiagnosticLevel, validate_config};
+    let toml = "[sandbox]\nallow_cache_exec = [\"ms-playwright\"]\nallow_cache_exec_any = false\n";
+    let diagnostics = validate_config(toml);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.level == DiagnosticLevel::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "allow_cache_exec keys should be valid: {errors:?}"
     );
 }

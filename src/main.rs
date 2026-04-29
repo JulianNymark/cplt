@@ -215,6 +215,20 @@ struct Cli {
     #[arg(long)]
     allow_tmp_exec: bool,
 
+    /// Allow process execution from a specific ~/Library/Caches subdirectory.
+    /// By default, exec is blocked from ~/Library/Caches to prevent binary-drop
+    /// staging attacks. Use this for tools that cache and run executables there,
+    /// such as Playwright browsers (ms-playwright) or pnpm dlx packages.
+    /// Example: --allow-cache-exec ms-playwright
+    /// Can be specified multiple times.
+    #[arg(long = "allow-cache-exec", value_name = "SUBDIR")]
+    allow_cache_exec: Vec<String>,
+
+    /// Allow process execution from ALL ~/Library/Caches subdirectories.
+    /// Much broader than --allow-cache-exec. Prefer specifying exact subdirs.
+    #[arg(long)]
+    allow_cache_exec_any: bool,
+
     /// Enable a per-session scratch directory for TMPDIR redirect (default).
     /// Creates ~/.cache/cplt/tmp/{session}/ with write+exec permissions
     /// and redirects TMPDIR/GOTMPDIR there. This allows tools like
@@ -630,6 +644,8 @@ fn main() -> ExitCode {
         allow_jvm_attach: cli.allow_jvm_attach,
         allow_docker: cli.allow_docker,
         allow_tmp_exec: cli.allow_tmp_exec,
+        allow_cache_exec: cli.allow_cache_exec.clone(),
+        allow_cache_exec_any: cli.allow_cache_exec_any,
         scratch_dir: cli.scratch_dir,
         no_scratch_dir: cli.no_scratch_dir,
         quiet: cli.quiet,
@@ -883,6 +899,8 @@ fn main() -> ExitCode {
         electron_app_dir: electron_app_dir.as_deref(),
         agent: active_agent,
         agent_dirs: &agent_dirs,
+        allow_cache_exec: &resolved.allow_cache_exec,
+        allow_cache_exec_any: resolved.allow_cache_exec_any,
     }) {
         Ok(s) => s,
         Err(e) => {

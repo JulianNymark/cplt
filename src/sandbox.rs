@@ -96,6 +96,10 @@ pub struct SandboxConfig<'a> {
     pub agent: Agent,
     /// Agent-specific directories that need sandbox access.
     pub agent_dirs: &'a [AgentDir],
+    /// Specific ~/Library/Caches subdirs where process-exec is allowed.
+    pub allow_cache_exec: &'a [String],
+    /// Allow process-exec from all of ~/Library/Caches.
+    pub allow_cache_exec_any: bool,
 }
 
 /// A validated, platform-specific sandbox ready for execution.
@@ -170,6 +174,8 @@ pub fn prepare(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         electron_app_dir: config.electron_app_dir,
         agent: config.agent,
         agent_dirs: config.agent_dirs,
+        allow_cache_exec: config.allow_cache_exec,
+        allow_cache_exec_any: config.allow_cache_exec_any,
     });
 
     Ok(PreparedSandbox {
