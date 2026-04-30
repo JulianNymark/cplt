@@ -15,6 +15,9 @@ const NC: &str = "\x1b[0m";
 
 pub struct ProxyHandle {
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Actual port the proxy is listening on. With a configured port of 0,
+    /// the OS assigns an ephemeral port; this field reflects the real value.
+    pub port: u16,
 }
 
 impl ProxyHandle {
@@ -54,6 +57,10 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
     let allowed_ports = Arc::new(ports);
     let addr = format!("127.0.0.1:{}", opts.port);
     let listener = TcpListener::bind(&addr).map_err(|e| format!("Cannot bind to {addr}: {e}"))?;
+    let actual_port = listener
+        .local_addr()
+        .map_err(|e| format!("Cannot get proxy listen address: {e}"))?
+        .port();
 
     // Validate blocklist is readable at startup (fail-fast, not fail-open)
     if opts.blocked_file.exists() {
@@ -104,7 +111,10 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
 
     std::thread::sleep(Duration::from_millis(50));
 
-    Ok(ProxyHandle { shutdown_flag })
+    Ok(ProxyHandle {
+        shutdown_flag,
+        port: actual_port,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

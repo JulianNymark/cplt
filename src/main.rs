@@ -629,7 +629,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let resolved = match cfg.merge(config::CliFlags {
+    let mut resolved = match cfg.merge(config::CliFlags {
         with_proxy: cli.with_proxy,
         no_proxy: cli.no_proxy,
         proxy_port: cli.proxy_port,
@@ -877,14 +877,93 @@ fn main() -> ExitCode {
     // Compute agent-specific sandbox directories
     let agent_dirs = active_agent.config_dirs(&home_dir);
 
+    // Start proxy before sandbox::prepare() so the actual bound port is known
+    // and can be embedded in the Seatbelt profile. Port 0 lets the OS assign
+    // an ephemeral port, eliminating fixed-port conflicts.
+    let mut proxy_handle: Option<proxy::ProxyHandle> = None;
+    if resolved.with_proxy && !cli.print_profile {
+        let blocked_file = resolved.blocked_domains.clone().unwrap_or_else(|| {
+            // Look for blocked-domains.txt next to the binary, then blocked.txt
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+            if let Some(ref dir) = exe_dir {
+                let preferred = dir.join("blocked-domains.txt");
+                if preferred.exists() {
+                    return preferred;
+                }
+                let fallback = dir.join("blocked.txt");
+                if fallback.exists() {
+                    return fallback;
+                }
+            }
+            // No blocklist found — return a path that won't exist,
+            // proxy will run without blocking any domains
+            PathBuf::from("/dev/null/no-blocklist")
+        });
+
+        // Parse domain allowlist at startup (fail-closed: startup error if unreadable)
+        let allowed_domains = match &resolved.allowed_domains {
+            Some(path) => match proxy::parse_domain_file(path) {
+                Ok(domains) => {
+                    if !resolved.quiet {
+                        info(&format!(
+                            "Domain allowlist: {} domains from {}",
+                            domains.len(),
+                            path.display()
+                        ));
+                    }
+                    domains
+                }
+                Err(e) => {
+                    error(&format!("Failed to load allowed domains: {e}"));
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => Vec::new(),
+        };
+
+        let port_hint = if resolved.proxy_port == 0 {
+            "ephemeral port".to_string()
+        } else {
+            format!("localhost:{}", resolved.proxy_port)
+        };
+        if !resolved.quiet {
+            info(&format!("Starting proxy on {port_hint}..."));
+        }
+
+        match proxy::start(proxy::ProxyOptions {
+            port: resolved.proxy_port,
+            blocked_file,
+            allowed_ports: resolved.allow_ports.clone(),
+            allowed_domains,
+            allow_private_domains: resolved.allow_private_domains.clone(),
+            log_file: resolved.proxy_log_file.clone(),
+        }) {
+            Ok(handle) => {
+                resolved.proxy_port = handle.port;
+                if !resolved.quiet {
+                    ok(&format!(
+                        "Proxy running on localhost:{} (thread)",
+                        handle.port
+                    ));
+                }
+                proxy_handle = Some(handle);
+                // Proxy env vars (NODE_USE_ENV_PROXY, HTTP_PROXY, HTTPS_PROXY) are
+                // injected by sandbox_exec::exec() when proxy_port is Some.
+            }
+            Err(e) => {
+                error(&format!("Failed to start proxy: {e}"));
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     // Prepare the sandbox — validates paths, generates platform-specific profile.
     // Path validation (SBPL injection checks on macOS) is handled internally
     // by prepare(), so callers don't need to know about backend-specific risks.
-    let proxy_port_for_profile = if resolved.with_proxy {
-        Some(resolved.proxy_port)
-    } else {
-        None
-    };
+    // proxy_port comes from the running handle so the actual ephemeral port is embedded.
+    let proxy_port_for_profile = proxy_handle.as_ref().map(|h| h.port);
     let prepared = match sandbox::prepare(&sandbox::SandboxConfig {
         project_dir: &project_dir,
         home_dir: &home_dir,
@@ -976,86 +1055,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Compute hardening categories before proxy setup (which partially moves `resolved`)
+    // Compute hardening categories for environment sanitization
     let disabled_categories = resolved.disabled_hardening_categories();
 
-    // Start proxy if requested
-    let mut proxy_handle = None;
-
-    if resolved.with_proxy {
-        let blocked_file = resolved.blocked_domains.unwrap_or_else(|| {
-            // Look for blocked-domains.txt next to the binary, then blocked.txt
-            let exe_dir = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf()));
-            if let Some(ref dir) = exe_dir {
-                let preferred = dir.join("blocked-domains.txt");
-                if preferred.exists() {
-                    return preferred;
-                }
-                let fallback = dir.join("blocked.txt");
-                if fallback.exists() {
-                    return fallback;
-                }
-            }
-            // No blocklist found — return a path that won't exist,
-            // proxy will run without blocking any domains
-            PathBuf::from("/dev/null/no-blocklist")
-        });
-
-        // Parse domain allowlist at startup (fail-closed: startup error if unreadable)
-        let allowed_domains = match &resolved.allowed_domains {
-            Some(path) => match proxy::parse_domain_file(path) {
-                Ok(domains) => {
-                    if !resolved.quiet {
-                        info(&format!(
-                            "Domain allowlist: {} domains from {}",
-                            domains.len(),
-                            path.display()
-                        ));
-                    }
-                    domains
-                }
-                Err(e) => {
-                    error(&format!("Failed to load allowed domains: {e}"));
-                    return ExitCode::FAILURE;
-                }
-            },
-            None => Vec::new(),
-        };
-
-        if !resolved.quiet {
-            info(&format!(
-                "Starting proxy on localhost:{} ...",
-                resolved.proxy_port
-            ));
-        }
-
-        match proxy::start(proxy::ProxyOptions {
-            port: resolved.proxy_port,
-            blocked_file,
-            allowed_ports: resolved.allow_ports.clone(),
-            allowed_domains,
-            allow_private_domains: resolved.allow_private_domains.clone(),
-            log_file: resolved.proxy_log_file.clone(),
-        }) {
-            Ok(handle) => {
-                if !resolved.quiet {
-                    ok(&format!(
-                        "Proxy running on localhost:{} (thread)",
-                        resolved.proxy_port
-                    ));
-                }
-                proxy_handle = Some(handle);
-                // Proxy env vars (NODE_USE_ENV_PROXY, HTTP_PROXY, HTTPS_PROXY) are
-                // injected by sandbox_exec::exec() when proxy_port is Some.
-            }
-            Err(e) => {
-                error(&format!("Failed to start proxy: {e}"));
-                return ExitCode::FAILURE;
-            }
-        }
-    }
+    // proxy_handle is set up before sandbox::prepare() (see above)
 
     ok(&format!(
         "Starting {} in sandbox...",

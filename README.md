@@ -246,9 +246,9 @@ cplt auto-discovers installed tools and configures sandbox rules accordingly. On
 
 To see which tools cplt detected, run `cplt --doctor`.
 
-### Proxy (optional)
+### Proxy
 
-The proxy is **disabled by default**. When enabled, all outbound traffic — including Copilot CLI, `gh`, and `curl` — is routed through a localhost CONNECT proxy via `HTTP_PROXY`/`HTTPS_PROXY` env vars and `NODE_USE_ENV_PROXY=1`.
+The proxy is **enabled by default** — all outbound traffic (Copilot CLI, `gh`, `curl`) is routed through a localhost CONNECT proxy via `HTTP_PROXY`/`HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1`. The proxy listens on an OS-assigned ephemeral port, so there are no port conflicts.
 
 **What the proxy gives you:**
 
@@ -258,13 +258,20 @@ The proxy is **disabled by default**. When enabled, all outbound traffic — inc
 - **Audit log** — persistent file log of all connections for post-session review
 - **Port enforcement** — the proxy enforces the same port restrictions as the sandbox (443 + `--allow-port`)
 
-**One-time use:**
+**Disable for a single run:**
 
 ```bash
-cplt --with-proxy -- -p "fix the tests"
+cplt --no-proxy -- -p "fix the tests"
 ```
 
-**Enable permanently** (recommended):
+**Disable permanently** (in `~/.config/cplt/config.toml`):
+
+```toml
+[proxy]
+enabled = false
+```
+
+**Add connection filtering** (recommended):
 
 ```bash
 cplt --init-config
@@ -274,19 +281,16 @@ Then edit `~/.config/cplt/config.toml`:
 
 ```toml
 [proxy]
-enabled = true
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"  # block known-bad domains
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"  # restrict to known-safe domains
 # log_file = "~/.config/cplt/proxy.log"                   # persistent audit log
 ```
 
-After this, every `cplt` invocation starts the proxy automatically. Use `--no-proxy` to skip it for a single run.
-
 | Flag                        | What it does                                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------------------------ |
-| `--with-proxy`              | Start a localhost CONNECT proxy that logs connections.                                           |
-| `--no-proxy`                | Disable the proxy, even if your config file enables it.                                          |
-| `--proxy-port <PORT>`       | Which port the proxy listens on (default: 18080).                                                |
+| `--with-proxy`              | Explicitly enable the proxy (no-op when proxy is already on by default).                         |
+| `--no-proxy`                | Disable the proxy for this run.                                                                  |
+| `--proxy-port <PORT>`       | Which port the proxy listens on (default: 0, OS-assigned ephemeral).                             |
 | `--blocked-domains <FILE>`  | Domains to block, one per line. Re-read on every request (edit live).                            |
 | `--allowed-domains <FILE>`  | Domains to allow — only listed domains can connect. Parsed at startup (fail-closed).             |
 | `--proxy-log <FILE>`        | Append a line per connection to this file for post-session audit.                                |
@@ -392,8 +396,8 @@ cplt --remote --name my-task -- -p "fix the tests"
 # Check environment before first run
 cplt --doctor
 
-# With connection logging
-cplt --with-proxy -- -p "fix the tests"
+# Disable proxy for a single run (proxy is on by default)
+cplt --no-proxy -- -p "fix the tests"
 
 # Let Copilot read a shared library directory
 cplt --allow-read ~/shared-libs -- -p "use shared-libs"
@@ -419,11 +423,11 @@ cplt --pass-env MY_CUSTOM_VAR --pass-env ANOTHER_VAR -- -p "run with custom conf
 # Inherit full environment (dangerous — only for debugging)
 cplt --inherit-env -- -p "debug the build"
 
-# Block paste sites (with proxy enabled)
-cplt --with-proxy --blocked-domains ./blocked-domains.txt -- -p "refactor"
+# Block paste sites
+cplt --blocked-domains ./blocked-domains.txt -- -p "refactor"
 
 # Use an internal MCP server on the corporate network
-cplt --with-proxy --allow-private-domain intern.nav.no -- -p "use mcp-onboarding"
+cplt --allow-private-domain intern.nav.no -- -p "use mcp-onboarding"
 
 # Inspect the generated sandbox profile
 cplt --print-profile
@@ -461,8 +465,8 @@ This creates a commented template at `~/.config/cplt/config.toml`:
 
 ```toml
 [proxy]
-# enabled = true             # Recommended — logs all connections
-# port = 18080
+# enabled = true             # Default: true — disable with --no-proxy or set false
+# port = 0                   # Default: 0 (OS-assigned ephemeral port)
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
@@ -494,11 +498,11 @@ This creates a commented template at `~/.config/cplt/config.toml`:
 
 **Precedence** (highest to lowest):
 
-1. CLI flags (`--with-proxy`, `--proxy-port`, etc.)
+1. CLI flags (`--with-proxy`, `--no-proxy`, `--proxy-port`, etc.)
 2. Config file (`~/.config/cplt/config.toml`)
 3. Built-in defaults
 
-CLI flags always override the config file. Use `--no-proxy` to disable a proxy that's enabled in config.
+CLI flags always override the config file. Use `--no-proxy` to disable the proxy for a single run.
 
 **Environment variable override:**
 
@@ -527,7 +531,7 @@ cplt config validate                      # check for syntax errors and unknown 
 ```bash
 # Scalar keys — set replaces the value
 cplt config set sandbox.quiet true
-cplt config set proxy.port 18080
+cplt config set proxy.port 9090
 
 # Array keys — set appends (idempotent, no duplicates)
 cplt config set allow.read ~/Desktop
@@ -604,7 +608,7 @@ SBPL (Seatbelt Profile Language) does not support wildcard port filtering by IP 
 - **Localhost outbound is blocked** — prevents access to local services (databases, dev servers, etc.)
 - **SSH agent is blocked** — unix socket access is denied, preventing use of loaded SSH keys
 - **Filesystem isolation is the primary control** — credentials are kernel-blocked regardless of network
-- **Use `--with-proxy`** to log and filter all outbound connections (including Copilot traffic)
+- **The proxy is on by default** — logs and filters all outbound connections (Copilot, gh, curl)
 - **Use `--allow-port`** to add extra ports when needed (e.g., `--allow-port 8080` for a dev server)
 
 See [SECURITY.md](SECURITY.md) for the full threat model and honest gaps.
@@ -618,7 +622,7 @@ When the proxy is enabled, it supports both **blocking** (deny known-bad domains
 Block domains commonly used for data exfiltration. A default blocklist is included based on real attack infrastructure observed in 2025–2026 supply chain incidents:
 
 ```bash
-cplt --with-proxy --blocked-domains blocked-domains.txt -- -p "fix tests"
+cplt --blocked-domains blocked-domains.txt -- -p "fix tests"
 ```
 
 The blocklist covers webhook capture services, paste sites, file sharing, tunneling services, and IP recon endpoints. See [`blocked-domains.txt`](blocked-domains.txt) for the full list with sources.
@@ -628,7 +632,7 @@ The blocklist covers webhook capture services, paste sites, file sharing, tunnel
 Restrict connections to only specific domains. When set, the proxy blocks everything not in the list:
 
 ```bash
-cplt --with-proxy --allowed-domains allowed-domains.txt -- -p "fix tests"
+cplt --allowed-domains allowed-domains.txt -- -p "fix tests"
 ```
 
 Example `allowed-domains.txt` for Copilot-only access:

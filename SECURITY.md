@@ -136,9 +136,9 @@ A curated blocklist of these domains is included in [`blocked-domains.txt`](bloc
 - A compromised agent CANNOT connect on non-standard ports (e.g., 8080, 3000) unless `--allow-port` is used
 - A compromised agent CANNOT exfiltrate SSH keys, cloud credentials, or npm tokens (kernel-blocked from reading them)
 - A compromised agent CAN request GPG signatures (if `--allow-gpg-signing` is enabled) but CANNOT exfiltrate private keys
-- The proxy (when enabled with `--with-proxy`) logs and filters all outbound connections, including Copilot CLI traffic (via `NODE_USE_ENV_PROXY=1`). The proxy also enforces port restrictions matching the sandbox policy.
+- The proxy logs and filters all outbound connections by default, including Copilot CLI traffic (via `NODE_USE_ENV_PROXY=1`). The proxy also enforces port restrictions matching the sandbox policy. Use `--no-proxy` to disable.
 
-*Mitigation:* Use `--with-proxy --allowed-domains allowed-domains.txt` to restrict traffic to known Copilot endpoints only. Use `--blocked-domains blocked-domains.txt` to block known exfiltration infrastructure. Use `--proxy-log proxy.log` for post-session audit. All traffic, including Copilot's own Node.js connections, routes through the proxy when enabled.
+*Mitigation:* Use `--allowed-domains allowed-domains.txt` to restrict traffic to known Copilot endpoints only. Use `--blocked-domains blocked-domains.txt` to block known exfiltration infrastructure. Use `--proxy-log proxy.log` for post-session audit. All traffic, including Copilot's own Node.js connections, routes through the proxy.
 
 **`--allow-private-domain` weakens DNS rebinding protection for named domains.** When a domain is listed in `proxy.allow_private_domains` (or `--allow-private-domain`), the proxy skips the post-DNS private IP check for that domain. This is intentional for corporate intranet services (e.g. `intern.nav.no`) that legitimately resolve to RFC 1918 addresses. The accepted risk: if DNS for a listed domain is poisoned or hijacked, a compromised agent could reach arbitrary private hosts on your internal network — not just the intended service. All other proxy checks (port, allowlist, blocklist) still apply. Only list domains you control and whose DNS you trust.
 
@@ -260,7 +260,7 @@ The primary defense is Apple's mandatory access control framework, enforced in t
 (deny network-outbound (remote tcp))    ← Block all outbound TCP by default
 (allow network-outbound *:443)           ← Then allow HTTPS port only (use --allow-port for extras)
 (deny network-outbound localhost:*)     ← Block localhost SSRF
-(allow network-outbound localhost:PORT) ← Carve-out for proxy (if --with-proxy)
+(allow network-outbound localhost:PORT) ← Carve-out for proxy (ephemeral port, assigned at runtime)
 ```
 
 > **Network note:** Outbound TCP is restricted to port 443 by default. SSH agent access (unix sockets) is blocked. JVM Attach API sockets (`/tmp/.java_pid*`) are available via `--allow-jvm-attach` (opt-in, regex-restricted to `.java_pid<PID>` only) — all other unix sockets in `/tmp` remain blocked. Localhost outbound is blocked to prevent SSRF. Use `--allow-port` for additional ports. SBPL does not support domain-based rules — filesystem isolation is the primary security control.
@@ -321,9 +321,9 @@ When `--scratch-dir` is enabled, cplt creates a per-session directory at `~/Libr
   - **Ephemeral:** Cleaned up on exit via RAII Drop; stale dirs GC'd after 24h on startup
 - **On by default:** Enabled by default. Disable with `--no-scratch-dir` or `sandbox.scratch_dir = false` in config.
 
-### Layer 2: CONNECT Proxy (Optional Logging and Domain Filtering)
+### Layer 2: CONNECT Proxy (Logging and Domain Filtering)
 
-When `--with-proxy` is enabled, a localhost CONNECT proxy intercepts all outbound traffic. `HTTP_PROXY`/`HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` are injected into the sandbox environment, routing traffic from Copilot CLI (Node.js), `gh` (Go), `curl`, and any other tool through the proxy.
+A localhost CONNECT proxy intercepts all outbound traffic by default. `HTTP_PROXY`/`HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` are injected into the sandbox environment, routing traffic from Copilot CLI (Node.js), `gh` (Go), `curl`, and any other tool through the proxy. Use `--no-proxy` to disable.
 
 The proxy provides:
 
@@ -450,14 +450,11 @@ This is **not key theft** — the attacker cannot take the key with them. Operat
 
 Copilot CLI bundles Node.js v24.11.1, which supports `NODE_USE_ENV_PROXY=1` (added in Node.js v24.5.0). When this env var is set, Node.js natively honors `HTTP_PROXY`/`HTTPS_PROXY` — routing all outbound connections through the specified proxy.
 
-When `--with-proxy` is enabled, cplt injects `NODE_USE_ENV_PROXY=1`, `HTTP_PROXY`, and `HTTPS_PROXY` into the sandbox environment. All traffic — Copilot CLI, `gh`, `curl`, and any other tool — routes through the localhost CONNECT proxy.
+cplt injects `NODE_USE_ENV_PROXY=1`, `HTTP_PROXY`, and `HTTPS_PROXY` into the sandbox environment. All traffic — Copilot CLI, `gh`, `curl`, and any other tool — routes through the localhost CONNECT proxy.
 
 **Historical context:** Earlier versions of Copilot CLI used a Node.js runtime that did not support proxy env vars, and injecting them broke the auth flow. This is no longer the case as of Copilot CLI 1.0.24+ with bundled Node.js v24.11.1.
 
-**Design decision:** The proxy remains opt-in (`--with-proxy`) rather than default-on because:
-- It adds latency to every connection (localhost roundtrip + proxy processing)
-- The sandbox's filesystem isolation is the primary security control
-- Port restrictions are enforced at both the kernel level (SBPL) and the proxy level
+**Design decision:** The proxy is enabled by default. It listens on an OS-assigned ephemeral port (port 0), so there are no fixed-port conflicts. Use `--no-proxy` to disable for a single run, or set `proxy.enabled = false` in config to disable permanently.
 
 | Component | Language | Routes through proxy? |
 |---|---|---|

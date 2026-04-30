@@ -237,17 +237,17 @@ impl Config {
     /// Returns an error if a deny path from config cannot be resolved
     /// (security-critical: silently dropping deny rules is dangerous).
     pub fn merge(&self, cli: CliFlags) -> Result<Resolved, String> {
-        // Proxy: --no-proxy always wins, then --with-proxy, then config, then false (default off).
+        // Proxy: --no-proxy always wins, then --with-proxy, then config, then true (default on).
         let with_proxy = if cli.no_proxy {
             false
         } else if cli.with_proxy {
             true
         } else {
-            self.proxy.enabled.unwrap_or(false)
+            self.proxy.enabled.unwrap_or(true)
         };
 
-        // Port: CLI (if provided) > config > 18080
-        let proxy_port = cli.proxy_port.or(self.proxy.port).unwrap_or(18080);
+        // Port: CLI (if provided) > config > 0 (OS-assigned ephemeral port)
+        let proxy_port = cli.proxy_port.or(self.proxy.port).unwrap_or(0);
 
         // Blocked domains: CLI > config > exe_dir fallback (handled later in main)
         let blocked_domains = cli
@@ -671,9 +671,13 @@ impl Resolved {
             );
         }
         if self.with_proxy {
+            let port_display = if self.proxy_port == 0 {
+                "ephemeral".to_string()
+            } else {
+                format!("{}", self.proxy_port)
+            };
             eprintln!(
-                "{blue}[cplt]{nc}    Proxy:         {green}on{nc}          {dim}localhost:{}{nc}",
-                self.proxy_port
+                "{blue}[cplt]{nc}    Proxy:         {green}on{nc}          {dim}localhost:{port_display}{nc}"
             );
             if self.allowed_domains.is_some() {
                 eprintln!(
@@ -762,14 +766,14 @@ pub fn default_config_contents() -> String {
 # Override: CPLT_CONFIG=/path/to/config.toml
 
 # ─── Proxy ───────────────────────────────────────────────────
-# Optional CONNECT proxy that logs and filters outbound HTTPS connections.
-# When enabled, HTTP_PROXY/HTTPS_PROXY and NODE_USE_ENV_PROXY=1 are injected
-# so all traffic (Copilot, gh, curl) routes through the proxy.
+# CONNECT proxy that logs and filters outbound HTTPS connections.
+# Enabled by default. HTTP_PROXY/HTTPS_PROXY and NODE_USE_ENV_PROXY=1 are
+# injected so all traffic (Copilot, gh, curl) routes through the proxy.
 # The proxy enforces the same port policy as the sandbox (443 + allow-port).
-# Disabled by default. Enable with --with-proxy or set enabled = true below.
+# Disable with --no-proxy or set enabled = false below.
 [proxy]
-# enabled = false
-# port = 18080
+# enabled = true
+# port = 0  # 0 = OS-assigned ephemeral port (avoids conflicts, default)
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
@@ -1201,7 +1205,7 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         key: "enabled",
         value_type: ConfigValueType::Bool,
         dangerous: false,
-        default_display: "false",
+        default_display: "true",
         description: "Enable the CONNECT proxy for outbound HTTPS traffic logging and domain filtering.",
     },
     ConfigKeyInfo {
@@ -1209,7 +1213,7 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         key: "port",
         value_type: ConfigValueType::U16,
         dangerous: false,
-        default_display: "18080",
+        default_display: "0",
         description: "Local port for the CONNECT proxy listener.",
     },
     ConfigKeyInfo {
@@ -1889,16 +1893,16 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
 
     // [proxy]
     eprintln!("{blue}[cplt]{nc}  {dim}[proxy]{nc}");
-    let proxy_enabled = c.proxy.enabled.unwrap_or(false);
+    let proxy_enabled = c.proxy.enabled.unwrap_or(true);
     eprintln!(
         "{blue}[cplt]{nc}    enabled          = {}{}{nc}{}",
-        if proxy_enabled { yellow } else { green },
+        if proxy_enabled { green } else { yellow },
         proxy_enabled,
         src(c.proxy.enabled.is_some())
     );
     eprintln!(
         "{blue}[cplt]{nc}    port             = {}{}",
-        c.proxy.port.unwrap_or(18080),
+        c.proxy.port.unwrap_or(0),
         src(c.proxy.port.is_some())
     );
     if let Some(ref bd) = c.proxy.blocked_domains {
@@ -2174,7 +2178,7 @@ validate = false
     fn default_port_when_neither_set() {
         let config = Config::default();
         let resolved = config.merge(CliFlags::default()).unwrap();
-        assert_eq!(resolved.proxy_port, 18080);
+        assert_eq!(resolved.proxy_port, 0);
     }
 
     #[test]
@@ -2233,12 +2237,12 @@ validate = false
     }
 
     #[test]
-    fn proxy_disabled_by_default_when_no_config_or_flags() {
+    fn proxy_enabled_by_default_when_no_config_or_flags() {
         let config = Config::default();
         let resolved = config.merge(CliFlags::default()).unwrap();
         assert!(
-            !resolved.with_proxy,
-            "Proxy should be disabled by default — it's a passive logging tool, not required for Copilot"
+            resolved.with_proxy,
+            "Proxy should be enabled by default — connection logging and domain filtering out of the box"
         );
     }
 
