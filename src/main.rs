@@ -902,26 +902,32 @@ fn main() -> ExitCode {
             PathBuf::from("/dev/null/no-blocklist")
         });
 
-        // Parse domain allowlist at startup (fail-closed: startup error if unreadable)
-        let allowed_domains = match &resolved.allowed_domains {
-            Some(path) => match proxy::parse_domain_file(path) {
-                Ok(domains) => {
-                    if !resolved.quiet {
-                        info(&format!(
-                            "Domain allowlist: {} domains from {}",
-                            domains.len(),
-                            path.display()
-                        ));
+        // Validate domain allowlist at startup (fail-closed: abort if unreadable)
+        let allowed_domains_file = resolved.allowed_domains.clone();
+        if let Some(ref path) = allowed_domains_file {
+            if path.exists() {
+                match proxy::parse_domain_file(path) {
+                    Ok(domains) => {
+                        if !resolved.quiet {
+                            info(&format!(
+                                "Domain allowlist: {} domains from {}",
+                                domains.len(),
+                                path.display()
+                            ));
+                        }
                     }
-                    domains
+                    Err(e) => {
+                        error(&format!("Failed to load allowed domains: {e}"));
+                        return ExitCode::FAILURE;
+                    }
                 }
-                Err(e) => {
-                    error(&format!("Failed to load allowed domains: {e}"));
-                    return ExitCode::FAILURE;
-                }
-            },
-            None => Vec::new(),
-        };
+            } else if !resolved.quiet {
+                info(&format!(
+                    "Domain allowlist file: {} (not found)",
+                    path.display()
+                ));
+            }
+        }
 
         let port_hint = if resolved.proxy_port == 0 {
             "ephemeral port".to_string()
@@ -936,8 +942,16 @@ fn main() -> ExitCode {
             port: resolved.proxy_port,
             blocked_file,
             allowed_ports: resolved.allow_ports.clone(),
-            allowed_domains,
-            allow_private_domains: resolved.allow_private_domains.clone(),
+            allowed_domains_file,
+            allowed_domains_initial: Vec::new(),
+            cli_private_domains: cli.allow_private_domains.clone(),
+            config_private_domains: resolved
+                .allow_private_domains
+                .iter()
+                .filter(|d| !cli.allow_private_domains.contains(d))
+                .cloned()
+                .collect(),
+            config_file: config_path.clone(),
             log_file: resolved.proxy_log_file.clone(),
         }) {
             Ok(handle) => {

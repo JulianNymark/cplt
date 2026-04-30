@@ -1065,14 +1065,14 @@ if echo "$RESP8080" | grep -q "403"; then echo "RESULT:port_8080:OK"; else echo 
         require_sandbox!();
         let project = TempProject::scaffold_node();
 
-        // Without --with-proxy, proxy env vars should NOT be present
+        // With --no-proxy, proxy env vars should NOT be present
         let script = r#"
 if [ -z "${NODE_USE_ENV_PROXY:-}" ]; then echo "RESULT:no_node_proxy:OK"; else echo "RESULT:no_node_proxy:FAIL"; fi
 if [ -z "${HTTP_PROXY:-}" ]; then echo "RESULT:no_http_proxy:OK"; else echo "RESULT:no_http_proxy:FAIL"; fi
 if [ -z "${HTTPS_PROXY:-}" ]; then echo "RESULT:no_https_proxy:OK"; else echo "RESULT:no_https_proxy:FAIL"; fi
 "#;
         let fake_dir = create_fake_copilot(&project, script);
-        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &["--no-proxy"]);
 
         assert!(
             success,

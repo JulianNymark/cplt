@@ -292,8 +292,8 @@ Then edit `~/.config/cplt/config.toml`:
 | `--with-proxy`              | Explicitly enable the proxy (no-op when proxy is already on by default).                         |
 | `--no-proxy`                | Disable the proxy for this run.                                                                  |
 | `--proxy-port <PORT>`       | Which port the proxy listens on (default: 0, OS-assigned ephemeral).                             |
-| `--blocked-domains <FILE>`  | Domains to block, one per line. Re-read on every request (edit live).                            |
-| `--allowed-domains <FILE>`  | Domains to allow — only listed domains can connect. Parsed at startup (fail-closed).             |
+| `--blocked-domains <FILE>`  | Domains to block, one per line. Re-read every ~5s (edit live, changes take effect within seconds). |
+| `--allowed-domains <FILE>`  | Domains to allow — only listed domains can connect. Validated at startup (fail-closed); re-read every 5s.  |
 | `--proxy-log <FILE>`        | Append a line per connection to this file for post-session audit.                                |
 | `--allow-private-domain <DOMAIN>` | Allow connections to this domain even if it resolves to a private/internal IP. Use for corporate intranet services (e.g. internal MCP servers). Suffix matching: `intern.nav.no` covers all subdomains. Can be repeated. |
 
@@ -657,7 +657,9 @@ blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 ```
 
-> **Note:** The allowlist is parsed at startup and fails closed — if the file is missing or unreadable, cplt exits with an error. The blocklist is re-read on every request so you can edit it live.
+> **Note:** Both the allowlist and blocklist are re-read from disk every ~5 seconds (TTL-cached), so you can edit them live mid-session. Changes take effect within seconds without restarting cplt. If a file becomes unreadable at runtime, the last-known-good list is kept (fail-safe). At startup, an unreadable allowlist causes cplt to exit with an error (fail-closed).
+>
+> The `allow_private_domains` list in `config.toml` is also re-read every ~5 seconds. Domains added via `--allow-private-domain` CLI flags are always preserved regardless of config changes.
 
 ## Proxy operations
 
