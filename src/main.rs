@@ -1443,10 +1443,19 @@ fn run_config_set(
 }
 
 fn run_config_explain(key: Option<&str>) -> ExitCode {
+    // Load config best-effort: no file → defaults only; parse error → warn and show defaults.
+    let loaded = match config::Config::load_file() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{YELLOW}[cplt] Warning: {e}; showing defaults only{NC}");
+            None
+        }
+    };
+
     match key {
         Some(k) => match config::lookup_key(k) {
             Ok(info) => {
-                config::explain_key(info);
+                config::explain_key(info, loaded.as_ref());
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -1455,7 +1464,7 @@ fn run_config_explain(key: Option<&str>) -> ExitCode {
             }
         },
         None => {
-            config::explain_all();
+            config::explain_all(loaded.as_ref());
             ExitCode::SUCCESS
         }
     }

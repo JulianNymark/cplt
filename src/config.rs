@@ -1294,29 +1294,53 @@ fn type_label(vt: ConfigValueType) -> &'static str {
     }
 }
 
-/// Print explanation of a single config key.
-pub fn explain_key(key_info: &ConfigKeyInfo) {
+/// Print explanation of a single config key, showing type and current value inline.
+pub fn explain_key(key_info: &ConfigKeyInfo, loaded: Option<&LoadedConfig>) {
     let blue = "\x1b[0;34m";
     let bold = "\x1b[1m";
     let dim = "\x1b[2m";
     let yellow = "\x1b[0;33m";
     let nc = "\x1b[0m";
 
+    let default_display = if key_info.default_display.is_empty() {
+        "(unset)"
+    } else {
+        key_info.default_display
+    };
+
+    let (current_value, from_file) = get_config_value(key_info, loaded);
+    let type_str = type_label(key_info.value_type);
+
     eprintln!("{bold}{}.{}{nc}", key_info.section, key_info.key);
     eprintln!("  {}", key_info.description);
-    eprintln!("  {dim}Type:{nc}    {}", type_label(key_info.value_type));
-    eprintln!("{dim}  Default:{nc} {}", key_info.default_display);
+
+    // Type and value on one line: "  bool  false" or "  bool  true  (default: false)"
+    if from_file {
+        // Highlight dangerous keys set to true in yellow so the risk is visible.
+        let value_color = if key_info.dangerous && current_value == "true" {
+            yellow
+        } else {
+            bold
+        };
+        eprintln!(
+            "  {dim}{type_str}{nc}  {value_color}{current_value}{nc}  {dim}(default: {default_display}){nc}"
+        );
+    } else {
+        eprintln!("  {dim}{type_str}  {current_value}{nc}");
+    }
+
     if key_info.dangerous {
         eprintln!("  {yellow}Requires --force to enable{nc}");
     }
     eprintln!(
-        "  {blue}Set:{nc}     cplt config set {}.{} <value>",
+        "  {blue}Set:{nc}  cplt config set {}.{} <value>",
         key_info.section, key_info.key
     );
 }
 
 /// Print explanation of all config keys, grouped by section.
-pub fn explain_all() {
+/// Shows the effective value inline: dim for default, bold for config-file override.
+pub fn explain_all(loaded: Option<&LoadedConfig>) {
     let blue = "\x1b[0;34m";
     let bold = "\x1b[1m";
     let dim = "\x1b[2m";
@@ -1337,10 +1361,25 @@ pub fn explain_all() {
         } else {
             String::new()
         };
+        let (current_value, from_file) = get_config_value(key, loaded);
+        // Dim for default value, bold for override; yellow if dangerous key is enabled.
+        let value_color = if !from_file {
+            dim
+        } else if key.dangerous && current_value == "true" {
+            yellow
+        } else {
+            bold
+        };
+        let display_value = if current_value.is_empty() {
+            "(unset)".to_string()
+        } else {
+            current_value
+        };
         eprintln!(
-            "  {bold}{:<25}{nc} {dim}{:<15}{nc} {}{danger}",
+            "  {bold}{:<25}{nc} {dim}{:<20}{nc} {value_color}{:<14}{nc} {}{danger}",
             format!("{}.{}", key.section, key.key),
             format!("({})", type_label(key.value_type)),
+            display_value,
             key.description.trim_start_matches("⚠️  DANGEROUS: "),
         );
     }
