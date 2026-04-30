@@ -44,6 +44,8 @@ pub struct ProfileOptions<'a> {
     pub allow_gpg_signing: bool,
     /// Allow JVM Attach API unix sockets in /tmp (.java_pid* pattern only).
     pub allow_jvm_attach: bool,
+    /// Allow Docker/Colima/OrbStack daemon socket and ~/.docker read access.
+    pub allow_docker: bool,
     /// Electron app bundle Contents directory (e.g., VS Code .app/Contents).
     /// Needed when Copilot CLI is installed as a VS Code extension and uses
     /// VS Code's Electron runtime. Allows read + file-map-executable so dyld
@@ -84,6 +86,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_user_allows(&mut sb, opts.extra_read, opts.extra_write);
     emit_deny_rules(&mut sb, &home, opts.extra_deny);
     emit_gpg_signing_rules(&mut sb, &home, opts.allow_gpg_signing, opts.extra_deny);
+    emit_docker_rules(&mut sb, &home, opts.allow_docker, opts.extra_deny);
     emit_network_rules(
         &mut sb,
         opts.extra_ports,
@@ -663,6 +666,88 @@ fn emit_gpg_signing_rules(
     .unwrap();
     // No write access to any part of .gnupg
     writeln!(sb, "(deny file-write* (subpath \"{home}/.gnupg\"))").unwrap();
+    writeln!(sb).unwrap();
+}
+
+/// Docker daemon socket paths to allow when `--allow-docker` is set.
+/// On macOS, `/var/run` is a symlink to `/private/var/run`.
+const DOCKER_SOCKET_PATHS: &[&str] = &[
+    "/private/var/run/docker.sock",
+    ".colima/default/docker.sock", // relative to $HOME
+    ".orbstack/run/docker.sock",   // relative to $HOME
+    ".docker/run/docker.sock",     // Docker Desktop (newer)
+];
+
+/// Allow Docker access when `--allow-docker` is set.
+///
+/// Emitted AFTER `emit_deny_rules` (which denies all of `~/.docker`).
+/// SBPL uses last-match-wins, so these targeted allows override the deny.
+/// Sensitive files under ~/.docker (trust/, TLS private keys) remain denied.
+///
+/// If any `extra_deny` path overlaps with `~/.docker` or known socket paths,
+/// Docker rules are skipped entirely — explicit user denies always win.
+fn emit_docker_rules(sb: &mut String, home: &str, allow_docker: bool, extra_deny: &[PathBuf]) {
+    if !allow_docker {
+        return;
+    }
+
+    // Explicit --deny-path wins: if the user denied ~/.docker or any socket path, skip all.
+    let docker_dir = format!("{home}/.docker");
+    for deny in extra_deny {
+        let d = deny.to_string_lossy();
+        if d == docker_dir || d.starts_with(&format!("{docker_dir}/")) {
+            writeln!(
+                sb,
+                ";; Docker access skipped: --deny-path overlaps with ~/.docker"
+            )
+            .unwrap();
+            return;
+        }
+        // Check socket paths
+        for sock in DOCKER_SOCKET_PATHS {
+            let full = if sock.starts_with('/') {
+                sock.to_string()
+            } else {
+                format!("{home}/{sock}")
+            };
+            if *d == full {
+                writeln!(
+                    sb,
+                    ";; Docker access skipped: --deny-path overlaps with socket {sock}"
+                )
+                .unwrap();
+                return;
+            }
+        }
+    }
+
+    writeln!(sb, ";; Docker access (--allow-docker)").unwrap();
+
+    // Read-only access to ~/.docker for Docker CLI config and TLS certs.
+    writeln!(sb, "(allow file-read* (subpath \"{home}/.docker\"))").unwrap();
+
+    // Re-deny sensitive subdirectories: trust delegation keys, signing keys.
+    writeln!(
+        sb,
+        "(deny file-read* (subpath \"{home}/.docker/trust/private\"))"
+    )
+    .unwrap();
+
+    // No write access to Docker config.
+    writeln!(sb, "(deny file-write* (subpath \"{home}/.docker\"))").unwrap();
+
+    // Allow Docker daemon socket connections.
+    // Each socket needs file-read* (inode lookup) + network-outbound (connect).
+    for sock in DOCKER_SOCKET_PATHS {
+        let full = if sock.starts_with('/') {
+            sock.to_string()
+        } else {
+            format!("{home}/{sock}")
+        };
+        writeln!(sb, "(allow file-read* (literal \"{full}\"))").unwrap();
+        writeln!(sb, "(allow network-outbound (literal \"{full}\"))").unwrap();
+    }
+
     writeln!(sb).unwrap();
 }
 

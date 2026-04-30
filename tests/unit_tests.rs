@@ -385,6 +385,7 @@ fn profile_contains_deny_default() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -412,6 +413,7 @@ fn profile_allows_tty_ioctl() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -442,6 +444,7 @@ fn profile_grants_project_access() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -474,6 +477,7 @@ fn profile_grants_copilot_config_access() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -501,6 +505,7 @@ fn profile_denies_sensitive_dirs() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -553,6 +558,7 @@ fn profile_denies_sensitive_files() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -593,6 +599,7 @@ fn profile_restricts_outbound_tcp() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -643,6 +650,7 @@ fn profile_extra_ports_adds_allows() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -681,6 +689,7 @@ fn profile_proxy_port_allows_localhost() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -715,6 +724,7 @@ fn profile_allow_localhost_opens_specific_ports() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -764,6 +774,7 @@ fn profile_deny_rules_come_after_allow_rules() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -800,6 +811,7 @@ fn profile_allows_gh_config_read_only() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -838,6 +850,7 @@ fn profile_allows_file_map_executable_for_copilot() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -872,6 +885,7 @@ fn profile_denies_env_files_by_default() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -914,6 +928,7 @@ fn profile_allows_env_files_when_flag_set() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -944,6 +959,7 @@ fn profile_env_deny_comes_after_project_allow() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -982,6 +998,7 @@ fn profile_allows_all_localhost_when_flag_set() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1029,6 +1046,7 @@ fn profile_denies_write_to_copilot_pkg() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1203,6 +1221,7 @@ fn profile_denies_exec_from_tmp() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1257,6 +1276,7 @@ fn profile_allows_jvm_attach_when_flag_set() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: true,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1331,6 +1351,7 @@ fn profile_denies_git_persistence_vectors() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1387,6 +1408,7 @@ fn default_profile() -> String {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1934,6 +1956,7 @@ fn profile_scratch_dir_adds_all_permissions() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -1993,6 +2016,7 @@ fn profile_allow_tmp_exec_removes_denies() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2149,6 +2173,7 @@ fn profile_allows_copilot_install_dir() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2190,6 +2215,7 @@ fn profile_allows_vscode_copilot_path() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2236,6 +2262,7 @@ fn profile_allows_electron_app_bundle() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: Some(std::path::Path::new(electron_dir)),
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2385,6 +2412,7 @@ fn profile_allows_git_hooks_path() {
         git_hooks_path: Some(std::path::Path::new("/Users/test/.config/git/hooks")),
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2524,6 +2552,7 @@ fn profile_gpg_signing_allows_public_keyring() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2562,6 +2591,7 @@ fn profile_gpg_signing_allows_agent_socket() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2597,6 +2627,7 @@ fn profile_gpg_signing_denies_private_keys() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2631,6 +2662,7 @@ fn profile_gpg_signing_rules_come_after_deny() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2675,6 +2707,7 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2707,6 +2740,7 @@ fn profile_gpg_signing_deny_path_wins() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2742,6 +2776,7 @@ fn profile_gpg_signing_denies_legacy_secring() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -2772,6 +2807,7 @@ fn profile_gpg_signing_allows_socket_file_read() {
         git_hooks_path: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
@@ -3088,4 +3124,140 @@ fn config_from_str_round_trips() {
     let config = Config::parse(toml).unwrap();
     assert_eq!(config.proxy.enabled, Some(true));
     assert_eq!(config.proxy.port, Some(1234));
+}
+
+// ============================================================
+// Docker access (--allow-docker)
+// ============================================================
+
+#[test]
+fn profile_docker_disabled_by_default() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+    });
+    // .docker should be denied
+    assert!(
+        p.contains(r#"(deny file-read* (subpath "/Users/test/.docker"))"#),
+        "Profile must deny .docker by default"
+    );
+    // No docker socket allows
+    assert!(
+        !p.contains("docker.sock"),
+        "Profile must not mention docker.sock when allow_docker is false"
+    );
+}
+
+#[test]
+fn profile_docker_enabled_allows_config_and_sockets() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: true,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+    });
+    // Should allow read of ~/.docker
+    assert!(
+        p.contains(r#"(allow file-read* (subpath "/Users/test/.docker"))"#),
+        "Profile must allow reading ~/.docker when --allow-docker is set"
+    );
+    // Should deny write to ~/.docker
+    assert!(
+        p.contains(r#"(deny file-write* (subpath "/Users/test/.docker"))"#),
+        "Profile must deny write to ~/.docker"
+    );
+    // Should re-deny sensitive trust directory
+    assert!(
+        p.contains(r#"(deny file-read* (subpath "/Users/test/.docker/trust/private"))"#),
+        "Profile must re-deny ~/.docker/trust/private"
+    );
+    // Should allow Colima socket
+    assert!(
+        p.contains(
+            r#"(allow network-outbound (literal "/Users/test/.colima/default/docker.sock"))"#
+        ),
+        "Profile must allow outbound to Colima Docker socket"
+    );
+    // Should allow /private/var/run/docker.sock
+    assert!(
+        p.contains(r#"(allow network-outbound (literal "/private/var/run/docker.sock"))"#),
+        "Profile must allow outbound to /private/var/run/docker.sock"
+    );
+    // Should allow OrbStack socket
+    assert!(
+        p.contains(r#"(allow network-outbound (literal "/Users/test/.orbstack/run/docker.sock"))"#),
+        "Profile must allow outbound to OrbStack Docker socket"
+    );
+}
+
+#[test]
+fn profile_docker_skipped_when_deny_path_overlaps() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[std::path::PathBuf::from("/Users/test/.docker")],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: true,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+    });
+    // Docker allows should be skipped — deny-path wins
+    assert!(
+        p.contains("Docker access skipped"),
+        "Profile must skip docker rules when --deny-path overlaps"
+    );
+    assert!(
+        !p.contains(r#"(allow file-read* (subpath "/Users/test/.docker"))"#),
+        "Profile must not allow .docker when deny-path overlaps"
+    );
 }

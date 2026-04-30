@@ -385,6 +385,7 @@ mod macos_tests {
             git_hooks_path: None,
             allow_gpg_signing: false,
             allow_jvm_attach: false,
+            allow_docker: false,
             electron_app_dir: None,
             agent: cplt::agent::Agent::Copilot,
             agent_dirs: &[],

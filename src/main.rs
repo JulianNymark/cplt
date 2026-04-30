@@ -197,6 +197,14 @@ struct Cli {
     #[arg(long)]
     allow_jvm_attach: bool,
 
+    /// Allow Docker/Colima/OrbStack access inside the sandbox (DANGEROUS).
+    /// Exposes ~/.docker config (read-only) and Docker daemon unix sockets.
+    /// WARNING: Docker container volumes can mount ANY host path, completely
+    /// bypassing sandbox filesystem restrictions. A compromised agent could
+    /// use `docker run -v /:/host` to read all files on your machine.
+    #[arg(long)]
+    allow_docker: bool,
+
     /// Allow process execution from system temp directories.
     /// DANGEROUS: re-enables exec from /private/tmp and /private/var/folders.
     /// Prefer --scratch-dir which creates a controlled executable temp dir.
@@ -617,6 +625,7 @@ fn main() -> ExitCode {
         allow_lifecycle_scripts: cli.allow_lifecycle_scripts,
         allow_gpg_signing: cli.allow_gpg_signing,
         allow_jvm_attach: cli.allow_jvm_attach,
+        allow_docker: cli.allow_docker,
         allow_tmp_exec: cli.allow_tmp_exec,
         scratch_dir: cli.scratch_dir,
         no_scratch_dir: cli.no_scratch_dir,
@@ -863,6 +872,7 @@ fn main() -> ExitCode {
         git_hooks_path: git_hooks_path.as_deref(),
         allow_gpg_signing: resolved.allow_gpg_signing,
         allow_jvm_attach: resolved.allow_jvm_attach,
+        allow_docker: resolved.allow_docker,
         electron_app_dir: electron_app_dir.as_deref(),
         agent: active_agent,
         agent_dirs: &agent_dirs,

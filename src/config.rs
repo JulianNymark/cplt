@@ -87,6 +87,11 @@ pub struct SandboxConfig {
     /// Only allows sockets matching /tmp/.java_pid<PID> — SSH agent and
     /// all other unix sockets remain blocked.
     pub allow_jvm_attach: Option<bool>,
+    /// Allow Docker/Colima/OrbStack access inside the sandbox (default: false).
+    /// DANGEROUS: Docker can mount any host path via container volumes, completely
+    /// bypassing sandbox filesystem restrictions. Only enable if you trust the
+    /// agent's container usage.
+    pub allow_docker: Option<bool>,
     /// Allow process execution from system temp directories (default: false).
     /// DANGEROUS: re-enables exec from /private/tmp and /private/var/folders.
     pub allow_tmp_exec: Option<bool>,
@@ -120,6 +125,7 @@ pub struct Resolved {
     pub allow_lifecycle_scripts: bool,
     pub allow_gpg_signing: bool,
     pub allow_jvm_attach: bool,
+    pub allow_docker: bool,
     pub allow_tmp_exec: bool,
     pub scratch_dir: bool,
     pub quiet: bool,
@@ -150,6 +156,7 @@ pub struct CliFlags {
     pub allow_lifecycle_scripts: bool,
     pub allow_gpg_signing: bool,
     pub allow_jvm_attach: bool,
+    pub allow_docker: bool,
     pub allow_tmp_exec: bool,
     pub scratch_dir: bool,
     pub no_scratch_dir: bool,
@@ -349,6 +356,13 @@ impl Config {
             self.sandbox.allow_jvm_attach.unwrap_or(false)
         };
 
+        // Allow-docker: CLI flag wins, then config, then false (blocked by default)
+        let allow_docker = if cli.allow_docker {
+            true
+        } else {
+            self.sandbox.allow_docker.unwrap_or(false)
+        };
+
         // Allow-tmp-exec: CLI flag wins, then config, then false (blocked by default)
         let allow_tmp_exec = if cli.allow_tmp_exec {
             true
@@ -402,6 +416,7 @@ impl Config {
             allow_lifecycle_scripts,
             allow_gpg_signing,
             allow_jvm_attach,
+            allow_docker,
             allow_tmp_exec,
             scratch_dir,
             quiet,
@@ -511,6 +526,12 @@ impl Resolved {
         } else {
             eprintln!(
                 "{blue}[cplt]{nc}    SSH/GPG/cloud: blocked     {dim}~/.ssh, ~/.gnupg, ~/.aws, ...{nc}"
+            );
+        }
+        if self.allow_docker {
+            let red = "\x1b[0;31m";
+            eprintln!(
+                "{blue}[cplt]{nc}    Docker:        {red}ALLOWED{nc}     {dim}⚠ container mounts bypass sandbox (--allow-docker){nc}"
             );
         }
         if self.allow_jvm_attach {
@@ -723,6 +744,13 @@ pub fn default_config_contents() -> String {
 # Enable this if you work with Kotlin/Java projects that use inline mocking.
 # allow_jvm_attach = false
 #
+# DANGEROUS: Allow Docker/Colima/OrbStack access inside the sandbox.
+# Exposes ~/.docker config (read-only) and Docker daemon unix sockets.
+# WARNING: Docker container volumes can mount any host path, completely
+# bypassing sandbox filesystem restrictions. Only enable if you trust
+# the agent's container usage.
+# allow_docker = false
+#
 # Allow outbound TCP to localhost on ALL ports.
 # Needed for build tools like Turbopack (Next.js), Vite, and esbuild
 # that spawn workers communicating via TCP on random localhost ports.
@@ -810,6 +838,7 @@ const VALID_SANDBOX_KEYS: &[&str] = &[
     "allow_lifecycle_scripts",
     "allow_gpg_signing",
     "allow_jvm_attach",
+    "allow_docker",
     "allow_tmp_exec",
     "scratch_dir",
     "quiet",
@@ -911,6 +940,13 @@ pub fn validate_config(toml_text: &str) -> Vec<ConfigDiagnostic> {
             diagnostics.push(ConfigDiagnostic {
                 level: DiagnosticLevel::Warning,
                 message: "sandbox.allow_gpg_signing = true: GPG agent socket exposed — signing requests possible (DANGEROUS)"
+                    .to_string(),
+            });
+        }
+        if sandbox.get("allow_docker").and_then(|v| v.as_bool()) == Some(true) {
+            diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                message: "sandbox.allow_docker = true: Docker socket exposed — container mounts bypass sandbox (DANGEROUS)"
                     .to_string(),
             });
         }
@@ -1210,6 +1246,14 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         dangerous: false,
         default_display: "false",
         description: "Allow JVM Attach API unix sockets for ByteBuddy/MockK/Mockito inline mocking.",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "allow_docker",
+        value_type: ConfigValueType::Bool,
+        dangerous: true,
+        default_display: "false",
+        description: "⚠️  DANGEROUS: Allow Docker/Colima/OrbStack access. Exposes daemon socket and ~/.docker config. Container mounts bypass sandbox.",
     },
 ];
 
@@ -1774,6 +1818,16 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
         eprintln!(
             "{blue}[cplt]{nc}    allow_gpg_signing     = false{}",
             src(c.sandbox.allow_gpg_signing.is_some())
+        );
+    }
+    let allow_docker = c.sandbox.allow_docker.unwrap_or(false);
+    if allow_docker {
+        let red = "\x1b[0;31m";
+        eprintln!("{blue}[cplt]{nc}    allow_docker          = {red}true{nc} ⚠ DANGEROUS");
+    } else {
+        eprintln!(
+            "{blue}[cplt]{nc}    allow_docker          = false{}",
+            src(c.sandbox.allow_docker.is_some())
         );
     }
     let allow_tmp = c.sandbox.allow_tmp_exec.unwrap_or(false);

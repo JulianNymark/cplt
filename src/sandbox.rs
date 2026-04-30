@@ -88,6 +88,8 @@ pub struct SandboxConfig<'a> {
     pub allow_gpg_signing: bool,
     /// Allow JVM Attach API unix sockets in /tmp (.java_pid* pattern only).
     pub allow_jvm_attach: bool,
+    /// Allow Docker/Colima/OrbStack access (daemon socket + ~/.docker read).
+    pub allow_docker: bool,
     /// Electron app bundle Contents directory (macOS only, ignored on Linux).
     pub electron_app_dir: Option<&'a Path>,
     /// Which AI coding agent is being sandboxed.
@@ -164,6 +166,7 @@ pub fn prepare(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         git_hooks_path: config.git_hooks_path,
         allow_gpg_signing: config.allow_gpg_signing,
         allow_jvm_attach: config.allow_jvm_attach,
+        allow_docker: config.allow_docker,
         electron_app_dir: config.electron_app_dir,
         agent: config.agent,
         agent_dirs: config.agent_dirs,
