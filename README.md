@@ -22,6 +22,7 @@ macOS Seatbelt sandbox wrapper for AI coding agents. Runs GitHub Copilot CLI, Op
 - [Architecture](#architecture)
 - [Security](#security)
 - [Domain filtering](#domain-filtering)
+- [Proxy operations](#proxy-operations)
 - [Known impacts](#known-impacts)
 - [Limitations](#limitations)
 - [Contributing](#contributing)
@@ -657,6 +658,92 @@ blocked_domains = "~/.config/cplt/blocked-domains.txt"
 ```
 
 > **Note:** The allowlist is parsed at startup and fails closed — if the file is missing or unreadable, cplt exits with an error. The blocklist is re-read on every request so you can edit it live.
+
+## Proxy operations
+
+### Connection log
+
+Every connection attempt is printed to stderr in real time:
+
+```
+[proxy] 14:23:01 CONNECT api.githubcopilot.com:443 → CONNECTED
+[proxy] 14:23:04 CONNECT pastebin.com:443 → BLOCKED
+[proxy] 14:23:07 CONNECT mcp-onboarding.intern.nav.no:443 → BLOCKED-PRIVATE-RESOLVED
+```
+
+To write a persistent audit log:
+
+```bash
+cplt --proxy-log ~/.config/cplt/proxy.log -- -p "fix tests"
+```
+
+Log file format (one line per connection):
+
+```
+2025-01-15T14:23:01Z CONNECT api.githubcopilot.com:443 CONNECTED
+2025-01-15T14:23:04Z CONNECT pastebin.com:443 BLOCKED
+```
+
+### Status codes
+
+| Status | Meaning | Action |
+|---|---|---|
+| `CONNECTED` | Connection succeeded | — |
+| `BLOCKED` | Domain matched blocklist | Check `--blocked-domains` file |
+| `BLOCKED-ALLOWLIST` | Domain not in allowlist | Add domain to `--allowed-domains` file |
+| `BLOCKED-PORT` | Port not in allowed list | Add with `--allow-port <PORT>` |
+| `BLOCKED-PRIVATE` | Pre-DNS private IP (`.local`, `127.*`, IP literals) | Use `--allow-localhost` for local ports |
+| `BLOCKED-PRIVATE-RESOLVED` | DNS resolved to a private IP | Use `--allow-private-domain <DOMAIN>` |
+| `DNS-FAIL` | DNS resolution failed | Check domain spelling or network |
+| `CONNECT-FAIL:...` | TCP connection to target failed | Target may be down |
+| `UNSUPPORTED` | Non-CONNECT HTTP method | Only CONNECT tunnels are supported |
+| `LIMIT` | 64 concurrent connections reached | Reduce parallelism |
+
+### Troubleshooting
+
+**Tool blocked with `BLOCKED-PRIVATE-RESOLVED`** — a domain (typically corporate intranet) resolved to a private IP:
+
+```bash
+cplt --allow-private-domain mcp-onboarding.intern.nav.no -- -p "use the MCP server"
+# Or match all subdomains:
+cplt --allow-private-domain intern.nav.no -- -p "use the MCP server"
+```
+
+**MCP server on localhost blocked** — use `--allow-localhost` (not `--allow-private-domain`):
+
+```bash
+cplt --allow-localhost 3000 -- -p "use local MCP server"
+```
+
+**Tool needs a non-443 port** — add it explicitly:
+
+```bash
+cplt --allow-port 8443 -- -p "test the API"
+```
+
+**Nothing connects — check if proxy is running:**
+
+```bash
+cplt --print-profile | grep localhost   # shows the proxy port rule in the Seatbelt profile
+```
+
+**Disable the proxy entirely for debugging:**
+
+```bash
+cplt --no-proxy -- -p "fix tests"
+```
+
+### Corporate proxy environments
+
+cplt injects its own `HTTP_PROXY`/`HTTPS_PROXY` into the sandbox environment, replacing any corporate proxy you may have set. The sandbox environment is cleared by default (sensitive env vars stripped), so your external `HTTP_PROXY` does not flow in.
+
+If you need to chain through a corporate proxy instead of using cplt's built-in proxy:
+
+```bash
+cplt --no-proxy --pass-env HTTP_PROXY --pass-env HTTPS_PROXY -- -p "fix tests"
+```
+
+Note that `--no-proxy` disables domain filtering, connection logging, and port enforcement. Use `--allowed-domains` or `--blocked-domains` as compensating controls when possible.
 
 ## Copilot CLI network endpoints
 
