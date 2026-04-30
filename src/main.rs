@@ -1117,9 +1117,16 @@ fn build_copilot_args(cli: &Cli, agent: &agent::Agent) -> Vec<String> {
         }
     }
 
-    // Gemini: auto-resume previous session when no explicit args are given.
-    // If the user passes any -- args, they're driving; don't inject --resume.
-    if matches!(agent, agent::Agent::Gemini) && cli.copilot_args.is_empty() {
+    // Auto-resume: when no explicit args are given and no session flags are set,
+    // default to --resume so the agent continues the previous session.
+    // Applies to Copilot and Gemini. Skipped if user passes -- args or uses
+    // explicit session management flags (--resume, --continue, --name).
+    let has_session_flags =
+        cli.resume.is_some() || cli.continue_session || cli.session_name.is_some();
+    if matches!(agent, agent::Agent::Copilot | agent::Agent::Gemini)
+        && cli.copilot_args.is_empty()
+        && !has_session_flags
+    {
         args.push("--resume".into());
     }
 
@@ -1834,10 +1841,17 @@ mod tests {
     }
 
     #[test]
+    fn copilot_auto_resume_when_no_args() {
+        let cli = parse(&[]);
+        let args = build_copilot_args(&cli, &agent::Agent::Copilot);
+        assert_eq!(args, vec!["--no-auto-update", "--resume"]);
+    }
+
+    #[test]
     fn no_forwarded_flags() {
         let cli = parse(&["--", "-p", "fix tests"]);
         let args = build_copilot_args(&cli, &agent::Agent::Copilot);
-        // --no-auto-update is injected as Copilot extra arg
+        // --no-auto-update is injected as Copilot extra arg; no auto-resume (has args)
         assert_eq!(args, vec!["--no-auto-update", "-p", "fix tests"]);
     }
 
@@ -1866,7 +1880,8 @@ mod tests {
     fn remote_flag() {
         let cli = parse(&["--remote"]);
         let args = build_copilot_args(&cli, &agent::Agent::Copilot);
-        assert_eq!(args, vec!["--no-auto-update", "--remote"]);
+        // --remote with no explicit args: auto-resume is also injected
+        assert_eq!(args, vec!["--no-auto-update", "--remote", "--resume"]);
     }
 
     #[test]
