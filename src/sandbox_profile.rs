@@ -450,7 +450,8 @@ fn emit_tool_dirs(
 
     // User-specified ~/Library/Caches exec carve-outs.
     // Emitted AFTER the broad exec denies (last-match-wins), so these override.
-    // No write access — read+exec only, same as the copilot/pkg carve-out above.
+    // Write access is already granted by the HOME_TOOL_DIRS allow for ~/Library/Caches —
+    // these rules add only process-exec and file-map-executable on top of that.
     // allow_cache_exec_any re-allows exec across the entire Library/Caches subtree.
     if allow_cache_exec_any {
         writeln!(

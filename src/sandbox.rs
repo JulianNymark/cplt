@@ -288,6 +288,26 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
         policy::validate_sbpl_path(p).map_err(|e| format!("--deny-path path: {e}"))?;
     }
 
+    // allow_cache_exec subdirs are interpolated into SBPL string literals — validate here
+    // as a second line of defence (config::merge already validates, but SandboxConfig can
+    // be constructed directly by callers who bypass that path).
+    for subdir in config.allow_cache_exec {
+        for c in ['"', ')', '(', ';', '\\', '\n', '\r', '\0'] {
+            if subdir.contains(c) {
+                return Err(format!(
+                    "allow_cache_exec subdir {subdir:?} contains unsafe characters"
+                ));
+            }
+        }
+        for component in subdir.split('/') {
+            if component == ".." || component == "." {
+                return Err(format!(
+                    "allow_cache_exec subdir {subdir:?} contains path traversal"
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
