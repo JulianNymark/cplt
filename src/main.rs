@@ -18,8 +18,8 @@ const LONG_VERSION: &str = match option_env!("CPLT_LONG_VERSION") {
 /// SSH keys, cloud credentials, or other secrets. The sandbox is enforced
 /// by the macOS kernel — the agent (and any process it spawns) cannot bypass it.
 ///
-/// Supports GitHub Copilot CLI and OpenCode. Auto-detects which agent to use,
-/// or specify explicitly with --agent.
+/// Supports GitHub Copilot CLI, OpenCode, and Google Gemini CLI. Auto-detects
+/// which agent to use, or specify explicitly with --agent.
 ///
 /// Defaults can be saved to ~/.config/cplt/config.toml
 /// so you don't need to pass flags every time. Run `cplt config init` to
@@ -36,6 +36,9 @@ EXAMPLES:
 
   cplt --agent opencode --pass-env ANTHROPIC_API_KEY
     Run OpenCode in sandbox with Anthropic API key
+
+  cplt --agent gemini
+    Run Gemini CLI in sandbox (uses Google OAuth or GEMINI_API_KEY)
 
   cplt --with-proxy -- -p \"fix the tests\"
     Run with proxy for connection logging and domain blocking
@@ -64,8 +67,8 @@ EXAMPLES:
 )]
 struct Cli {
     /// Which AI coding agent to sandbox.
-    /// Auto-detected from PATH if not specified (prefers copilot, falls back to opencode).
-    /// Supported: copilot, opencode
+    /// Auto-detected from PATH if not specified (prefers copilot, falls back to opencode, then gemini).
+    /// Supported: copilot, opencode, gemini, shell
     #[arg(long, value_name = "AGENT")]
     agent: Option<String>,
 
@@ -750,7 +753,11 @@ fn main() -> ExitCode {
                 active_agent.binary_name(),
                 hints[0]
             ));
-            warn("  or use /connect in OpenCode with your GitHub Copilot subscription");
+            if active_agent == agent::Agent::OpenCode {
+                warn("  or use /connect in OpenCode with your GitHub Copilot subscription");
+            } else if active_agent == agent::Agent::Gemini {
+                warn("  or sign in with Google (OAuth flow on first run)");
+            }
         }
 
         // Warn if Copilot-only flags are used with a non-Copilot agent
@@ -1108,6 +1115,12 @@ fn build_copilot_args(cli: &Cli, agent: &agent::Agent) -> Vec<String> {
             args.push("--name".into());
             args.push(name.clone());
         }
+    }
+
+    // Gemini: auto-resume previous session when no explicit args are given.
+    // If the user passes any -- args, they're driving; don't inject --resume.
+    if matches!(agent, agent::Agent::Gemini) && cli.copilot_args.is_empty() {
+        args.push("--resume".into());
     }
 
     args.extend(cli.copilot_args.iter().cloned());
@@ -1909,5 +1922,19 @@ mod tests {
         let cli = parse(&["--", "run", "fix tests"]);
         let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
         assert_eq!(args, vec!["run", "fix tests"]);
+    }
+
+    #[test]
+    fn gemini_auto_resume_when_no_args() {
+        let cli = parse(&[]);
+        let args = build_copilot_args(&cli, &agent::Agent::Gemini);
+        assert_eq!(args, vec!["--resume"]);
+    }
+
+    #[test]
+    fn gemini_no_auto_resume_when_args_given() {
+        let cli = parse(&["--", "-p", "fix tests"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Gemini);
+        assert_eq!(args, vec!["-p", "fix tests"]);
     }
 }

@@ -1,8 +1,9 @@
 //! Agent abstraction for different AI coding tools.
 //!
-//! cplt can sandbox multiple AI coding agents — currently GitHub Copilot CLI
-//! and OpenCode. Each agent has different binary names, config directories,
-//! and runtime requirements, but shares the same core sandbox infrastructure.
+//! cplt can sandbox multiple AI coding agents — currently GitHub Copilot CLI,
+//! OpenCode, and Google Gemini CLI. Each agent has different binary names,
+//! config directories, and runtime requirements, but shares the same core
+//! sandbox infrastructure.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -14,6 +15,8 @@ pub enum Agent {
     Copilot,
     /// OpenCode (anomalyco/opencode) — open source AI coding agent.
     OpenCode,
+    /// Google Gemini CLI — AI coding agent powered by Gemini models.
+    Gemini,
     /// Plain sandboxed shell — no AI agent, just a secure shell session.
     Shell,
 }
@@ -24,6 +27,7 @@ impl Agent {
         match self {
             Agent::Copilot => "copilot",
             Agent::OpenCode => "opencode",
+            Agent::Gemini => "gemini",
             Agent::Shell => "shell",
         }
     }
@@ -33,6 +37,7 @@ impl Agent {
         match self {
             Agent::Copilot => "Copilot",
             Agent::OpenCode => "OpenCode",
+            Agent::Gemini => "Gemini",
             Agent::Shell => "Shell",
         }
     }
@@ -49,15 +54,16 @@ impl Agent {
     pub fn extra_args(&self) -> &'static [&'static str] {
         match self {
             Agent::Copilot => &["--no-auto-update"],
-            Agent::OpenCode | Agent::Shell => &[],
+            Agent::OpenCode | Agent::Gemini | Agent::Shell => &[],
         }
     }
 
     /// Whether this agent needs macOS Keychain access for auth tokens.
     /// Copilot stores GitHub auth tokens in the Keychain.
+    /// Gemini uses Keychain for extension integrity verification.
     /// OpenCode uses API keys from env vars or config files.
     pub fn needs_keychain(&self) -> bool {
-        matches!(self, Agent::Copilot)
+        matches!(self, Agent::Copilot | Agent::Gemini)
     }
 
     /// Whether this agent needs access to ~/.copilot directory.
@@ -148,6 +154,15 @@ impl Agent {
                     },
                 ]
             }
+            Agent::Gemini => {
+                // ~/.gemini stores auth, settings, sessions, and agents
+                vec![AgentDir {
+                    path: home.join(".gemini"),
+                    write: true,
+                    map_exec: false,
+                    process_exec: false,
+                }]
+            }
         }
     }
 
@@ -169,6 +184,9 @@ impl Agent {
                 "OPENROUTER_API_KEY",
                 "GROQ_API_KEY",
             ],
+            // Gemini uses Google OAuth by default (browser flow, stored in ~/.gemini/).
+            // API key or Vertex AI project are alternatives.
+            Agent::Gemini => &["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT"],
             Agent::Shell => &[],
         }
     }
@@ -239,6 +257,9 @@ impl Agent {
             Agent::OpenCode => {
                 "Install OpenCode: npm i -g opencode-ai, or brew install anomalyco/tap/opencode"
             }
+            Agent::Gemini => {
+                "Install Gemini CLI: npm i -g @google/gemini-cli, or brew install gemini-cli"
+            }
             Agent::Shell => unreachable!("Shell is resolved via $SHELL above"),
         };
 
@@ -249,8 +270,8 @@ impl Agent {
     }
 
     /// Auto-detect which agent to use based on what's available in PATH.
-    /// Returns Copilot if found (backward compat), else OpenCode.
-    /// Returns None if neither is found.
+    /// Returns Copilot if found (backward compat), else OpenCode, else Gemini.
+    /// Returns None if none are found.
     pub fn auto_detect() -> Option<Agent> {
         let path_var = std::env::var("PATH").unwrap_or_default();
         let self_exe = std::env::current_exe()
@@ -259,6 +280,7 @@ impl Agent {
 
         let mut found_copilot = false;
         let mut found_opencode = false;
+        let mut found_gemini = false;
 
         for dir in path_var.split(':') {
             if !found_copilot {
@@ -281,12 +303,24 @@ impl Agent {
                     }
                 }
             }
+            if !found_gemini {
+                let candidate = PathBuf::from(dir).join("gemini");
+                if candidate.is_file() {
+                    let resolved =
+                        std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+                    if self_exe.as_ref() != Some(&resolved) {
+                        found_gemini = true;
+                    }
+                }
+            }
         }
 
         if found_copilot {
             Some(Agent::Copilot)
         } else if found_opencode {
             Some(Agent::OpenCode)
+        } else if found_gemini {
+            Some(Agent::Gemini)
         } else {
             None
         }
@@ -300,9 +334,10 @@ impl FromStr for Agent {
         match s.to_lowercase().as_str() {
             "copilot" => Ok(Agent::Copilot),
             "opencode" => Ok(Agent::OpenCode),
+            "gemini" | "gem" => Ok(Agent::Gemini),
             "shell" | "sh" | "bash" | "zsh" => Ok(Agent::Shell),
             _ => Err(format!(
-                "Unknown agent '{s}'. Supported: copilot, opencode, shell"
+                "Unknown agent '{s}'. Supported: copilot, opencode, gemini, shell"
             )),
         }
     }
@@ -341,6 +376,9 @@ mod tests {
         assert_eq!(Agent::from_str("Copilot").unwrap(), Agent::Copilot);
         assert_eq!(Agent::from_str("opencode").unwrap(), Agent::OpenCode);
         assert_eq!(Agent::from_str("OpenCode").unwrap(), Agent::OpenCode);
+        assert_eq!(Agent::from_str("gemini").unwrap(), Agent::Gemini);
+        assert_eq!(Agent::from_str("Gemini").unwrap(), Agent::Gemini);
+        assert_eq!(Agent::from_str("gem").unwrap(), Agent::Gemini);
         assert!(Agent::from_str("unknown").is_err());
     }
 
@@ -355,20 +393,28 @@ mod tests {
     }
 
     #[test]
+    fn gemini_binary_name() {
+        assert_eq!(Agent::Gemini.binary_name(), "gemini");
+    }
+
+    #[test]
     fn copilot_needs_sea_extraction() {
         assert!(Agent::Copilot.needs_sea_extraction());
         assert!(!Agent::OpenCode.needs_sea_extraction());
+        assert!(!Agent::Gemini.needs_sea_extraction());
     }
 
     #[test]
     fn copilot_extra_args() {
         assert_eq!(Agent::Copilot.extra_args(), &["--no-auto-update"]);
         assert!(Agent::OpenCode.extra_args().is_empty());
+        assert!(Agent::Gemini.extra_args().is_empty());
     }
 
     #[test]
-    fn copilot_needs_keychain() {
+    fn keychain_needs() {
         assert!(Agent::Copilot.needs_keychain());
+        assert!(Agent::Gemini.needs_keychain());
         assert!(!Agent::OpenCode.needs_keychain());
     }
 
@@ -393,6 +439,16 @@ mod tests {
     }
 
     #[test]
+    fn gemini_config_dirs() {
+        let home = Path::new("/Users/test");
+        let dirs = Agent::Gemini.config_dirs(home);
+        assert_eq!(dirs.len(), 1, "should have ~/.gemini dir");
+        assert_eq!(dirs[0].path, home.join(".gemini"));
+        assert!(dirs[0].write, "gemini dir should be writable");
+        assert!(!dirs[0].process_exec && !dirs[0].map_exec);
+    }
+
+    #[test]
     fn copilot_has_no_extra_config_dirs() {
         let home = Path::new("/Users/test");
         let dirs = Agent::Copilot.config_dirs(home);
@@ -410,8 +466,16 @@ mod tests {
     }
 
     #[test]
+    fn gemini_auth_env_hints() {
+        let hints = Agent::Gemini.auth_env_hint();
+        assert!(hints.contains(&"GEMINI_API_KEY"));
+        assert!(hints.contains(&"GOOGLE_CLOUD_PROJECT"));
+    }
+
+    #[test]
     fn display_names() {
         assert_eq!(format!("{}", Agent::Copilot), "Copilot");
         assert_eq!(format!("{}", Agent::OpenCode), "OpenCode");
+        assert_eq!(format!("{}", Agent::Gemini), "Gemini");
     }
 }
