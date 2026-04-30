@@ -424,6 +424,12 @@ impl Config {
         // Reject chars that could break the profile and path-traversal components
         // that would escape ~/Library/Caches (e.g. "../Applications").
         for subdir in &allow_cache_exec {
+            if subdir.trim().is_empty() {
+                return Err(
+                    "allow_cache_exec subdir must not be empty (would grant exec to all of ~/Library/Caches)"
+                        .to_string(),
+                );
+            }
             for c in ['"', ')', '(', ';', '\\', '\n', '\r', '\0'] {
                 if subdir.contains(c) {
                     return Err(format!(
@@ -431,7 +437,7 @@ impl Config {
                     ));
                 }
             }
-            for component in subdir.split('/') {
+            for component in subdir.trim_matches('/').split('/') {
                 if component == ".." || component == "." {
                     return Err(format!(
                         "allow_cache_exec subdir {subdir:?} contains path traversal"

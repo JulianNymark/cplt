@@ -3200,7 +3200,6 @@ fn config_from_str_round_trips() {
     assert_eq!(config.proxy.port, Some(1234));
 }
 
-<<<<<<< HEAD
 // ============================================================
 // Docker access (--allow-docker)
 // ============================================================
@@ -3229,6 +3228,8 @@ fn profile_docker_disabled_by_default() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // .docker should be denied
     assert!(
@@ -3266,6 +3267,8 @@ fn profile_docker_enabled_allows_config_and_sockets() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Should allow read of ~/.docker
     assert!(
@@ -3325,6 +3328,8 @@ fn profile_docker_skipped_when_deny_path_overlaps() {
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
     });
     // Docker allows should be skipped — deny-path wins
     assert!(
@@ -3523,6 +3528,22 @@ fn config_validates_allow_cache_exec_keys() {
 }
 
 #[test]
+fn allow_cache_exec_rejects_empty_string() {
+    use cplt::config::{CliFlags, Config};
+    let cases = [
+        "[sandbox]\nallow_cache_exec = [\"\"]\n",
+        "[sandbox]\nallow_cache_exec = [\"   \"]\n",
+    ];
+    for toml in cases {
+        let result = Config::parse(toml).unwrap().merge(CliFlags::default());
+        assert!(
+            result.is_err(),
+            "empty allow_cache_exec subdir should be rejected: {toml:?}"
+        );
+    }
+}
+
+#[test]
 fn allow_cache_exec_rejects_path_traversal() {
     use cplt::config::{CliFlags, Config};
     let cases = ["../Applications", "ms-playwright/../../usr", ".", ".."];
@@ -3574,6 +3595,7 @@ fn profile_cache_exec_carveout_comes_after_exec_deny() {
         git_hooks_path: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
+        allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
         agent_dirs: &[],

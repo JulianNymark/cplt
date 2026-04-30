@@ -292,6 +292,12 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
     // as a second line of defence (config::merge already validates, but SandboxConfig can
     // be constructed directly by callers who bypass that path).
     for subdir in config.allow_cache_exec {
+        if subdir.trim().is_empty() {
+            return Err(
+                "allow_cache_exec subdir must not be empty (would grant exec to all of ~/Library/Caches)"
+                    .to_string(),
+            );
+        }
         for c in ['"', ')', '(', ';', '\\', '\n', '\r', '\0'] {
             if subdir.contains(c) {
                 return Err(format!(
@@ -299,7 +305,7 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
                 ));
             }
         }
-        for component in subdir.split('/') {
+        for component in subdir.trim_matches('/').split('/') {
             if component == ".." || component == "." {
                 return Err(format!(
                     "allow_cache_exec subdir {subdir:?} contains path traversal"
