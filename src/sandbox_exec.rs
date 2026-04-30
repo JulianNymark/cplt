@@ -1,8 +1,39 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::env::build_sandbox_env;
 use super::policy::HardeningCategory;
 use crate::agent::Agent;
+
+/// Config filenames that mise searches for in ancestor directories.
+const MISE_CONFIG_FILENAMES: &[&str] = &[".tool-versions", ".mise.toml", "mise.toml"];
+
+/// Compute `MISE_IGNORED_CONFIG_PATHS` for ancestor directories the sandbox can't read.
+///
+/// mise traverses from CWD up to `/` looking for config files. The sandbox allows reading
+/// `$HOME/.tool-versions` (literal) and the project dir (subpath), but ancestor directories
+/// between home and project are blocked. We scan for actual config files in those ancestors
+/// and tell mise to skip them, preventing "Operation not permitted" errors.
+fn compute_mise_ignored_paths(project_dir: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut ignored = Vec::new();
+
+    // Walk ancestors of project_dir (exclusive) up to home (exclusive).
+    // These are directories inside $HOME that aren't the project and aren't $HOME itself.
+    let mut dir = project_dir.parent();
+    while let Some(ancestor) = dir {
+        if ancestor == home || !ancestor.starts_with(home) {
+            break;
+        }
+        for filename in MISE_CONFIG_FILENAMES {
+            let candidate = ancestor.join(filename);
+            if candidate.exists() {
+                ignored.push(candidate);
+            }
+        }
+        dir = ancestor.parent();
+    }
+
+    ignored
+}
 
 /// Validate the profile by running a simple command inside the sandbox.
 pub fn validate(profile_path: &Path, _project_dir: &Path, _home_dir: &Path) -> Result<(), String> {
@@ -37,6 +68,7 @@ pub fn exec(
     copilot_bin: &Path,
     profile_path: &Path,
     project_dir: &Path,
+    home: &Path,
     copilot_args: &[String],
     extra_pass_env: &[String],
     inherit_env: bool,
@@ -83,6 +115,19 @@ pub fn exec(
     // Recursion guard: if copilot somehow re-invokes cplt (e.g. via symlink),
     // cplt will see this and bail before launching another sandbox.
     cmd.env("__CPLT_WRAPPED", "1");
+
+    // Tell mise to skip config files in ancestor directories the sandbox can't read.
+    // Without this, mise fails with EPERM when traversing parent dirs for .tool-versions.
+    if !extra_pass_env
+        .iter()
+        .any(|v| v == "MISE_IGNORED_CONFIG_PATHS")
+    {
+        let ignored = compute_mise_ignored_paths(project_dir, home);
+        if !ignored.is_empty() {
+            let paths: Vec<&str> = ignored.iter().filter_map(|p| p.to_str()).collect();
+            cmd.env("MISE_IGNORED_CONFIG_PATHS", paths.join(":"));
+        }
+    }
 
     // When proxy is enabled, tell Node.js (bundled in Copilot CLI) to route
     // traffic through our CONNECT proxy. NODE_USE_ENV_PROXY is required for

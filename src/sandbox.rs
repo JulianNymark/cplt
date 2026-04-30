@@ -232,6 +232,7 @@ pub fn exec_sandboxed(
         copilot_bin,
         &profile_path,
         &sandbox.project_dir,
+        &sandbox.home_dir,
         copilot_args,
         extra_pass_env,
         inherit_env,
