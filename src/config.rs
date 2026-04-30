@@ -420,12 +420,23 @@ impl Config {
         {
             validate_sbpl_path(p)?;
         }
-        // Validate cache exec subdirs — these are interpolated into SBPL regex patterns
+        // Validate cache exec subdirs — interpolated into SBPL string literals.
+        // Reject chars that could break the profile and path-traversal components
+        // that would escape ~/Library/Caches (e.g. "../Applications").
         for subdir in &allow_cache_exec {
-            if subdir.contains('"') || subdir.contains('\\') || subdir.contains('\n') {
-                return Err(format!(
-                    "allow_cache_exec subdir {subdir:?} contains unsafe characters"
-                ));
+            for c in ['"', ')', '(', ';', '\\', '\n', '\r', '\0'] {
+                if subdir.contains(c) {
+                    return Err(format!(
+                        "allow_cache_exec subdir {subdir:?} contains unsafe characters"
+                    ));
+                }
+            }
+            for component in subdir.split('/') {
+                if component == ".." || component == "." {
+                    return Err(format!(
+                        "allow_cache_exec subdir {subdir:?} contains path traversal"
+                    ));
+                }
             }
         }
 
@@ -991,6 +1002,17 @@ pub fn validate_config(toml_text: &str) -> Vec<ConfigDiagnostic> {
             diagnostics.push(ConfigDiagnostic {
                 level: DiagnosticLevel::Warning,
                 message: "sandbox.allow_tmp_exec = true: exec from temp dirs enabled (DANGEROUS)"
+                    .to_string(),
+            });
+        }
+        if sandbox
+            .get("allow_cache_exec_any")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                message: "sandbox.allow_cache_exec_any = true: exec from all ~/Library/Caches enabled (DANGEROUS)"
                     .to_string(),
             });
         }

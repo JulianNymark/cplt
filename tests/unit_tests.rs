@@ -3521,3 +3521,87 @@ fn config_validates_allow_cache_exec_keys() {
         "allow_cache_exec keys should be valid: {errors:?}"
     );
 }
+
+#[test]
+fn allow_cache_exec_rejects_path_traversal() {
+    use cplt::config::{CliFlags, Config};
+    let cases = ["../Applications", "ms-playwright/../../usr", ".", ".."];
+    for bad in cases {
+        let toml = format!("[sandbox]\nallow_cache_exec = [\"{bad}\"]\n");
+        let result = Config::parse(&toml).unwrap().merge(CliFlags::default());
+        assert!(
+            result.is_err(),
+            "allow_cache_exec subdir {bad:?} should be rejected as path traversal"
+        );
+    }
+}
+
+#[test]
+fn allow_cache_exec_rejects_unsafe_chars() {
+    use cplt::config::{CliFlags, Config};
+    // \\ and \n are representable in TOML strings
+    let cases = [
+        "[sandbox]\nallow_cache_exec = [\"bad\\\\subdir\"]\n",
+        "[sandbox]\nallow_cache_exec = [\"bad\\nsubdir\"]\n",
+    ];
+    for toml in cases {
+        let result = Config::parse(toml).unwrap().merge(CliFlags::default());
+        assert!(
+            result.is_err(),
+            "unsafe subdir should be rejected: {toml:?}"
+        );
+    }
+}
+
+#[test]
+fn profile_cache_exec_carveout_comes_after_exec_deny() {
+    // The carve-out must appear after the broad exec-deny rules for last-match-wins to work.
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &["ms-playwright".to_string()],
+        allow_cache_exec_any: false,
+    });
+    let deny_pos = p
+        .find("(deny process-exec")
+        .expect("profile must contain a process-exec deny rule");
+    let allow_pos = p
+        .find("(allow process-exec (subpath \"/Users/test/Library/Caches/ms-playwright\"))")
+        .expect("profile must contain the cache-exec carve-out");
+    assert!(
+        allow_pos > deny_pos,
+        "cache-exec carve-out must appear after exec deny rules for last-match-wins to apply"
+    );
+}
+
+#[test]
+fn validate_config_warns_on_allow_cache_exec_any() {
+    use cplt::config::{DiagnosticLevel, validate_config};
+    let toml = "[sandbox]\nallow_cache_exec_any = true\n";
+    let diagnostics = validate_config(toml);
+    let has_warning = diagnostics
+        .iter()
+        .any(|d| d.level == DiagnosticLevel::Warning && d.message.contains("allow_cache_exec_any"));
+    assert!(
+        has_warning,
+        "validate_config should warn when allow_cache_exec_any = true"
+    );
+}
