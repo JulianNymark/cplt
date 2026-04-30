@@ -34,6 +34,10 @@ pub struct ProxyOptions {
     /// Parsed allowlist domains (already validated). When non-empty,
     /// only matching domains are permitted through the proxy.
     pub allowed_domains: Vec<String>,
+    /// Domains allowed to resolve to private/internal IPs (opt-in DNS rebinding bypass).
+    /// For each listed domain, the post-DNS `is_private_ip` check is skipped.
+    /// All other checks (port, allowlist, blocklist) still apply.
+    pub allow_private_domains: Vec<String>,
     /// Path to append audit log lines. None = no file logging.
     pub log_file: Option<PathBuf>,
 }
@@ -71,6 +75,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
     }
 
     let allowed_domains = Arc::new(opts.allowed_domains);
+    let allow_private_domains = Arc::new(opts.allow_private_domains);
     let log_file = opts.log_file.map(Arc::new);
 
     listener
@@ -91,6 +96,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
                 active_count,
                 allowed_ports,
                 allowed_domains,
+                allow_private_domains,
                 log_file,
             );
         })
@@ -101,6 +107,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
     Ok(ProxyHandle { shutdown_flag })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn accept_loop(
     listener: TcpListener,
     shutdown: Arc<std::sync::atomic::AtomicBool>,
@@ -108,6 +115,7 @@ fn accept_loop(
     active_count: Arc<std::sync::atomic::AtomicUsize>,
     allowed_ports: Arc<Vec<u16>>,
     allowed_domains: Arc<Vec<String>>,
+    allow_private_domains: Arc<Vec<String>>,
     log_file: Option<Arc<PathBuf>>,
 ) {
     // Non-blocking accept with periodic shutdown check
@@ -145,12 +153,20 @@ fn accept_loop(
         let counter = active_count.clone();
         let ports = allowed_ports.clone();
         let domains = allowed_domains.clone();
+        let private_domains = allow_private_domains.clone();
         let lf = log_file.clone();
 
         if let Err(e) = std::thread::Builder::new()
             .name("proxy-conn".into())
             .spawn(move || {
-                handle_connection(stream, &blocked, &ports, &domains, lf.as_deref());
+                handle_connection(
+                    stream,
+                    &blocked,
+                    &ports,
+                    &domains,
+                    &private_domains,
+                    lf.as_deref(),
+                );
                 counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             })
         {
@@ -170,6 +186,7 @@ fn handle_connection(
     blocked_file: &PathBuf,
     allowed_ports: &[u16],
     allowed_domains: &[String],
+    allow_private_domains: &[String],
     log_file: Option<&PathBuf>,
 ) {
     client.set_read_timeout(Some(READ_TIMEOUT)).ok();
@@ -202,6 +219,7 @@ fn handle_connection(
             blocked_file,
             allowed_ports,
             allowed_domains,
+            allow_private_domains,
             log_file,
         );
     } else {
@@ -218,6 +236,7 @@ fn handle_connect(
     blocked_file: &PathBuf,
     allowed_ports: &[u16],
     allowed_domains: &[String],
+    allow_private_domains: &[String],
     log_file: Option<&PathBuf>,
 ) {
     // Parse host:port
@@ -279,8 +298,10 @@ fn handle_connect(
         }
     };
 
-    // Check the RESOLVED IP address (prevents DNS rebinding attacks)
-    if is_private_ip(&socket_addr.ip()) {
+    // Check the RESOLVED IP address (prevents DNS rebinding attacks).
+    // Domains in allow_private_domains are explicitly trusted to resolve to private IPs
+    // (e.g. corporate internal services). All other checks still apply.
+    if is_private_ip(&socket_addr.ip()) && !is_domain_match(&host, allow_private_domains) {
         log_connection("CONNECT", target, "BLOCKED-PRIVATE-RESOLVED", log_file);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nResolved to private IP\r\n");
         return;

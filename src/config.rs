@@ -37,6 +37,10 @@ pub struct ProxyConfig {
     pub allowed_domains: Option<String>,
     /// Path to write proxy audit log (one line per CONNECT).
     pub log_file: Option<String>,
+    /// Domains allowed to resolve to private/internal IPs.
+    /// For each listed domain, the post-DNS private IP check is skipped.
+    /// Use for corporate internal services (e.g. "intern.nav.no").
+    pub allow_private_domains: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -119,6 +123,7 @@ pub struct Resolved {
     pub blocked_domains: Option<PathBuf>,
     pub allowed_domains: Option<PathBuf>,
     pub proxy_log_file: Option<PathBuf>,
+    pub allow_private_domains: Vec<String>,
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
     pub deny_paths: Vec<PathBuf>,
@@ -152,6 +157,7 @@ pub struct CliFlags {
     pub blocked_domains: Option<PathBuf>,
     pub allowed_domains: Option<PathBuf>,
     pub proxy_log_file: Option<PathBuf>,
+    pub allow_private_domains: Vec<String>,
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
     pub deny_paths: Vec<PathBuf>,
@@ -257,6 +263,21 @@ impl Config {
         let proxy_log_file = cli
             .proxy_log_file
             .or_else(|| self.proxy.log_file.as_ref().map(|s| expand_tilde(s)));
+
+        // Allow private domains: merge CLI + config list, sort+dedup.
+        // Validates that entries are non-empty (empty string would bypass private IP
+        // check for all domains that match is_domain_match("", _), which is none — but
+        // reject it anyway for clarity).
+        let mut allow_private_domains =
+            self.proxy.allow_private_domains.clone().unwrap_or_default();
+        allow_private_domains.extend(cli.allow_private_domains);
+        allow_private_domains.sort_unstable();
+        allow_private_domains.dedup();
+        for domain in &allow_private_domains {
+            if domain.trim().is_empty() {
+                return Err("proxy.allow_private_domains entry must not be empty".to_string());
+            }
+        }
 
         // Allow-read: merge config + CLI
         let config_dir = config_path().and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -452,6 +473,7 @@ impl Config {
             blocked_domains,
             allowed_domains,
             proxy_log_file,
+            allow_private_domains,
             allow_read,
             allow_write,
             deny_paths,
@@ -658,6 +680,13 @@ impl Resolved {
                     "{blue}[cplt]{nc}    Allowlist:     {green}on{nc}          {dim}only listed domains{nc}"
                 );
             }
+            if !self.allow_private_domains.is_empty() {
+                eprintln!(
+                    "{blue}[cplt]{nc}    Private:       {yellow}allowed{nc}     {dim}{}{}",
+                    self.allow_private_domains.join(", "),
+                    nc
+                );
+            }
             if let Some(ref lf) = self.proxy_log_file {
                 eprintln!(
                     "{blue}[cplt]{nc}    Audit log:     {green}on{nc}          {dim}{}{nc}",
@@ -744,6 +773,10 @@ pub fn default_config_contents() -> String {
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
+# Domains allowed to resolve to private/internal IPs (bypasses DNS-rebinding block).
+# Use for corporate internal services, e.g. MCP servers on your company's intranet.
+# Suffix matching: "intern.nav.no" covers all its subdomains.
+# allow_private_domains = ["intern.nav.no"]
 
 # ─── Allowed paths ──────────────────────────────────────────
 # Additional paths the sandboxed process may access.
@@ -899,6 +932,7 @@ const VALID_PROXY_KEYS: &[&str] = &[
     "blocked_domains",
     "allowed_domains",
     "log_file",
+    "allow_private_domains",
 ];
 const VALID_ALLOW_KEYS: &[&str] = &["read", "write", "ports", "localhost"];
 const VALID_DENY_KEYS: &[&str] = &["paths"];
@@ -1201,6 +1235,14 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         dangerous: false,
         default_display: "",
         description: "Path to write proxy connection logs (CONNECT requests and outcomes).",
+    },
+    ConfigKeyInfo {
+        section: "proxy",
+        key: "allow_private_domains",
+        value_type: ConfigValueType::StrArray,
+        dangerous: false,
+        default_display: "[]",
+        description: "Domains allowed to resolve to private/internal IPs (opt-in DNS-rebinding bypass). Use for corporate intranet services. Suffix matching: \"intern.nav.no\" covers all subdomains.",
     },
     // [allow]
     ConfigKeyInfo {

@@ -113,6 +113,13 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     proxy_log: Option<PathBuf>,
 
+    /// Allow connections to this domain even if it resolves to a private/internal IP.
+    /// Use for corporate intranet services such as internal MCP servers.
+    /// Suffix matching: "intern.nav.no" covers all its subdomains.
+    /// Can be specified multiple times. Merged with proxy.allow_private_domains in config.
+    #[arg(long = "allow-private-domain", value_name = "DOMAIN")]
+    allow_private_domains: Vec<String>,
+
     /// Let the agent read files outside the project directory.
     /// Use when the agent needs to reference shared libraries,
     /// monorepo siblings, or documentation stored elsewhere.
@@ -629,6 +636,7 @@ fn main() -> ExitCode {
         blocked_domains: cli.blocked_domains.clone(),
         allowed_domains: cli.allowed_domains.clone(),
         proxy_log_file: cli.proxy_log.clone(),
+        allow_private_domains: cli.allow_private_domains.clone(),
         allow_read: cli_allow_read,
         allow_write: cli_allow_write,
         deny_paths: cli_deny_paths,
@@ -1028,6 +1036,7 @@ fn main() -> ExitCode {
             blocked_file,
             allowed_ports: resolved.allow_ports.clone(),
             allowed_domains,
+            allow_private_domains: resolved.allow_private_domains.clone(),
             log_file: resolved.proxy_log_file.clone(),
         }) {
             Ok(handle) => {

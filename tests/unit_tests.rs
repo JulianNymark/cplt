@@ -328,6 +328,91 @@ fn detects_ipv6_link_local() {
 }
 
 // ============================================================
+// allow_private_domains — config merge and proxy bypass logic
+// ============================================================
+
+#[test]
+fn allow_private_domains_merge_cli_and_toml() {
+    use cplt::config::{CliFlags, Config};
+    let toml = "[proxy]\nallow_private_domains = [\"intern.nav.no\"]\n";
+    let cli = CliFlags {
+        allow_private_domains: vec!["dev.corp.example.com".to_string()],
+        ..Default::default()
+    };
+    let resolved = Config::parse(toml).unwrap().merge(cli).unwrap();
+    assert!(
+        resolved
+            .allow_private_domains
+            .contains(&"intern.nav.no".to_string())
+    );
+    assert!(
+        resolved
+            .allow_private_domains
+            .contains(&"dev.corp.example.com".to_string())
+    );
+}
+
+#[test]
+fn allow_private_domains_deduplicates() {
+    use cplt::config::{CliFlags, Config};
+    let toml = "[proxy]\nallow_private_domains = [\"intern.nav.no\", \"intern.nav.no\"]\n";
+    let resolved = Config::parse(toml)
+        .unwrap()
+        .merge(CliFlags::default())
+        .unwrap();
+    assert_eq!(
+        resolved
+            .allow_private_domains
+            .iter()
+            .filter(|d| *d == "intern.nav.no")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn allow_private_domains_rejects_empty_string() {
+    use cplt::config::{CliFlags, Config};
+    let toml = "[proxy]\nallow_private_domains = [\"\"]\n";
+    let result = Config::parse(toml).unwrap().merge(CliFlags::default());
+    assert!(result.is_err(), "empty domain should be rejected");
+}
+
+#[test]
+fn allow_private_domains_bypasses_private_ip_check() {
+    use cplt::proxy::{is_domain_match, is_private_ip};
+    // Simulate the bypass condition in handle_connect:
+    // block if private IP AND not in allow_private_domains
+    let private_ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+    let allow_private = vec!["intern.nav.no".to_string()];
+
+    // Domain in list → should NOT be blocked
+    assert!(
+        !is_private_ip(&private_ip) || is_domain_match("mcp.intern.nav.no", &allow_private),
+        "domain in allow_private_domains should bypass private IP block"
+    );
+
+    // Domain not in list → should be blocked
+    assert!(
+        is_private_ip(&private_ip) && !is_domain_match("evil.com", &allow_private),
+        "domain not in allow_private_domains should still be blocked"
+    );
+}
+
+#[test]
+fn allow_private_domains_suffix_match() {
+    use cplt::proxy::is_domain_match;
+    let list = vec!["intern.nav.no".to_string()];
+    // Suffix match covers all subdomains
+    assert!(is_domain_match("mcp-onboarding.intern.nav.no", &list));
+    assert!(is_domain_match("api.intern.nav.no", &list));
+    assert!(is_domain_match("intern.nav.no", &list));
+    // Non-matching domains
+    assert!(!is_domain_match("evil.com", &list));
+    assert!(!is_domain_match("notintern.nav.no", &list));
+}
+
+// ============================================================
 // SBPL path validation
 // ============================================================
 

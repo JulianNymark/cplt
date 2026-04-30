@@ -290,6 +290,7 @@ After this, every `cplt` invocation starts the proxy automatically. Use `--no-pr
 | `--blocked-domains <FILE>`  | Domains to block, one per line. Re-read on every request (edit live).                            |
 | `--allowed-domains <FILE>`  | Domains to allow — only listed domains can connect. Parsed at startup (fail-closed).             |
 | `--proxy-log <FILE>`        | Append a line per connection to this file for post-session audit.                                |
+| `--allow-private-domain <DOMAIN>` | Allow connections to this domain even if it resolves to a private/internal IP. Use for corporate intranet services (e.g. internal MCP servers). Suffix matching: `intern.nav.no` covers all subdomains. Can be repeated. |
 
 > **Domain matching:** both blocklist and allowlist use the same rules — `example.com` matches the exact domain and all subdomains (`sub.example.com`, `deep.sub.example.com`). Matching is case-insensitive. Trailing dots are stripped.
 >
@@ -421,6 +422,9 @@ cplt --inherit-env -- -p "debug the build"
 # Block paste sites (with proxy enabled)
 cplt --with-proxy --blocked-domains ./blocked-domains.txt -- -p "refactor"
 
+# Use an internal MCP server on the corporate network
+cplt --with-proxy --allow-private-domain intern.nav.no -- -p "use mcp-onboarding"
+
 # Inspect the generated sandbox profile
 cplt --print-profile
 
@@ -462,6 +466,7 @@ This creates a commented template at `~/.config/cplt/config.toml`:
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
+# allow_private_domains = ["intern.nav.no"]  # Allow internal/intranet domains to resolve to private IPs
 
 [sandbox]
 # validate = true
