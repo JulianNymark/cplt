@@ -60,7 +60,7 @@ cplt --agent shell
 | Read `.env*`, `.pem`, `.key` in project                                          | 🔒 Kernel-blocked                         | Prevents secret exfiltration; `--allow-env-files` to override                           |
 | Write `.git/hooks`, `.git/config`, `.gitmodules`                                 | 🔒 Kernel-blocked                         | Prevents persistence via git hooks, hooksPath redirect, submodule hijacking             |
 | Execute from `/tmp`, `/var/folders`                                              | 🔒 Kernel-blocked                         | Prevents write-then-exec; scratch dir redirects TMPDIR to safe location (on by default) |
-| Execute from `~/Library/Caches`                                                  | 🔒 Kernel-blocked                         | Prevents binary-drop staging; Copilot native modules exempted via carve-out             |
+| Execute from `~/Library/Caches`                                                  | 🔒 Kernel-blocked by default              | Prevents binary-drop staging; Copilot native modules exempted via carve-out; `--allow-cache-exec <SUBDIR>` to add targeted exemptions (e.g. `ms-playwright`) |
 | Modify `.vscode/tasks.json`, `launch.json`                                       | ⚠️ Allowed — known risk                   | IDE trust boundary; see SECURITY.md for mitigations                                     |
 | Read/write `~/.copilot` (auth, settings)                                         | ✅ Allowed                                | Includes `file-map-executable` for `keytar.node`, `pty.node`, `computer.node`           |
 | Write `~/.copilot/pkg` (native modules)                                          | 🔒 Kernel-blocked                         | Prevents persistence via native module replacement                                      |
@@ -224,6 +224,8 @@ By default, `cplt` sanitizes the child environment — only safe variables pass 
 | `--no-scratch-dir`          | Disable the per-session scratch directory (on by default). TMPDIR will not be redirected.                                                    |
 | `--scratch-dir`             | Explicitly enable per-session scratch directory (already the default). Useful to override `scratch_dir = false` in config.                   |
 | `--allow-tmp-exec`          | ⚠️ **Dangerous.** Allow exec from system temp dirs (`/private/tmp`, `/private/var/folders`). Prefer scratch dir.                             |
+| `--allow-cache-exec <SUBDIR>` | Allow exec from a specific `~/Library/Caches/<SUBDIR>`. Can be repeated. Use for tools that cache compiled binaries there (e.g. Playwright, pnpm dlx). |
+| `--allow-cache-exec-any`    | ⚠️ **Dangerous.** Allow exec from all of `~/Library/Caches`. Prefer `--allow-cache-exec <SUBDIR>` for targeted exemptions. |
 
 ### Supported runtimes
 
@@ -470,6 +472,8 @@ This creates a commented template at `~/.config/cplt/config.toml`:
 # allow_localhost_any = false
 # scratch_dir = true           # On by default; set false to disable
 # allow_tmp_exec = false       # Dangerous — prefer scratch_dir
+# allow_cache_exec = []        # Allow exec from specific ~/Library/Caches subdirs, e.g. ["ms-playwright", "pnpm/dlx"]
+# allow_cache_exec_any = false # Dangerous — allow exec from all of ~/Library/Caches
 # inherit_env = false          # Dangerous — exposes all env vars
 # pass_env = ["MY_CUSTOM_VAR"]
 
@@ -736,6 +740,35 @@ If you're still seeing this error, check that you haven't set `scratch_dir = fal
 ```bash
 cplt config explain sandbox.scratch_dir
 ```
+
+### Cache exec (Playwright, pnpm dlx, etc.)
+
+Some tools unpack and execute binaries directly from `~/Library/Caches`, which is exec-blocked by default:
+
+| Tool | Cache path | Fix |
+|---|---|---|
+| Playwright (browsers) | `~/Library/Caches/ms-playwright/` | `--allow-cache-exec ms-playwright` |
+| pnpm dlx | `~/Library/Caches/pnpm/dlx/` | `--allow-cache-exec pnpm/dlx` |
+
+```bash
+# Allow Playwright browser binaries
+cplt --allow-cache-exec ms-playwright -- -p "run the e2e tests"
+
+# Allow pnpm dlx-cached binaries
+cplt --allow-cache-exec pnpm/dlx -- -p "run the scripts"
+
+# Both at once
+cplt --allow-cache-exec ms-playwright --allow-cache-exec pnpm/dlx -- -p "run tests"
+```
+
+Or set permanently in config:
+
+```toml
+[sandbox]
+allow_cache_exec = ["ms-playwright", "pnpm/dlx"]
+```
+
+`--allow-cache-exec-any` opens exec for all of `~/Library/Caches` — use only as a last resort.
 
 ### Localhost blocking
 

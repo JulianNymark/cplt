@@ -55,6 +55,10 @@ pub struct ProfileOptions<'a> {
     pub agent: Agent,
     /// Agent-specific directories that need sandbox access.
     pub agent_dirs: &'a [AgentDir],
+    /// Specific ~/Library/Caches subdirs to allow process execution from.
+    pub allow_cache_exec: &'a [String],
+    /// Allow process execution from ALL ~/Library/Caches subdirs.
+    pub allow_cache_exec_any: bool,
 }
 
 /// Generate a complete SBPL sandbox profile from the given options.
@@ -73,7 +77,14 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_home_access(&mut sb, &home, opts.agent, opts.agent_dirs);
     emit_git_hooks(&mut sb, opts.git_hooks_path);
     emit_system_access(&mut sb, &home);
-    emit_tool_dirs(&mut sb, &home, opts.existing_home_tool_dirs, opts.agent);
+    emit_tool_dirs(
+        &mut sb,
+        &home,
+        opts.existing_home_tool_dirs,
+        opts.agent,
+        opts.allow_cache_exec,
+        opts.allow_cache_exec_any,
+    );
     emit_copilot_install(&mut sb, opts.copilot_install_dir);
     emit_electron_app(&mut sb, opts.electron_app_dir);
     emit_system_files(&mut sb);
@@ -333,6 +344,8 @@ fn emit_tool_dirs(
     home: &str,
     existing_home_tool_dirs: Option<&[String]>,
     agent: Agent,
+    allow_cache_exec: &[String],
+    allow_cache_exec_any: bool,
 ) {
     writeln!(sb, ";; Developer tools").unwrap();
     for dir in TOOL_READ_DIRS {
@@ -433,6 +446,41 @@ fn emit_tool_dirs(
         )
         .unwrap();
         writeln!(sb).unwrap();
+    }
+
+    // User-specified ~/Library/Caches exec carve-outs.
+    // Emitted AFTER the broad exec denies (last-match-wins), so these override.
+    // Write access is already granted by the HOME_TOOL_DIRS allow for ~/Library/Caches —
+    // these rules add only process-exec and file-map-executable on top of that.
+    // allow_cache_exec_any re-allows exec across the entire Library/Caches subtree.
+    if allow_cache_exec_any {
+        writeln!(
+            sb,
+            "(allow process-exec (subpath \"{home}/Library/Caches\"))"
+        )
+        .unwrap();
+        writeln!(
+            sb,
+            "(allow file-map-executable (subpath \"{home}/Library/Caches\"))"
+        )
+        .unwrap();
+        writeln!(sb).unwrap();
+    } else {
+        for subdir in allow_cache_exec {
+            writeln!(
+                sb,
+                "(allow process-exec (subpath \"{home}/Library/Caches/{subdir}\"))"
+            )
+            .unwrap();
+            writeln!(
+                sb,
+                "(allow file-map-executable (subpath \"{home}/Library/Caches/{subdir}\"))"
+            )
+            .unwrap();
+        }
+        if !allow_cache_exec.is_empty() {
+            writeln!(sb).unwrap();
+        }
     }
 }
 

@@ -95,6 +95,13 @@ pub struct SandboxConfig {
     /// Allow process execution from system temp directories (default: false).
     /// DANGEROUS: re-enables exec from /private/tmp and /private/var/folders.
     pub allow_tmp_exec: Option<bool>,
+    /// Specific ~/Library/Caches subdirectories to allow process execution from.
+    /// e.g. ["ms-playwright", "pnpm/dlx"] to allow Playwright and pnpm dlx caches.
+    /// No exec is allowed from ~/Library/Caches by default (binary-drop staging risk).
+    pub allow_cache_exec: Vec<String>,
+    /// Allow process execution from ALL ~/Library/Caches subdirectories (default: false).
+    /// DANGEROUS: much broader than allow_cache_exec — prefer specific subdirs.
+    pub allow_cache_exec_any: Option<bool>,
     /// Enable per-session scratch directory for TMPDIR redirect (default: true).
     /// Creates an executable temp dir so tools like `go test` and `mise` can work.
     pub scratch_dir: Option<bool>,
@@ -127,6 +134,8 @@ pub struct Resolved {
     pub allow_jvm_attach: bool,
     pub allow_docker: bool,
     pub allow_tmp_exec: bool,
+    pub allow_cache_exec: Vec<String>,
+    pub allow_cache_exec_any: bool,
     pub scratch_dir: bool,
     pub quiet: bool,
 }
@@ -158,6 +167,8 @@ pub struct CliFlags {
     pub allow_jvm_attach: bool,
     pub allow_docker: bool,
     pub allow_tmp_exec: bool,
+    pub allow_cache_exec: Vec<String>,
+    pub allow_cache_exec_any: bool,
     pub scratch_dir: bool,
     pub no_scratch_dir: bool,
     pub quiet: bool,
@@ -370,6 +381,19 @@ impl Config {
             self.sandbox.allow_tmp_exec.unwrap_or(false)
         };
 
+        // Allow-cache-exec: merge config + CLI (list of subdir names)
+        let mut allow_cache_exec = self.sandbox.allow_cache_exec.clone();
+        allow_cache_exec.extend(cli.allow_cache_exec);
+        allow_cache_exec.sort_unstable();
+        allow_cache_exec.dedup();
+
+        // Allow-cache-exec-any: CLI flag wins, then config, then false (blocked by default)
+        let allow_cache_exec_any = if cli.allow_cache_exec_any {
+            true
+        } else {
+            self.sandbox.allow_cache_exec_any.unwrap_or(false)
+        };
+
         // Scratch-dir: --no-scratch-dir always wins, then --scratch-dir, then config, then true (on by default)
         let scratch_dir = if cli.no_scratch_dir {
             false
@@ -396,6 +420,31 @@ impl Config {
         {
             validate_sbpl_path(p)?;
         }
+        // Validate cache exec subdirs — interpolated into SBPL string literals.
+        // Reject chars that could break the profile and path-traversal components
+        // that would escape ~/Library/Caches (e.g. "../Applications").
+        for subdir in &allow_cache_exec {
+            if subdir.trim().is_empty() {
+                return Err(
+                    "allow_cache_exec subdir must not be empty (would grant exec to all of ~/Library/Caches)"
+                        .to_string(),
+                );
+            }
+            for c in ['"', ')', '(', ';', '\\', '\n', '\r', '\0'] {
+                if subdir.contains(c) {
+                    return Err(format!(
+                        "allow_cache_exec subdir {subdir:?} contains unsafe characters"
+                    ));
+                }
+            }
+            for component in subdir.trim_matches('/').split('/') {
+                if component == ".." || component == "." {
+                    return Err(format!(
+                        "allow_cache_exec subdir {subdir:?} contains path traversal"
+                    ));
+                }
+            }
+        }
 
         Ok(Resolved {
             with_proxy,
@@ -418,6 +467,8 @@ impl Config {
             allow_jvm_attach,
             allow_docker,
             allow_tmp_exec,
+            allow_cache_exec,
+            allow_cache_exec_any,
             scratch_dir,
             quiet,
         })
@@ -513,6 +564,17 @@ impl Resolved {
             let red = "\x1b[0;31m";
             eprintln!(
                 "{blue}[cplt]{nc}    Tmp exec:      {red}ALLOWED{nc}     {dim}⚠ /tmp + /var/folders exec enabled{nc}"
+            );
+        }
+        if self.allow_cache_exec_any {
+            let red = "\x1b[0;31m";
+            eprintln!(
+                "{blue}[cplt]{nc}    Cache exec:    {red}ALLOWED{nc}     {dim}⚠ all ~/Library/Caches exec enabled{nc}"
+            );
+        } else if !self.allow_cache_exec.is_empty() {
+            eprintln!(
+                "{blue}[cplt]{nc}    Cache exec:    {yellow}allowed{nc}     {dim}~/Library/Caches/{}{nc}",
+                self.allow_cache_exec.join(", ~/Library/Caches/")
             );
         }
         if self.allow_gpg_signing {
@@ -776,6 +838,17 @@ pub fn default_config_contents() -> String {
 # Prefer scratch_dir which creates a controlled executable temp dir.
 # allow_tmp_exec = false
 #
+# Allow process execution from specific ~/Library/Caches subdirectories.
+# By default, exec is blocked from ~/Library/Caches to prevent binary-drop
+# staging attacks. Use this to unblock specific tools that store and run
+# executables there, such as Playwright browsers or pnpm dlx cached packages.
+# Example: allow_cache_exec = ["ms-playwright"]
+# allow_cache_exec = []
+#
+# DANGEROUS: Allow process execution from ALL ~/Library/Caches subdirectories.
+# Much broader than allow_cache_exec — prefer specifying exact subdirs.
+# allow_cache_exec_any = false
+#
 # Suppress the startup configuration summary and non-essential messages.
 # Errors and warnings are always shown. Useful once you've reviewed the
 # sandbox settings and don't need to see them every time.
@@ -842,6 +915,8 @@ const VALID_SANDBOX_KEYS: &[&str] = &[
     "allow_tmp_exec",
     "scratch_dir",
     "quiet",
+    "allow_cache_exec",
+    "allow_cache_exec_any",
 ];
 const VALID_SECTIONS: &[&str] = &["proxy", "allow", "deny", "sandbox"];
 
@@ -933,6 +1008,17 @@ pub fn validate_config(toml_text: &str) -> Vec<ConfigDiagnostic> {
             diagnostics.push(ConfigDiagnostic {
                 level: DiagnosticLevel::Warning,
                 message: "sandbox.allow_tmp_exec = true: exec from temp dirs enabled (DANGEROUS)"
+                    .to_string(),
+            });
+        }
+        if sandbox
+            .get("allow_cache_exec_any")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            diagnostics.push(ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                message: "sandbox.allow_cache_exec_any = true: exec from all ~/Library/Caches enabled (DANGEROUS)"
                     .to_string(),
             });
         }
@@ -1254,6 +1340,22 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         dangerous: true,
         default_display: "false",
         description: "⚠️  DANGEROUS: Allow Docker/Colima/OrbStack access. Exposes daemon socket and ~/.docker config. Container mounts bypass sandbox.",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "allow_cache_exec",
+        value_type: ConfigValueType::StrArray,
+        dangerous: false,
+        default_display: "[]",
+        description: "~/Library/Caches subdirs to allow exec from (e.g. [\"ms-playwright\"] for Playwright browsers).",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "allow_cache_exec_any",
+        value_type: ConfigValueType::Bool,
+        dangerous: true,
+        default_display: "false",
+        description: "⚠️  DANGEROUS: Allow exec from ALL ~/Library/Caches subdirs. Prefer allow_cache_exec with specific subdirs.",
     },
 ];
 

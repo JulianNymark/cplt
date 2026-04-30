@@ -389,6 +389,8 @@ mod macos_tests {
             electron_app_dir: None,
             agent: cplt::agent::Agent::Copilot,
             agent_dirs: &[],
+            allow_cache_exec: &[],
+            allow_cache_exec_any: false,
         }
     }
 

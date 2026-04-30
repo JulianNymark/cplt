@@ -96,6 +96,10 @@ pub struct SandboxConfig<'a> {
     pub agent: Agent,
     /// Agent-specific directories that need sandbox access.
     pub agent_dirs: &'a [AgentDir],
+    /// Specific ~/Library/Caches subdirs where process-exec is allowed.
+    pub allow_cache_exec: &'a [String],
+    /// Allow process-exec from all of ~/Library/Caches.
+    pub allow_cache_exec_any: bool,
 }
 
 /// A validated, platform-specific sandbox ready for execution.
@@ -170,6 +174,8 @@ pub fn prepare(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         electron_app_dir: config.electron_app_dir,
         agent: config.agent,
         agent_dirs: config.agent_dirs,
+        allow_cache_exec: config.allow_cache_exec,
+        allow_cache_exec_any: config.allow_cache_exec_any,
     });
 
     Ok(PreparedSandbox {
@@ -280,6 +286,32 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
     }
     for p in config.extra_deny {
         policy::validate_sbpl_path(p).map_err(|e| format!("--deny-path path: {e}"))?;
+    }
+
+    // allow_cache_exec subdirs are interpolated into SBPL string literals — validate here
+    // as a second line of defence (config::merge already validates, but SandboxConfig can
+    // be constructed directly by callers who bypass that path).
+    for subdir in config.allow_cache_exec {
+        if subdir.trim().is_empty() {
+            return Err(
+                "allow_cache_exec subdir must not be empty (would grant exec to all of ~/Library/Caches)"
+                    .to_string(),
+            );
+        }
+        for c in ['"', ')', '(', ';', '\\', '\n', '\r', '\0'] {
+            if subdir.contains(c) {
+                return Err(format!(
+                    "allow_cache_exec subdir {subdir:?} contains unsafe characters"
+                ));
+            }
+        }
+        for component in subdir.trim_matches('/').split('/') {
+            if component == ".." || component == "." {
+                return Err(format!(
+                    "allow_cache_exec subdir {subdir:?} contains path traversal"
+                ));
+            }
+        }
     }
 
     Ok(())
