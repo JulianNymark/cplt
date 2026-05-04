@@ -134,6 +134,13 @@ fn get_cached_domains(
 fn parse_lines_file(path: &Path) -> Option<Vec<String>> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.kind() == std::io::ErrorKind::NotADirectory =>
+        {
+            // File doesn't exist or path component is not a directory — silent.
+            return None;
+        }
         Err(e) => {
             eprintln!(
                 "{YELLOW}[proxy]{NC} Warning: cannot read {}: {e}",
