@@ -2577,6 +2577,44 @@ quiet = false
         );
     }
 
+    /// Ensures every valid sandbox/allow key has a CONFIG_KEYS entry and is
+    /// mentioned in the default config template. Catches forgotten docs when
+    /// adding new config options.
+    #[test]
+    fn config_keys_cover_all_valid_keys() {
+        let template = default_config_contents();
+
+        // Every sandbox key must have a CONFIG_KEYS entry
+        for &key in VALID_SANDBOX_KEYS {
+            let has_entry = CONFIG_KEYS
+                .iter()
+                .any(|k| k.section == "sandbox" && k.key == key);
+            assert!(
+                has_entry,
+                "VALID_SANDBOX_KEYS contains '{key}' but CONFIG_KEYS has no sandbox.{key} entry"
+            );
+        }
+
+        // Every sandbox key must appear in the default config template
+        for &key in VALID_SANDBOX_KEYS {
+            assert!(
+                template.contains(key),
+                "VALID_SANDBOX_KEYS contains '{key}' but default_config_contents() does not mention it"
+            );
+        }
+
+        // Every allow key must have a CONFIG_KEYS entry
+        for &key in VALID_ALLOW_KEYS {
+            let has_entry = CONFIG_KEYS
+                .iter()
+                .any(|k| k.section == "allow" && k.key == key);
+            assert!(
+                has_entry,
+                "VALID_ALLOW_KEYS contains '{key}' but CONFIG_KEYS has no allow.{key} entry"
+            );
+        }
+    }
+
     #[test]
     fn validate_multiple_unknown_keys_reported() {
         let toml = "[sandbox]\nquiet_mode = true\nfast = true\n";
