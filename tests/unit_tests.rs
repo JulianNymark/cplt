@@ -677,6 +677,137 @@ fn profile_denies_sensitive_files() {
 }
 
 #[test]
+fn profile_denies_credential_files_in_tool_dirs() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+    });
+
+    // These credential files inside allowed tool dirs must be denied
+    for file in &[
+        ".m2/settings.xml",
+        ".m2/settings-security.xml",
+        ".gradle/gradle.properties",
+        ".cargo/credentials",
+        ".cargo/credentials.toml",
+    ] {
+        assert!(
+            p.contains(&format!(
+                "(deny file-read* (literal \"/Users/test/{file}\"))"
+            )),
+            "should deny read to {file}"
+        );
+        assert!(
+            p.contains(&format!(
+                "(deny file-write* (literal \"/Users/test/{file}\"))"
+            )),
+            "should deny write to {file}"
+        );
+    }
+
+    // Parent dirs must still be allowed (dependency caches)
+    assert!(
+        p.contains("(allow file-read* (subpath \"/Users/test/.m2\"))"),
+        ".m2 dir should still be allowed"
+    );
+    assert!(
+        p.contains("(allow file-read* (subpath \"/Users/test/.gradle\"))"),
+        ".gradle dir should still be allowed"
+    );
+}
+
+#[test]
+fn profile_allows_credential_files_when_user_opts_in() {
+    use std::path::PathBuf;
+
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[
+            PathBuf::from("/Users/test/.m2/settings.xml"),
+            PathBuf::from("/Users/test/.gradle/gradle.properties"),
+        ],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+    });
+
+    // The deny should still be present (defense in depth)
+    assert!(
+        p.contains("(deny file-read* (literal \"/Users/test/.m2/settings.xml\"))"),
+        "deny rule should still be emitted"
+    );
+
+    // But a re-allow should come AFTER the deny (SBPL last-match-wins)
+    let deny_pos = p
+        .find("(deny file-read* (literal \"/Users/test/.m2/settings.xml\"))")
+        .unwrap();
+    let allow_pos = p
+        .find("(allow file-read* (literal \"/Users/test/.m2/settings.xml\"))")
+        .expect("should have a post-deny re-allow for settings.xml");
+    assert!(
+        allow_pos > deny_pos,
+        "re-allow must come AFTER deny (SBPL last-match-wins)"
+    );
+
+    // Same for gradle
+    let deny_pos = p
+        .find("(deny file-read* (literal \"/Users/test/.gradle/gradle.properties\"))")
+        .unwrap();
+    let allow_pos = p
+        .find("(allow file-read* (literal \"/Users/test/.gradle/gradle.properties\"))")
+        .expect("should have a post-deny re-allow for gradle.properties");
+    assert!(
+        allow_pos > deny_pos,
+        "re-allow must come AFTER deny for gradle.properties"
+    );
+
+    // Files NOT in extra_read should remain denied without override
+    assert!(
+        !p.contains("(allow file-read* (literal \"/Users/test/.cargo/credentials\"))"),
+        ".cargo/credentials should NOT be re-allowed (not in extra_read)"
+    );
+}
+
+#[test]
 fn profile_restricts_outbound_tcp() {
     let p = generate_profile(&ProfileOptions {
         project_dir: std::path::Path::new("/projects/app"),

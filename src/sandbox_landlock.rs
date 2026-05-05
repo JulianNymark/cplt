@@ -1123,6 +1123,31 @@ mod tests {
         }
     }
 
+    /// DENIED_HOME_SUBPATHS (credential files inside allowed tool dirs) are NOT
+    /// individually enforceable on Linux because Landlock cannot deny subpaths
+    /// within allowed directories. The parent dirs (.m2, .gradle, .cargo) are
+    /// allowed for dependency resolution — accepting this as a known limitation.
+    /// macOS enforces these via literal SBPL deny rules (last-match-wins).
+    #[test]
+    fn denied_home_subpaths_not_enforceable_on_linux() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let config = test_config(&project, &home);
+        let policy = generate_policy(&config);
+
+        // These files live inside allowed HOME_TOOL_DIRS — Landlock grants access
+        // to the parent dir, and there's no mechanism to carve out individual files.
+        for file in policy::DENIED_HOME_SUBPATHS {
+            let path = home.join(file);
+            // The file itself shouldn't have a direct rule (no explicit allow or deny)
+            let has_direct_rule = policy.fs_rules.iter().any(|r| r.path == path);
+            assert!(
+                !has_direct_rule,
+                "DENIED_HOME_SUBPATHS file {file} should NOT have a direct Landlock rule"
+            );
+        }
+    }
+
     #[test]
     fn system_read_paths_are_readonly() {
         let project = PathBuf::from("/home/user/project");

@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use crate::agent::{Agent, AgentDir};
 
 use super::policy::{
-    DENIED_CACHE_PREFIXES, DENIED_DOTFILES, DENIED_FILES, GPG_SIGNING_ALLOW_FILES, HOME_TOOL_DIRS,
-    HomeToolDir, SENSITIVE_PROJECT_PATTERNS, SYSTEM_READ_FILES, TOOL_READ_DIRS,
+    DENIED_CACHE_PREFIXES, DENIED_DOTFILES, DENIED_FILES, DENIED_HOME_SUBPATHS,
+    GPG_SIGNING_ALLOW_FILES, HOME_TOOL_DIRS, HomeToolDir, SENSITIVE_PROJECT_PATTERNS,
+    SYSTEM_READ_FILES, TOOL_READ_DIRS,
 };
 
 /// Options for generating an SBPL sandbox profile.
@@ -96,6 +97,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     );
     emit_user_allows(&mut sb, opts.extra_read, opts.extra_write);
     emit_deny_rules(&mut sb, &home, opts.extra_deny);
+    emit_registry_config_overrides(&mut sb, &home, opts.extra_read);
     emit_gpg_signing_rules(&mut sb, &home, opts.allow_gpg_signing, opts.extra_deny);
     emit_docker_rules(&mut sb, &home, opts.allow_docker, opts.extra_deny);
     emit_network_rules(
@@ -637,12 +639,47 @@ fn emit_deny_rules(sb: &mut String, home: &str, extra_deny: &[PathBuf]) {
         writeln!(sb, "(deny file-read* (literal \"{home}/{file}\"))").unwrap();
         writeln!(sb, "(deny file-write* (literal \"{home}/{file}\"))").unwrap();
     }
+    // Credential files inside allowed tool dirs (overridable with --allow-read)
+    for file in DENIED_HOME_SUBPATHS {
+        writeln!(sb, "(deny file-read* (literal \"{home}/{file}\"))").unwrap();
+        writeln!(sb, "(deny file-write* (literal \"{home}/{file}\"))").unwrap();
+    }
     for path in extra_deny {
         let p = path.to_string_lossy();
         writeln!(sb, "(deny file-read* (subpath \"{p}\"))").unwrap();
         writeln!(sb, "(deny file-write* (subpath \"{p}\"))").unwrap();
     }
     writeln!(sb).unwrap();
+}
+
+/// Re-allow credential files from `DENIED_HOME_SUBPATHS` when the user
+/// explicitly opts in via `--allow-read` or `allow.read` in config.toml.
+///
+/// Emitted AFTER `emit_deny_rules` so SBPL last-match-wins re-allows the file.
+/// Only matches exact paths from `DENIED_HOME_SUBPATHS` — hard denies
+/// (DENIED_FILES, DENIED_DOTFILES) cannot be overridden this way.
+fn emit_registry_config_overrides(sb: &mut String, home: &str, extra_read: &[PathBuf]) {
+    let home_path = Path::new(home);
+    let mut overrides: Vec<&str> = Vec::new();
+
+    for &file in DENIED_HOME_SUBPATHS {
+        let full_path = home_path.join(file);
+        if extra_read.iter().any(|p| p == &full_path) {
+            overrides.push(file);
+        }
+    }
+
+    if !overrides.is_empty() {
+        writeln!(
+            sb,
+            ";; User-overridden registry config files (--allow-read)"
+        )
+        .unwrap();
+        for file in &overrides {
+            writeln!(sb, "(allow file-read* (literal \"{home}/{file}\"))").unwrap();
+        }
+        writeln!(sb).unwrap();
+    }
 }
 
 /// Allow GPG commit signing when `--allow-gpg-signing` is set.

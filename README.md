@@ -79,6 +79,7 @@ cplt --agent shell
 | Localhost outbound                                                               | 🔒 Kernel-blocked                         | Prevents local service access; inbound still works for proxy                            |
 | SSH agent (unix socket)                                                          | 🔒 Kernel-blocked                         | Prevents signing git operations or SSH to hosts                                         |
 | Developer tools (`~/.cargo`, `~/.mise`, `~/.gradle`, `~/.m2`, `~/.sdkman`, `~/.pyenv`, `~/.konan`, etc.) | ✅ Allowed (read+write for caches)        | Only dirs that exist on disk; tightened at runtime via `--doctor`                       |
+| Registry credential files (`~/.m2/settings.xml`, `~/.gradle/gradle.properties`, `~/.cargo/credentials`) | 🔒 Kernel-blocked (macOS)                 | Override with `--allow-read`; see [Private registries](#private-registries)              |
 | Go source code (`~/go/src`)                                                      | 🔒 Kernel-blocked                         | Only `~/go/bin` and `~/go/pkg` are readable                                             |
 | Read `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`                                  | 🔒 Kernel-blocked                         |                                                                                         |
 | Read `~/.kube`, `~/.docker`, `~/.nais`                                           | 🔒 Kernel-blocked                         |                                                                                         |
@@ -1094,6 +1095,43 @@ Only port 443 is allowed by default. Services on other ports need `--allow-port`
 - `npm install` from private registries on non-standard ports
 - API calls to services not on 443
 - FTP, SMTP, or other protocol connections
+
+### Private registries
+
+Registry credential files are **blocked by default** because they typically contain passwords or tokens that a rogue agent could exfiltrate:
+
+| File | Purpose |
+|------|---------|
+| `~/.npmrc` | npm registry auth (hard deny — not overridable) |
+| `~/.m2/settings.xml` | Maven repository credentials |
+| `~/.m2/settings-security.xml` | Maven master password |
+| `~/.gradle/gradle.properties` | Gradle/Nexus/Artifactory credentials |
+| `~/.cargo/credentials` | Cargo crate registry tokens |
+| `~/.cargo/credentials.toml` | Cargo crate registry tokens (TOML format) |
+
+For Maven, Gradle, and Cargo files, you can override this with `--allow-read`:
+
+```bash
+# Per session — Maven
+cplt --allow-read ~/.m2/settings.xml -- -p "build with Maven"
+
+# Per session — Gradle
+cplt --allow-read ~/.gradle/gradle.properties -- -p "build with Gradle"
+
+# Multiple files
+cplt --allow-read ~/.m2/settings.xml --allow-read ~/.gradle/gradle.properties -- -p "build"
+```
+
+To allow permanently, add to `~/.config/cplt/config.toml`:
+
+```toml
+[allow]
+read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
+```
+
+> **Note:** `.npmrc` cannot be overridden — it is in the hard-deny list alongside `.netrc` and `.pypirc`. If you need npm private registry access, consider using project-level `.npmrc` (which is readable as part of the project directory) with a token injected via environment variable.
+
+> **Linux limitation:** These file-level denials are only enforced on macOS (via SBPL literal deny rules). On Linux, Landlock cannot deny individual files within an allowed directory — the parent dirs (`.m2`, `.gradle`, `.cargo`) remain fully readable for dependency resolution.
 
 ## Limitations
 
