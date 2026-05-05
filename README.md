@@ -101,9 +101,28 @@ For the full security model, threat analysis, and test strategy, see **[SECURITY
 brew install navikt/tap/cplt
 ```
 
-### Pre-compiled binary
+### curl | bash
 
-Download the latest release for your platform:
+```bash
+curl -fsSL https://raw.githubusercontent.com/navikt/cplt/main/install.sh | bash
+```
+
+Options:
+
+```bash
+# Install a specific version
+curl -fsSL ... | bash -s -- --version 2026.05.05-174753-75bae5b
+
+# Install to a custom directory
+curl -fsSL ... | bash -s -- --dir ~/.local/bin
+
+# Skip Homebrew (force direct download)
+curl -fsSL ... | bash -s -- --no-brew
+```
+
+### Download from releases
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/navikt/cplt/releases/latest):
 
 ```bash
 # macOS — Apple Silicon (M1/M2/M3/M4)
@@ -238,6 +257,7 @@ By default, `cplt` sanitizes the child environment — only safe variables pass 
 | `--allow-tmp-exec`          | ⚠️ **Dangerous.** Allow exec from system temp dirs (`/private/tmp`, `/private/var/folders`). Prefer scratch dir.                             |
 | `--allow-cache-exec <SUBDIR>` | Allow exec from a specific `~/Library/Caches/<SUBDIR>`. Can be repeated. Use for tools that cache compiled binaries there (e.g. Playwright, pnpm dlx). |
 | `--allow-cache-exec-any`    | ⚠️ **Dangerous.** Allow exec from all of `~/Library/Caches`. Prefer `--allow-cache-exec <SUBDIR>` for targeted exemptions. |
+| `--allow-browser`           | Allow the agent to open URLs in your default browser. Needed for OAuth code flows (MCP servers, Gemini CLI). Disabled by default. |
 
 ### Supported runtimes
 
