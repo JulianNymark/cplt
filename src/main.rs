@@ -12,11 +12,15 @@ const LONG_VERSION: &str = match option_env!("CPLT_LONG_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// Run AI coding agents inside a macOS sandbox.
+/// Run AI coding agents inside a kernel-level sandbox.
 ///
 /// The agent can read and write your project files, but cannot access your
 /// SSH keys, cloud credentials, or other secrets. The sandbox is enforced
-/// by the macOS kernel — the agent (and any process it spawns) cannot bypass it.
+/// by the OS kernel — the agent (and any process it spawns) cannot bypass it.
+///
+/// Platform enforcement:
+/// - macOS: Apple Seatbelt/SBPL via sandbox-exec
+/// - Linux: Landlock LSM + seccomp-BPF (kernel 5.13+, full network filtering on 6.7+)
 ///
 /// Supports GitHub Copilot CLI, OpenCode, and Google Gemini CLI. Auto-detects
 /// which agent to use, or specify explicitly with --agent.
@@ -559,7 +563,7 @@ fn main() -> ExitCode {
         };
     }
 
-    // Platform check: cplt currently supports macOS (Seatbelt) and Linux (planned: Landlock).
+    // Platform check: cplt supports macOS (Seatbelt) and Linux (Landlock).
     // Other platforms (Windows, FreeBSD, etc.) are not supported.
     if cfg!(not(any(target_os = "macos", target_os = "linux"))) {
         error("cplt requires macOS or Linux");
@@ -569,14 +573,6 @@ fn main() -> ExitCode {
     // Handle --doctor: run diagnostics and exit (works on all platforms)
     if cli.doctor {
         return run_doctor();
-    }
-
-    // Linux sandbox is not yet implemented — gate at runtime until Landlock backend lands.
-    // Uses cfg!() instead of #[cfg()] so the compiler still type-checks the code below
-    // on Linux without triggering unreachable-code warnings.
-    if cfg!(not(target_os = "macos")) {
-        error("Linux sandbox support is not yet implemented (see issue #16)");
-        return ExitCode::FAILURE;
     }
 
     // Load config file and merge with CLI flags
@@ -863,16 +859,9 @@ fn main() -> ExitCode {
     let git_hooks_path = discover::git_hooks_path(&home_dir);
 
     // Discover Electron app bundle when Copilot CLI is installed via VS Code.
-    // The shim invokes VS Code's Electron runtime, which needs dyld access to
-    // load Electron Framework from within the .app bundle.
-    let electron_app_dir = if active_agent == agent::Agent::Copilot {
-        agent_bin_result
-            .as_ref()
-            .ok()
-            .and_then(|p| discover::discover_electron_app(p))
-    } else {
-        None
-    };
+    // macOS-only: the shim invokes VS Code's Electron runtime, which needs
+    // dyld access to load Electron Framework from within the .app bundle.
+    let electron_app_dir = discover_electron_app_dir(&agent_bin_result, active_agent);
 
     // Compute agent-specific sandbox directories
     let agent_dirs = active_agent.config_dirs(&home_dir);
@@ -1039,7 +1028,7 @@ fn main() -> ExitCode {
 
     // Ensure Copilot's bundled runtime is extracted before entering the sandbox.
     // Writes to copilot/pkg are denied inside the sandbox (write-then-exec defense),
-    // so extraction must happen here, outside. macOS-only: SEA extraction is an
+    // so extraction must happen here, outside. macOS-only: SEA extraction is a
     // macOS Copilot packaging detail. Skipped for other agents.
     #[cfg(target_os = "macos")]
     if active_agent.needs_sea_extraction() {
@@ -1051,7 +1040,7 @@ fn main() -> ExitCode {
         match sandbox::preflight(&prepared) {
             Ok(()) => {
                 if !resolved.quiet {
-                    ok("Sandbox profile validated ✓");
+                    print_preflight_ok();
                 }
             }
             Err(e) => {
@@ -1080,26 +1069,11 @@ fn main() -> ExitCode {
         active_agent.display_name()
     ));
 
-    // --show-denials: stream macOS sandbox denial logs in the background
-    let mut denial_proc = None;
+    // --show-denials: stream sandbox denial logs in the background.
+    #[allow(unused_mut)] // mut needed on macOS where denial_proc is assigned
+    let mut denial_proc: Option<std::process::Child> = None;
     if cli.show_denials {
-        info("Streaming sandbox denial logs (--show-denials)...");
-        match std::process::Command::new("log")
-            .args([
-                "stream",
-                "--predicate",
-                "eventMessage CONTAINS \"Sandbox\" AND eventMessage CONTAINS \"deny\"",
-                "--info",
-                "--style",
-                "compact",
-            ])
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .spawn()
-        {
-            Ok(child) => denial_proc = Some(child),
-            Err(e) => warn(&format!("Could not start denial log stream: {e}")),
-        }
+        denial_proc = start_denial_stream();
     }
 
     eprintln!("{YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}");
@@ -1694,6 +1668,82 @@ fn shell_install() -> ExitCode {
             error(&format!("Cannot write to {}: {e}", rc_file.display()));
             ExitCode::FAILURE
         }
+    }
+}
+
+// ── Platform-specific helpers ─────────────────────────────────
+//
+// Named functions with cfg-gated bodies keep the run() function
+// free of inline #[cfg] blocks.
+
+/// Discover the VS Code Electron app bundle containing Copilot's shim (macOS only).
+///
+/// On Linux, Copilot doesn't use Electron app bundles, so this always returns `None`.
+/// Skipped for non-Copilot agents.
+fn discover_electron_app_dir(
+    agent_bin_result: &Result<PathBuf, String>,
+    agent: agent::Agent,
+) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        if agent != agent::Agent::Copilot {
+            return None;
+        }
+        agent_bin_result
+            .as_ref()
+            .ok()
+            .and_then(|p| discover::discover_electron_app(p))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (agent_bin_result, agent);
+        None
+    }
+}
+
+/// Print the preflight success message appropriate for this platform.
+fn print_preflight_ok() {
+    #[cfg(target_os = "macos")]
+    ok("Sandbox profile validated ✓");
+    #[cfg(target_os = "linux")]
+    ok("Landlock sandbox ready ✓");
+}
+
+/// Start streaming sandbox denial logs (macOS only).
+///
+/// On macOS, spawns `log stream` filtering for Sandbox deny events.
+/// On Linux, prints a hint about `strace` since Landlock has no audit logs.
+fn start_denial_stream() -> Option<std::process::Child> {
+    #[cfg(target_os = "macos")]
+    {
+        info("Streaming sandbox denial logs (--show-denials)...");
+        match std::process::Command::new("log")
+            .args([
+                "stream",
+                "--predicate",
+                "eventMessage CONTAINS \"Sandbox\" AND eventMessage CONTAINS \"deny\"",
+                "--info",
+                "--style",
+                "compact",
+            ])
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+        {
+            Ok(child) => Some(child),
+            Err(e) => {
+                warn(&format!("Could not start denial log stream: {e}"));
+                None
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        warn(
+            "--show-denials is not available on Linux: Landlock does not produce kernel audit logs.",
+        );
+        info("Use `strace -f -e trace=file,network` for filesystem/network debugging.");
+        None
     }
 }
 

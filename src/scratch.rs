@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime};
 const SCRATCH_BASE: &str = "Library/Caches/cplt/tmp";
 
 /// Base directory for scratch dirs, relative to $HOME.
-/// Follows XDG Base Directory spec (`$XDG_CACHE_HOME` defaults to `~/.cache`).
+/// Uses `~/.cache` (does not read `$XDG_CACHE_HOME` — sandbox env is filtered).
 #[cfg(not(target_os = "macos"))]
 const SCRATCH_BASE: &str = ".cache/cplt/tmp";
 
@@ -337,8 +337,8 @@ mod tests {
 
     #[test]
     fn scratch_dir_rejects_ancestor_symlink() {
-        // If ~/Library/Caches/cplt is a symlink to /tmp/evil, the scratch dir
-        // would escape into /tmp. The canonicalize + prefix check must catch this.
+        // If the scratch base ancestor is a symlink, the scratch dir
+        // would escape. The canonicalize + prefix check must catch this.
         let tmp = std::env::temp_dir().join("cplt-test-ancestor-symlink");
         let _ = std::fs::remove_dir_all(&tmp);
         let evil_target = tmp.join("evil-target");
