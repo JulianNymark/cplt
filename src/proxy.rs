@@ -59,6 +59,8 @@ pub struct ProxyState {
 
     // Audit log
     log_file: Option<PathBuf>,
+    // Suppress non-error output to stderr
+    quiet: bool,
 }
 
 impl ProxyState {
@@ -240,6 +242,8 @@ pub struct ProxyOptions {
     pub config_file: Option<PathBuf>,
     /// Path to append audit log lines. None = no file logging.
     pub log_file: Option<PathBuf>,
+    /// Suppress non-error output (CONNECTED, etc.) to stderr.
+    pub quiet: bool,
 }
 
 /// Start the proxy on a background thread. Returns a handle for shutdown.
@@ -307,6 +311,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         private_domains_cache: Mutex::new(DomainCache::new(opts.config_private_domains)),
         allowed_ports: ports,
         log_file: opts.log_file,
+        quiet: opts.quiet,
     });
 
     listener
@@ -368,6 +373,7 @@ fn accept_loop(
                 "connection limit",
                 "LIMIT",
                 state.log_file.as_deref(),
+                state.quiet,
             );
             drop(stream);
             continue;
@@ -390,6 +396,7 @@ fn accept_loop(
                 "thread-spawn",
                 &format!("FAIL:{e}"),
                 state.log_file.as_deref(),
+                state.quiet,
             );
         }
     }
@@ -424,7 +431,13 @@ fn handle_connection(mut client: TcpStream, state: &ProxyState) {
     } else {
         // For non-CONNECT, send a simple error — the sandbox should force
         // CONNECT via proxy env vars for HTTPS traffic
-        log_connection(method, target, "UNSUPPORTED", state.log_file.as_deref());
+        log_connection(
+            method,
+            target,
+            "UNSUPPORTED",
+            state.log_file.as_deref(),
+            state.quiet,
+        );
         let _ = client.write_all(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n");
     }
 }
@@ -440,12 +453,13 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     // would bypass exact-match rules otherwise).
     let host = normalize_hostname(&host);
     let log_file = state.log_file.as_deref();
+    let quiet = state.quiet;
 
     // Enforce port policy — only allow ports matching the sandbox network rules.
     // Without this, the proxy would let sandboxed processes tunnel to arbitrary
     // remote ports, bypassing the sandbox's port restrictions.
     if !state.allowed_ports.contains(&port) {
-        log_connection("CONNECT", target, "BLOCKED-PORT", log_file);
+        log_connection("CONNECT", target, "BLOCKED-PORT", log_file, quiet);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nPort not allowed\r\n");
         return;
     }
@@ -454,7 +468,7 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     // Fail-closed: if the allowlist is non-empty and the domain isn't in it, deny.
     let allowed_domains = state.get_allowed_domains();
     if !allowed_domains.is_empty() && !is_domain_match(&host, &allowed_domains) {
-        log_connection("CONNECT", target, "BLOCKED-ALLOWLIST", log_file);
+        log_connection("CONNECT", target, "BLOCKED-ALLOWLIST", log_file, quiet);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nDomain not in allowlist\r\n");
         return;
     }
@@ -462,14 +476,14 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     // Check blocklist (hostname-level)
     let blocked_domains = state.get_blocked_domains();
     if is_blocked_in_list(&host, &blocked_domains) {
-        log_connection("CONNECT", target, "BLOCKED", log_file);
+        log_connection("CONNECT", target, "BLOCKED", log_file, quiet);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBlocked by cplt\r\n");
         return;
     }
 
     // Reject hostname patterns that are known private (fast path before DNS)
     if is_private_hostname(&host) {
-        log_connection("CONNECT", target, "BLOCKED-PRIVATE", log_file);
+        log_connection("CONNECT", target, "BLOCKED-PRIVATE", log_file, quiet);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nPrivate target blocked\r\n");
         return;
     }
@@ -480,13 +494,13 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
         Ok(mut addrs) => match addrs.next() {
             Some(a) => a,
             None => {
-                log_connection("CONNECT", target, "DNS-FAIL", log_file);
+                log_connection("CONNECT", target, "DNS-FAIL", log_file, quiet);
                 let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
                 return;
             }
         },
         Err(_) => {
-            log_connection("CONNECT", target, "DNS-FAIL", log_file);
+            log_connection("CONNECT", target, "DNS-FAIL", log_file, quiet);
             let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
             return;
         }
@@ -497,7 +511,13 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     // (e.g. corporate internal services). All other checks still apply.
     let private_domains = state.get_private_domains();
     if is_private_ip(&socket_addr.ip()) && !is_domain_match(&host, &private_domains) {
-        log_connection("CONNECT", target, "BLOCKED-PRIVATE-RESOLVED", log_file);
+        log_connection(
+            "CONNECT",
+            target,
+            "BLOCKED-PRIVATE-RESOLVED",
+            log_file,
+            quiet,
+        );
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nResolved to private IP\r\n");
         return;
     }
@@ -509,14 +529,20 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
             s
         }
         Err(e) => {
-            log_connection("CONNECT", target, &format!("CONNECT-FAIL:{e}"), log_file);
+            log_connection(
+                "CONNECT",
+                target,
+                &format!("CONNECT-FAIL:{e}"),
+                log_file,
+                quiet,
+            );
             let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
             return;
         }
     };
 
     // Log after TCP connect succeeds — this is the audit-relevant event.
-    log_connection("CONNECT", target, "CONNECTED", log_file);
+    log_connection("CONNECT", target, "CONNECTED", log_file, quiet);
 
     // Send 200 to client
     if client
@@ -737,14 +763,17 @@ fn is_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
     }
 }
 
-fn log_connection(method: &str, target: &str, status: &str, log_file: Option<&Path>) {
-    let color = match status {
-        "BLOCKED" | "BLOCKED-PRIVATE" | "BLOCKED-PORT" | "BLOCKED-ALLOWLIST" | "LIMIT" => RED,
-        "CONNECTED" => GREEN,
-        _ => YELLOW,
-    };
-    let timestamp = chrono_now();
-    eprintln!("{color}[proxy]{NC} {timestamp} {method} {target} → {status}");
+fn log_connection(method: &str, target: &str, status: &str, log_file: Option<&Path>, quiet: bool) {
+    // In quiet mode, only log blocked/error connections to stderr
+    if !quiet || !matches!(status, "CONNECTED") {
+        let color = match status {
+            "BLOCKED" | "BLOCKED-PRIVATE" | "BLOCKED-PORT" | "BLOCKED-ALLOWLIST" | "LIMIT" => RED,
+            "CONNECTED" => GREEN,
+            _ => YELLOW,
+        };
+        let timestamp = chrono_now();
+        eprintln!("{color}[proxy]{NC} {timestamp} {method} {target} → {status}");
+    }
 
     // Append to audit log file (reopen per-write for rotation compatibility)
     if let Some(path) = log_file
@@ -944,6 +973,7 @@ mod tests {
             ])),
             allowed_ports: vec![443],
             log_file: None,
+            quiet: false,
         };
 
         let domains = state.get_private_domains();
@@ -963,6 +993,7 @@ mod tests {
             private_domains_cache: Mutex::new(DomainCache::new(vec!["shared.com".to_string()])),
             allowed_ports: vec![443],
             log_file: None,
+            quiet: false,
         };
 
         let domains = state.get_private_domains();
@@ -987,6 +1018,7 @@ mod tests {
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
             log_file: None,
+            quiet: false,
         };
 
         let domains = state.get_allowed_domains();
@@ -1012,6 +1044,7 @@ mod tests {
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
             log_file: None,
+            quiet: false,
         };
 
         let blocked = state.get_blocked_domains();
@@ -1043,6 +1076,7 @@ mod tests {
             }),
             allowed_ports: vec![443],
             log_file: None,
+            quiet: false,
         };
 
         // First read: picks up "old.nav.no" from cache reload + "cli.nav.no"
@@ -1097,6 +1131,7 @@ mod tests {
             config_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
+            quiet: false,
         });
         assert!(result.is_ok());
         result.unwrap().shutdown();
@@ -1124,6 +1159,7 @@ mod tests {
             config_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
+            quiet: false,
         });
         assert!(result.is_err(), "should fail when allowlist is unreadable");
 
@@ -1149,6 +1185,7 @@ mod tests {
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
             log_file: None,
+            quiet: false,
         };
 
         // Initial read picks up github.com from stale cache (triggers reload)

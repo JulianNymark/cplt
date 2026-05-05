@@ -953,6 +953,7 @@ fn main() -> ExitCode {
                 .collect(),
             config_file: config_path.clone(),
             log_file: resolved.proxy_log_file.clone(),
+            quiet: resolved.quiet,
         }) {
             Ok(handle) => {
                 resolved.proxy_port = handle.port;

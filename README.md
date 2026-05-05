@@ -300,6 +300,8 @@ Then edit `~/.config/cplt/config.toml`:
 > **Domain matching:** both blocklist and allowlist use the same rules — `example.com` matches the exact domain and all subdomains (`sub.example.com`, `deep.sub.example.com`). Matching is case-insensitive. Trailing dots are stripped.
 >
 > **Localhost traffic** (MCP servers, dev servers) bypasses the proxy via `NO_PROXY` and will not appear in the audit log.
+>
+> **Quiet mode** (`-q` / `sandbox.quiet = true`) suppresses the per-connection stderr output. Blocked connections still print. Use `--proxy-log` to capture all connections to a file regardless of quiet mode.
 
 ### Debugging
 
@@ -310,6 +312,8 @@ Then edit `~/.config/cplt/config.toml`:
 | `--show-denials`  | Stream macOS sandbox denial logs in real time.                                                                                                         |
 | `--no-validate`   | Skip the startup check that verifies sandbox restrictions are active.                                                                                  |
 | `-y, --yes`       | Skip the interactive confirmation prompt. The configuration summary is still printed for auditability. Required when stdin is not a TTY (CI, scripts). |
+| `-q, --quiet`     | Suppress the startup banner and proxy connection log (blocked connections still print). Also: `sandbox.quiet = true` in config.                        |
+| `--no-quiet`      | Override `sandbox.quiet = true` — show the startup summary even when quiet is configured.                                                              |
 | `--init-config`   | Create a starter config file at `~/.config/cplt/config.toml` and exit.                                                                                 |
 
 ### Copilot session flags
