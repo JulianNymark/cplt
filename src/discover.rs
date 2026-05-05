@@ -8,9 +8,8 @@
 //!
 //! All checks are read-only, local (no network), and fast (<500ms total).
 
-use std::path::{Path, PathBuf};
-
 use crate::sandbox::{DENIED_DOTFILES, DENIED_FILES};
+use std::path::{Path, PathBuf};
 
 // ── Result types ────────────────────────────────────────────────
 
@@ -532,13 +531,13 @@ fn print_sandbox_mechanism_status() -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        let ok = match std::fs::read_to_string("/sys/kernel/security/landlock/abi_version") {
-            Ok(s) => {
-                let abi = s.trim();
-                eprintln!("  {GREEN}✓{NC} Landlock: ABI v{abi}");
-                if let Ok(v) = abi.parse::<u32>()
-                    && v < 4
-                {
+        use crate::sandbox::landlock_mod::check_availability;
+        use landlock::ABI;
+
+        let ok = match check_availability() {
+            Ok(abi_version) => {
+                eprintln!("  {GREEN}✓{NC} Landlock: ABI v{abi_version}");
+                if abi_version < ABI::V4 {
                     eprintln!(
                         "  {YELLOW}⚠{NC} Landlock ABI < v4: TCP port filtering unavailable (kernel < 6.7)"
                     );
@@ -549,7 +548,7 @@ fn print_sandbox_mechanism_status() -> bool {
             Err(_) => {
                 eprintln!("  {RED}✗{NC} Landlock: not available");
                 eprintln!("      Requires Linux 5.13+ with Landlock enabled.");
-                eprintln!("      Check: cat /sys/kernel/security/lsm");
+                eprintln!("      Check: cat /sys/kernel/security/lsm (should include 'landlock')");
                 false
             }
         };

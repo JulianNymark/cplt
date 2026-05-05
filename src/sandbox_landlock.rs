@@ -21,10 +21,9 @@
 //! cannot. Use `--with-proxy` on Linux for localhost SSRF protection.
 //! The proxy handles domain-level filtering on both platforms.
 
+use super::policy::{self, HomeToolDir};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-
-use super::policy::{self, HomeToolDir};
 
 // ── Cross-platform types ───────────────────────────────────────
 
@@ -648,32 +647,72 @@ pub fn describe_policy(policy: &LandlockPolicy) -> String {
 
 // ── Linux-only: Landlock kernel application ────────────────────
 
-/// Check Landlock availability and return the ABI version.
+/// Check Landlock availability and return the highest supported ABI version.
 ///
-/// Reads `/sys/kernel/security/landlock/abi_version` to determine
-/// which Landlock features the running kernel supports.
+/// Probes the kernel by attempting to create a Ruleset for each ABI level
+/// (V6 down to V1) with `HardRequirement` compatibility. Returns the highest
+/// ABI that the kernel successfully supports.
 ///
 /// Called in the parent process during `prepare()` — never in `pre_exec`.
 #[cfg(target_os = "linux")]
-pub fn check_availability() -> Result<u32, String> {
-    match std::fs::read_to_string("/sys/kernel/security/landlock/abi_version") {
-        Ok(s) => {
-            let version: u32 = s
-                .trim()
-                .parse()
-                .map_err(|e| format!("Invalid Landlock ABI version: {e}"))?;
-            if version < 1 {
-                Err("Landlock ABI version 0 is not supported".to_string())
-            } else {
-                Ok(version)
+pub fn check_availability() -> Result<landlock::ABI, String> {
+    use landlock::ABI;
+
+    const ABI_PROBE_ORDER: [ABI; 6] = [ABI::V6, ABI::V5, ABI::V4, ABI::V3, ABI::V2, ABI::V1];
+
+    let mut last_error = None;
+    for &abi in &ABI_PROBE_ORDER {
+        match probe_abi_candidate(abi) {
+            Ok(()) => return Ok(abi),
+            Err(err) => {
+                last_error = Some(format!("ABI {:?}: {}", abi, err));
             }
         }
-        Err(e) => Err(format!(
+    }
+
+    match last_error {
+        None => {
+            unreachable!("ABI_PROBE_ORDER is non-empty")
+        }
+        Some(e) => Err(format!(
             "Landlock is not available on this system: {e}\n\
              Requires Linux 5.13+ with Landlock enabled in the kernel.\n\
              Check: cat /sys/kernel/security/lsm (should include 'landlock')"
         )),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn probe_abi_candidate(abi: landlock::ABI) -> Result<(), String> {
+    use landlock::{
+        Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr, Scope,
+    };
+
+    let mut ruleset = Ruleset::default().set_compatibility(CompatLevel::HardRequirement);
+
+    ruleset = ruleset
+        .handle_access(AccessFs::from_all(abi))
+        .map_err(|e| format!("filesystem access probe failed: {}", e))?;
+
+    let handled_net = AccessNet::from_all(abi);
+    if !handled_net.is_empty() {
+        ruleset = ruleset
+            .handle_access(handled_net)
+            .map_err(|e| format!("network access probe failed: {}", e))?;
+    }
+
+    let scopes = Scope::from_all(abi);
+    if !scopes.is_empty() {
+        ruleset = ruleset
+            .scope(scopes)
+            .map_err(|e| format!("scope probe failed: {}", e))?;
+    }
+
+    ruleset
+        .create()
+        .map_err(|e| format!("ruleset creation probe failed: {}", e))?;
+
+    Ok(())
 }
 
 /// Pre-compute all sandbox data in the parent process.
@@ -691,13 +730,14 @@ pub fn check_availability() -> Result<u32, String> {
 /// cloned into the `pre_exec` closure.
 #[cfg(target_os = "linux")]
 pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> {
+    use landlock::ABI;
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
     let abi_version = check_availability()?;
     let seccomp_filter = build_seccomp_filter();
 
-    if abi_version < 4 {
+    if abi_version < ABI::V4 {
         // Check if proxy is configured (proxy_port would have been added to net_rules)
         let has_proxy = policy.net_rules.iter().any(|r| r.port != 443);
         if has_proxy {
@@ -730,7 +770,7 @@ pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> 
     let net_rules = policy.net_rules.clone();
 
     Ok(PrecomputedSandbox {
-        abi_version,
+        abi_version: abi_version as u32,
         pre_opened_fds,
         net_rules,
         seccomp_filter,
@@ -877,7 +917,8 @@ pub fn apply_precomputed(sandbox: &PrecomputedSandbox) -> std::io::Result<()> {
         2 => ABI::V2,
         3 => ABI::V3,
         4 => ABI::V4,
-        _ => ABI::V5,
+        5 => ABI::V5,
+        _ => ABI::V6,
     };
     let abi_version = sandbox.abi_version;
 
