@@ -246,6 +246,12 @@ struct Cli {
     #[arg(long)]
     allow_cache_exec_any: bool,
 
+    /// Allow the agent to open URLs in your default browser.
+    /// Needed for OAuth code flows (MCP servers, Gemini CLI, gh auth login).
+    /// Disabled by default because it lets the agent leverage your browser session.
+    #[arg(long)]
+    allow_browser: bool,
+
     /// Enable a per-session scratch directory for TMPDIR redirect (default).
     /// Creates ~/.cache/cplt/tmp/{session}/ with write+exec permissions
     /// and redirects TMPDIR/GOTMPDIR there. This allows tools like
@@ -666,6 +672,7 @@ fn main() -> ExitCode {
         allow_tmp_exec: cli.allow_tmp_exec,
         allow_cache_exec: cli.allow_cache_exec.clone(),
         allow_cache_exec_any: cli.allow_cache_exec_any,
+        allow_browser: cli.allow_browser,
         scratch_dir: cli.scratch_dir,
         no_scratch_dir: cli.no_scratch_dir,
         quiet: cli.quiet,
@@ -1008,6 +1015,7 @@ fn main() -> ExitCode {
         agent_dirs: &agent_dirs,
         allow_cache_exec: &resolved.allow_cache_exec,
         allow_cache_exec_any: resolved.allow_cache_exec_any,
+        allow_browser: resolved.allow_browser,
     }) {
         Ok(s) => s,
         Err(e) => {

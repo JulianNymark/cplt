@@ -391,6 +391,7 @@ mod macos_tests {
             agent_dirs: &[],
             allow_cache_exec: &[],
             allow_cache_exec_any: false,
+            allow_browser: false,
         }
     }
 

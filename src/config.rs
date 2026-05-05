@@ -108,6 +108,9 @@ pub struct SandboxConfig {
     /// Allow process execution from ALL ~/Library/Caches subdirectories (default: false).
     /// DANGEROUS: much broader than allow_cache_exec — prefer specific subdirs.
     pub allow_cache_exec_any: Option<bool>,
+    /// Allow Launch Services (`open` command) for OAuth browser flows (default: false).
+    /// Lets the sandboxed agent open URLs in your default browser.
+    pub allow_browser: Option<bool>,
     /// Enable per-session scratch directory for TMPDIR redirect (default: true).
     /// Creates an executable temp dir so tools like `go test` and `mise` can work.
     pub scratch_dir: Option<bool>,
@@ -144,6 +147,7 @@ pub struct Resolved {
     pub allow_tmp_exec: bool,
     pub allow_cache_exec: Vec<String>,
     pub allow_cache_exec_any: bool,
+    pub allow_browser: bool,
     pub scratch_dir: bool,
     pub quiet: bool,
 }
@@ -179,6 +183,7 @@ pub struct CliFlags {
     pub allow_tmp_exec: bool,
     pub allow_cache_exec: Vec<String>,
     pub allow_cache_exec_any: bool,
+    pub allow_browser: bool,
     pub scratch_dir: bool,
     pub no_scratch_dir: bool,
     pub quiet: bool,
@@ -428,6 +433,13 @@ impl Config {
             self.sandbox.allow_cache_exec_any.unwrap_or(false)
         };
 
+        // Allow-browser: CLI flag wins, then config, then false (blocked by default)
+        let allow_browser = if cli.allow_browser {
+            true
+        } else {
+            self.sandbox.allow_browser.unwrap_or(false)
+        };
+
         // Scratch-dir: --no-scratch-dir always wins, then --scratch-dir, then config, then true (on by default)
         let scratch_dir = if cli.no_scratch_dir {
             false
@@ -505,6 +517,7 @@ impl Config {
             allow_tmp_exec,
             allow_cache_exec,
             allow_cache_exec_any,
+            allow_browser,
             scratch_dir,
             quiet,
         })
@@ -635,6 +648,11 @@ impl Resolved {
         if self.allow_jvm_attach {
             eprintln!(
                 "{blue}[cplt]{nc}    JVM attach:    {yellow}allowed{nc}     {dim}.java_pid* sockets (--allow-jvm-attach){nc}"
+            );
+        }
+        if self.allow_browser {
+            eprintln!(
+                "{blue}[cplt]{nc}    Browser:       {yellow}allowed{nc}     {dim}OAuth flows via open (--allow-browser){nc}"
             );
         }
         if agent.needs_copilot_dir() {
@@ -911,6 +929,11 @@ pub fn default_config_contents() -> String {
 # Much broader than allow_cache_exec — prefer specifying exact subdirs.
 # allow_cache_exec_any = false
 #
+# Allow the agent to open URLs in your default browser.
+# Needed for OAuth code flows (MCP servers, Gemini CLI, gh auth login).
+# Disabled by default because it lets the agent leverage your browser session.
+# allow_browser = false
+#
 # Suppress the startup configuration summary and non-essential messages.
 # Errors and warnings are always shown. Useful once you've reviewed the
 # sandbox settings and don't need to see them every time.
@@ -981,6 +1004,7 @@ const VALID_SANDBOX_KEYS: &[&str] = &[
     "quiet",
     "allow_cache_exec",
     "allow_cache_exec_any",
+    "allow_browser",
 ];
 const VALID_SECTIONS: &[&str] = &["proxy", "allow", "deny", "sandbox"];
 
@@ -1436,6 +1460,14 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         dangerous: true,
         default_display: "false",
         description: "⚠️  DANGEROUS: Allow exec from ALL ~/Library/Caches subdirs. Prefer allow_cache_exec with specific subdirs.",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "allow_browser",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Allow the agent to open URLs in your default browser (needed for OAuth code flows).",
     },
 ];
 
@@ -2066,6 +2098,12 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
             src(c.sandbox.allow_tmp_exec.is_some())
         );
     }
+    let allow_browser = c.sandbox.allow_browser.unwrap_or(false);
+    eprintln!(
+        "{blue}[cplt]{nc}    allow_browser         = {}{}",
+        allow_browser,
+        src(c.sandbox.allow_browser.is_some())
+    );
     let scratch = c.sandbox.scratch_dir.unwrap_or(true);
     eprintln!(
         "{blue}[cplt]{nc}    scratch_dir           = {}{}",

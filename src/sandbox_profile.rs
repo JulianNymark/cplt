@@ -60,6 +60,8 @@ pub struct ProfileOptions<'a> {
     pub allow_cache_exec: &'a [String],
     /// Allow process execution from ALL ~/Library/Caches subdirs.
     pub allow_cache_exec_any: bool,
+    /// Allow Launch Services (`open` command) for OAuth browser flows.
+    pub allow_browser: bool,
 }
 
 /// Generate a complete SBPL sandbox profile from the given options.
@@ -77,7 +79,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_project_access(&mut sb, &project, opts.allow_env_files);
     emit_home_access(&mut sb, &home, opts.agent, opts.agent_dirs);
     emit_git_hooks(&mut sb, opts.git_hooks_path);
-    emit_system_access(&mut sb, &home);
+    emit_system_access(&mut sb, &home, opts.allow_browser);
     emit_tool_dirs(
         &mut sb,
         &home,
@@ -282,7 +284,7 @@ fn emit_home_access(sb: &mut String, home: &str, agent: Agent, agent_dirs: &[Age
     writeln!(sb).unwrap();
 }
 
-fn emit_system_access(sb: &mut String, home: &str) {
+fn emit_system_access(sb: &mut String, home: &str, allow_browser: bool) {
     // Mach IPC — Node.js and macOS frameworks need service lookups
     // (Keychain, security framework, DNS, system services)
     writeln!(sb, ";; Mach IPC (required for Node.js, Keychain, DNS)").unwrap();
@@ -296,6 +298,15 @@ fn emit_system_access(sb: &mut String, home: &str) {
     writeln!(sb, "(allow ipc-posix-shm-write-data)").unwrap();
     writeln!(sb, "(allow ipc-posix-shm-write-create)").unwrap();
     writeln!(sb).unwrap();
+
+    // Launch Services — allows `open` to launch URLs in the default browser.
+    // Needed for OAuth code flows (MCP servers, Gemini CLI, gh auth).
+    // Opt-in because it lets the agent leverage the user's browser session state.
+    if allow_browser {
+        writeln!(sb, ";; Launch Services (OAuth browser flows)").unwrap();
+        writeln!(sb, "(allow lsopen)").unwrap();
+        writeln!(sb).unwrap();
+    }
 
     // User preferences — Keychain and security framework read preferences
     writeln!(sb, ";; User preferences (Keychain, security framework)").unwrap();

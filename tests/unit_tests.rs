@@ -476,6 +476,7 @@ fn profile_contains_deny_default() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(p.contains("(deny default)"));
 }
@@ -506,6 +507,7 @@ fn profile_allows_tty_ioctl() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow file-ioctl)"),
@@ -539,6 +541,7 @@ fn profile_grants_project_access() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(p.contains("(allow file-read* (subpath \"/projects/app\"))"));
     assert!(p.contains("(allow file-write* (subpath \"/projects/app\"))"));
@@ -574,6 +577,7 @@ fn profile_grants_copilot_config_access() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(p.contains("(allow file-read* (subpath \"/Users/test/.copilot\"))"));
 }
@@ -604,6 +608,7 @@ fn profile_denies_sensitive_dirs() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     for dir in &[
         ".ssh",
@@ -659,6 +664,7 @@ fn profile_denies_sensitive_files() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     for file in &[
         ".netrc",
@@ -702,6 +708,7 @@ fn profile_denies_credential_files_in_tool_dirs() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     // These credential files inside allowed tool dirs must be denied
@@ -768,6 +775,7 @@ fn profile_allows_credential_files_when_user_opts_in() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     // The deny should still be present (defense in depth)
@@ -833,6 +841,7 @@ fn profile_restricts_outbound_tcp() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(deny network-outbound (remote tcp))"),
@@ -857,6 +866,10 @@ fn profile_restricts_outbound_tcp() {
     assert!(
         p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
         "Profile must block localhost outbound"
+    );
+    assert!(
+        !p.contains("(allow lsopen)"),
+        "Profile must NOT allow lsopen by default (requires --allow-browser)"
     );
 }
 
@@ -886,6 +899,7 @@ fn profile_extra_ports_adds_allows() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"*:8080\"))"),
@@ -898,6 +912,40 @@ fn profile_extra_ports_adds_allows() {
     assert!(
         p.contains("(allow network-outbound (remote ip \"*:443\"))"),
         "Profile must still allow port 443"
+    );
+}
+
+#[test]
+fn profile_allow_browser_enables_lsopen() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: true,
+    });
+    assert!(
+        p.contains("(allow lsopen)"),
+        "Profile must allow lsopen when --allow-browser is set"
     );
 }
 
@@ -927,6 +975,7 @@ fn profile_proxy_port_allows_localhost() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"localhost:18080\"))"),
@@ -964,6 +1013,7 @@ fn profile_allow_localhost_opens_specific_ports() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow network-outbound (remote ip \"localhost:3000\"))"),
@@ -1016,6 +1066,7 @@ fn profile_deny_rules_come_after_allow_rules() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     let allow_pos = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
@@ -1055,6 +1106,7 @@ fn profile_allows_gh_config_read_only() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow file-read* (literal \"/Users/test/.config/gh/hosts.yml\"))"),
@@ -1096,6 +1148,7 @@ fn profile_allows_file_map_executable_for_copilot() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow file-map-executable (subpath \"/Users/test/.copilot\"))"),
@@ -1133,6 +1186,7 @@ fn profile_denies_env_files_by_default() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.env$"))"#),
@@ -1178,6 +1232,7 @@ fn profile_allows_env_files_when_flag_set() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         !p.contains(r#"deny file-read* (regex #"/projects/app/"#),
@@ -1211,6 +1266,7 @@ fn profile_env_deny_comes_after_project_allow() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     let project_allow = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
@@ -1252,6 +1308,7 @@ fn profile_allows_all_localhost_when_flag_set() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         !p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
@@ -1302,6 +1359,7 @@ fn profile_denies_write_to_copilot_pkg() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Must allow write to ~/.copilot (session state, config)
     assert!(
@@ -1479,6 +1537,7 @@ fn profile_denies_exec_from_tmp() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Must allow read+write to /tmp (needed for temp files)
     assert!(
@@ -1536,6 +1595,7 @@ fn profile_allows_jvm_attach_when_flag_set() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Must allow unix socket bind+inbound+connect for JVM Attach API (.java_pid*)
     // Three operations needed: bind (create socket), inbound (accept), outbound (connect)
@@ -1613,6 +1673,7 @@ fn profile_denies_git_persistence_vectors() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Must deny writes to .git/hooks (post-checkout etc. run outside sandbox)
     assert!(
@@ -1672,6 +1733,7 @@ fn default_profile() -> String {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     })
 }
 
@@ -2222,6 +2284,7 @@ fn profile_scratch_dir_adds_all_permissions() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     let scratch_str = scratch.to_string_lossy();
@@ -2284,6 +2347,7 @@ fn profile_allow_tmp_exec_removes_denies() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     assert!(
@@ -2443,6 +2507,7 @@ fn profile_allows_copilot_install_dir() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains(
@@ -2487,6 +2552,7 @@ fn profile_allows_vscode_copilot_path() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains(&format!("(allow file-read* (subpath \"{vscode_dir}\"))")),
@@ -2536,6 +2602,7 @@ fn profile_allows_electron_app_bundle() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains(&format!("(allow file-read* (subpath \"{electron_dir}\"))")),
@@ -2688,6 +2755,7 @@ fn profile_allows_git_hooks_path() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow file-read* (subpath \"/Users/test/.config/git/hooks\"))"),
@@ -2830,6 +2898,7 @@ fn profile_gpg_signing_allows_public_keyring() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow file-read* (literal \"/Users/test/.gnupg/pubring.kbx\"))"),
@@ -2871,6 +2940,7 @@ fn profile_gpg_signing_allows_agent_socket() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(allow network-outbound (literal \"/Users/test/.gnupg/S.gpg-agent\"))"),
@@ -2909,6 +2979,7 @@ fn profile_gpg_signing_denies_private_keys() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(deny file-read* (subpath \"/Users/test/.gnupg/private-keys-v1.d\"))"),
@@ -2946,6 +3017,7 @@ fn profile_gpg_signing_rules_come_after_deny() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     let deny_pos = p
         .find("(deny file-read* (subpath \"/Users/test/.gnupg\"))")
@@ -2993,6 +3065,7 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Must use literal (exact file), never subpath (recursive) for GPG allows
     assert!(
@@ -3028,6 +3101,7 @@ fn profile_gpg_signing_deny_path_wins() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // When user explicitly denies ~/.gnupg, GPG allows should NOT appear
     assert!(
@@ -3066,6 +3140,7 @@ fn profile_gpg_signing_denies_legacy_secring() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     assert!(
         p.contains("(deny file-read* (literal \"/Users/test/.gnupg/secring.gpg\"))"),
@@ -3099,6 +3174,7 @@ fn profile_gpg_signing_allows_socket_file_read() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Socket needs file-read* for inode lookup before connect(2)
     assert!(
@@ -3446,6 +3522,7 @@ fn profile_docker_disabled_by_default() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // .docker should be denied
     assert!(
@@ -3485,6 +3562,7 @@ fn profile_docker_enabled_allows_config_and_sockets() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Should allow read of ~/.docker
     assert!(
@@ -3546,6 +3624,7 @@ fn profile_docker_skipped_when_deny_path_overlaps() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     // Docker allows should be skipped — deny-path wins
     assert!(
@@ -3584,6 +3663,7 @@ fn profile_allow_cache_exec_subdir_adds_carveout() {
         agent_dirs: &[],
         allow_cache_exec: &["ms-playwright".to_string()],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     assert!(
@@ -3628,6 +3708,7 @@ fn profile_allow_cache_exec_any_allows_all_caches() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: true,
+        allow_browser: false,
     });
 
     assert!(
@@ -3666,6 +3747,7 @@ fn profile_default_denies_cache_exec() {
         agent_dirs: &[],
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     assert!(
@@ -3700,6 +3782,7 @@ fn profile_allow_cache_exec_multiple_subdirs() {
         agent_dirs: &[],
         allow_cache_exec: &["ms-playwright".to_string(), "pnpm/dlx".to_string()],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
 
     assert!(
@@ -3817,6 +3900,7 @@ fn profile_cache_exec_carveout_comes_after_exec_deny() {
         agent_dirs: &[],
         allow_cache_exec: &["ms-playwright".to_string()],
         allow_cache_exec_any: false,
+        allow_browser: false,
     });
     let deny_pos = p
         .find("(deny process-exec")

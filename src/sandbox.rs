@@ -109,6 +109,8 @@ pub struct SandboxConfig<'a> {
     pub allow_cache_exec: &'a [String],
     /// Allow process-exec from all of ~/Library/Caches.
     pub allow_cache_exec_any: bool,
+    /// Allow Launch Services (`open` command) for OAuth browser flows.
+    pub allow_browser: bool,
 }
 
 /// A validated, platform-specific sandbox ready for execution.
@@ -232,6 +234,7 @@ fn prepare_impl(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         agent_dirs: config.agent_dirs,
         allow_cache_exec: config.allow_cache_exec,
         allow_cache_exec_any: config.allow_cache_exec_any,
+        allow_browser: config.allow_browser,
     });
 
     Ok(PreparedSandbox {
