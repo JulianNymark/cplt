@@ -37,6 +37,8 @@ pub struct ProxyConfig {
     pub allowed_domains: Option<String>,
     /// Path to write proxy audit log (one line per CONNECT).
     pub log_file: Option<String>,
+    /// Stderr verbosity level: "none", "error", "blocked", "all" (default: "none").
+    pub log_level: Option<String>,
     /// Domains allowed to resolve to private/internal IPs.
     /// For each listed domain, the post-DNS private IP check is skipped.
     /// Use for corporate internal services (e.g. "intern.nav.no").
@@ -123,6 +125,7 @@ pub struct Resolved {
     pub blocked_domains: Option<PathBuf>,
     pub allowed_domains: Option<PathBuf>,
     pub proxy_log_file: Option<PathBuf>,
+    pub proxy_log_level: crate::proxy::ProxyLogLevel,
     pub allow_private_domains: Vec<String>,
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
@@ -157,6 +160,7 @@ pub struct CliFlags {
     pub blocked_domains: Option<PathBuf>,
     pub allowed_domains: Option<PathBuf>,
     pub proxy_log_file: Option<PathBuf>,
+    pub proxy_log_level: Option<crate::proxy::ProxyLogLevel>,
     pub allow_private_domains: Vec<String>,
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
@@ -263,6 +267,15 @@ impl Config {
         let proxy_log_file = cli
             .proxy_log_file
             .or_else(|| self.proxy.log_file.as_ref().map(|s| expand_tilde(s)));
+
+        // Proxy log level: CLI > config > default (none)
+        let proxy_log_level = if let Some(level) = cli.proxy_log_level {
+            level
+        } else if let Some(ref level_str) = self.proxy.log_level {
+            level_str.parse::<crate::proxy::ProxyLogLevel>()?
+        } else {
+            crate::proxy::ProxyLogLevel::None
+        };
 
         // Allow private domains: merge CLI + config list, sort+dedup.
         // Validates that entries are non-empty (empty string would bypass private IP
@@ -473,6 +486,7 @@ impl Config {
             blocked_domains,
             allowed_domains,
             proxy_log_file,
+            proxy_log_level,
             allow_private_domains,
             allow_read,
             allow_write,
@@ -698,6 +712,12 @@ impl Resolved {
                     lf.display()
                 );
             }
+            if self.proxy_log_level != crate::proxy::ProxyLogLevel::None {
+                eprintln!(
+                    "{blue}[cplt]{nc}    Log level:     {green}{}{nc}",
+                    self.proxy_log_level.as_str()
+                );
+            }
         } else {
             eprintln!("{blue}[cplt]{nc}    Proxy:         off         {dim}direct connections{nc}");
         }
@@ -778,6 +798,9 @@ pub fn default_config_contents() -> String {
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
+# Stderr verbosity: "none" (default/silent), "error", "blocked", or "all".
+# The log_file always records everything regardless of this setting.
+# log_level = "none"
 # Domains allowed to resolve to private/internal IPs (bypasses DNS-rebinding block).
 # Use for corporate internal services, e.g. MCP servers on your company's intranet.
 # Suffix matching: "intern.nav.no" covers all its subdomains.
@@ -938,6 +961,7 @@ const VALID_PROXY_KEYS: &[&str] = &[
     "blocked_domains",
     "allowed_domains",
     "log_file",
+    "log_level",
     "allow_private_domains",
 ];
 const VALID_ALLOW_KEYS: &[&str] = &["read", "write", "ports", "localhost"];
@@ -1241,6 +1265,14 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         dangerous: false,
         default_display: "",
         description: "Path to write proxy connection logs (CONNECT requests and outcomes).",
+    },
+    ConfigKeyInfo {
+        section: "proxy",
+        key: "log_level",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "none",
+        description: "Stderr verbosity for proxy events: \"none\" (silent), \"error\" (DNS/connect failures), \"blocked\" (errors + blocked connections), \"all\" (everything including CONNECTED).",
     },
     ConfigKeyInfo {
         section: "proxy",
@@ -1916,6 +1948,11 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
     if let Some(ref lf) = c.proxy.log_file {
         eprintln!("{blue}[cplt]{nc}    log_file         = \"{lf}\"");
     }
+    eprintln!(
+        "{blue}[cplt]{nc}    log_level        = \"{}\"{}",
+        c.proxy.log_level.as_deref().unwrap_or("none"),
+        src(c.proxy.log_level.is_some())
+    );
     eprintln!();
 
     // [allow]

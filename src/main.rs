@@ -117,6 +117,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     proxy_log: Option<PathBuf>,
 
+    /// Proxy stderr verbosity: none (default), error, blocked, or all.
+    /// Controls what the proxy prints to stderr. The audit log file
+    /// (--proxy-log) always records everything regardless of this setting.
+    #[arg(long, value_name = "LEVEL")]
+    proxy_log_level: Option<String>,
+
     /// Allow connections to this domain even if it resolves to a private/internal IP.
     /// Use for corporate intranet services such as internal MCP servers.
     /// Suffix matching: "intern.nav.no" covers all its subdomains.
@@ -632,6 +638,16 @@ fn main() -> ExitCode {
         blocked_domains: cli.blocked_domains.clone(),
         allowed_domains: cli.allowed_domains.clone(),
         proxy_log_file: cli.proxy_log.clone(),
+        proxy_log_level: match cli.proxy_log_level.as_deref() {
+            Some(s) => match s.parse::<crate::proxy::ProxyLogLevel>() {
+                Ok(l) => Some(l),
+                Err(e) => {
+                    error(&e);
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => None,
+        },
         allow_private_domains: cli.allow_private_domains.clone(),
         allow_read: cli_allow_read,
         allow_write: cli_allow_write,
@@ -942,7 +958,7 @@ fn main() -> ExitCode {
                 .collect(),
             config_file: config_path.clone(),
             log_file: resolved.proxy_log_file.clone(),
-            quiet: resolved.quiet,
+            log_level: resolved.proxy_log_level,
         }) {
             Ok(handle) => {
                 resolved.proxy_port = handle.port;

@@ -295,6 +295,7 @@ Then edit `~/.config/cplt/config.toml`:
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"  # block known-bad domains
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"  # restrict to known-safe domains
 # log_file = "~/.config/cplt/proxy.log"                   # persistent audit log
+# log_level = "none"                                      # stderr: none|error|blocked|all
 ```
 
 | Flag                        | What it does                                                                                     |
@@ -305,13 +306,14 @@ Then edit `~/.config/cplt/config.toml`:
 | `--blocked-domains <FILE>`  | Domains to block, one per line. Re-read every ~5s (edit live, changes take effect within seconds). |
 | `--allowed-domains <FILE>`  | Domains to allow — only listed domains can connect. Validated at startup (fail-closed); re-read every 5s.  |
 | `--proxy-log <FILE>`        | Append a line per connection to this file for post-session audit.                                |
+| `--proxy-log-level <LEVEL>` | Stderr verbosity: `none` (default/silent), `error`, `blocked`, or `all`. The audit log file always records everything. |
 | `--allow-private-domain <DOMAIN>` | Allow connections to this domain even if it resolves to a private/internal IP. Use for corporate intranet services (e.g. internal MCP servers). Suffix matching: `intern.nav.no` covers all subdomains. Can be repeated. |
 
 > **Domain matching:** both blocklist and allowlist use the same rules — `example.com` matches the exact domain and all subdomains (`sub.example.com`, `deep.sub.example.com`). Matching is case-insensitive. Trailing dots are stripped.
 >
 > **Localhost traffic** (MCP servers, dev servers) bypasses the proxy via `NO_PROXY` and will not appear in the audit log.
 >
-> **Quiet mode** (`-q` / `sandbox.quiet = true`) suppresses the per-connection stderr output. Blocked connections still print. Use `--proxy-log` to capture all connections to a file regardless of quiet mode.
+> **Quiet mode** (`-q` / `sandbox.quiet = true`) suppresses the startup banner. Proxy stderr output is controlled separately by `--proxy-log-level` (default: `none` — silent). Use `--proxy-log` to capture all connections to a file.
 
 ### Debugging
 
@@ -322,7 +324,7 @@ Then edit `~/.config/cplt/config.toml`:
 | `--show-denials`  | Stream macOS sandbox denial logs in real time.                                                                                                         |
 | `--no-validate`   | Skip the startup check that verifies sandbox restrictions are active.                                                                                  |
 | `-y, --yes`       | Skip the interactive confirmation prompt. The configuration summary is still printed for auditability. Required when stdin is not a TTY (CI, scripts). |
-| `-q, --quiet`     | Suppress the startup banner and proxy connection log (blocked connections still print). Also: `sandbox.quiet = true` in config.                        |
+| `-q, --quiet`     | Suppress the startup banner and non-essential messages. Errors/warnings still print. Also: `sandbox.quiet = true` in config.                           |
 | `--no-quiet`      | Override `sandbox.quiet = true` — show the startup summary even when quiet is configured.                                                              |
 | `--init-config`   | Create a starter config file at `~/.config/cplt/config.toml` and exit.                                                                                 |
 
@@ -485,6 +487,7 @@ This creates a commented template at `~/.config/cplt/config.toml`:
 # blocked_domains = "~/.config/cplt/blocked-domains.txt"
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
+# log_level = "none"             # Stderr verbosity: none, error, blocked, all
 # allow_private_domains = ["intern.nav.no"]  # Allow internal/intranet domains to resolve to private IPs
 
 [sandbox]
