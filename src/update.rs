@@ -162,34 +162,24 @@ pub fn perform_update(tag: &str, current_version: &str) -> Result<String, String
     set_executable(&new_binary)?;
     postprocess_binary(&new_binary);
 
-    // 6. Atomic rename
-    let staged = target_path.with_extension("new");
-    std::fs::copy(&new_binary, &staged).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            format!(
-                "Permission denied writing to {}\n  Run: sudo cplt update",
-                target_path.display()
-            )
-        } else {
-            format!("Cannot stage binary: {e}")
-        }
-    })?;
-
-    // Copy permissions/signing to staged location too
-    set_executable(&staged)?;
-    postprocess_binary(&staged);
-
-    std::fs::rename(&staged, &target_path).map_err(|e| {
-        let _ = std::fs::remove_file(&staged);
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            format!(
-                "Permission denied replacing {}\n  Run: sudo cplt update",
-                target_path.display()
-            )
-        } else {
+    // 6. Install to target path — use sudo if direct write fails
+    let needs_sudo = !is_writable(&target_path);
+    if needs_sudo {
+        eprintln!(
+            "  Elevated permissions required for {}...",
+            target_path.display()
+        );
+        sudo_install(&new_binary, &target_path)?;
+    } else {
+        let staged = target_path.with_extension("new");
+        std::fs::copy(&new_binary, &staged).map_err(|e| format!("Cannot stage binary: {e}"))?;
+        set_executable(&staged)?;
+        postprocess_binary(&staged);
+        std::fs::rename(&staged, &target_path).map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
             format!("Cannot replace binary: {e}")
-        }
-    })?;
+        })?;
+    }
 
     // 7. Clean up
     let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -564,6 +554,68 @@ fn run_codesign(path: &Path) -> Result<(), String> {
     } else {
         Err("codesign failed".to_string())
     }
+}
+
+/// Check if the target path (or its parent directory) is writable by the current user.
+fn is_writable(path: &Path) -> bool {
+    if path.exists() {
+        // Try opening for write to check permission
+        std::fs::OpenOptions::new().write(true).open(path).is_ok()
+    } else {
+        // Check if parent directory is writable
+        path.parent()
+            .map(|p| {
+                let probe = p.join(".cplt_write_probe");
+                let ok = std::fs::File::create(&probe).is_ok();
+                let _ = std::fs::remove_file(&probe);
+                ok
+            })
+            .unwrap_or(false)
+    }
+}
+
+/// Install binary using sudo for the final copy + permission step.
+/// Downloads and verification happen as the current user; only the
+/// file placement requires elevated privileges.
+fn sudo_install(src: &Path, dest: &Path) -> Result<(), String> {
+    let sudo = find_sudo()?;
+
+    let output = Command::new(&sudo)
+        .args(["cp", "-f", &src.to_string_lossy(), &dest.to_string_lossy()])
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .map_err(|e| format!("Cannot run sudo: {e}"))?;
+
+    if !output.success() {
+        return Err(format!(
+            "sudo cp failed. You can also run manually:\n  sudo cp {} {}",
+            src.display(),
+            dest.display()
+        ));
+    }
+
+    // Set correct permissions
+    let _ = Command::new(&sudo)
+        .args(["chmod", "755", &dest.to_string_lossy()])
+        .status();
+
+    Ok(())
+}
+
+/// Find sudo binary on the system.
+fn find_sudo() -> Result<PathBuf, String> {
+    for p in ["/usr/bin/sudo", "/bin/sudo"] {
+        let path = Path::new(p);
+        if path.exists() {
+            return Ok(path.to_path_buf());
+        }
+    }
+    Err(
+        "sudo not found. Install the binary manually:\n  sudo cp <binary> /usr/local/bin/cplt"
+            .to_string(),
+    )
 }
 
 #[cfg(test)]
