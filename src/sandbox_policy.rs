@@ -208,6 +208,7 @@ pub const ENV_PREFIX_ALLOWLIST: &[&str] = &[
     "LC_",       // Locale
     "COPILOT_",  // Copilot-specific config
     "COREPACK_", // Node.js Corepack (package manager manager)
+    "JENV_",     // jenv (Java version manager)
     "MISE_",     // mise tool manager
     "NVM_",      // nvm
     "PYENV_",    // pyenv (Python version manager)
@@ -387,6 +388,12 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
     },
     HomeToolDir {
         path: ".sdkman",
+        process_exec: true,
+        map_exec: true,
+        write: false,
+    },
+    HomeToolDir {
+        path: ".jenv",
         process_exec: true,
         map_exec: true,
         write: false,
