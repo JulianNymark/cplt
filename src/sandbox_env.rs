@@ -154,12 +154,9 @@ pub fn build_sandbox_env(
         // Also sets java.rmi.server.hostname=localhost to force RMI (used by Kotlin daemon)
         // to use localhost — without this, InetAddress.getLocalHost() may resolve to a
         // non-loopback IP via mDNS, which the sandbox blocks on non-443 ports.
-        // Also sets java.net.preferIPv6Addresses=true — on dual-stack hosts, Java defaults to
-        // IPv4 which may not route through the sandbox's localhost rules; preferring IPv6
-        // ensures the Kotlin daemon and RMI connections use the loopback address consistently.
         if !extra_pass_env.iter().any(|v| v == "JAVA_TOOL_OPTIONS") {
             let jvm_tmpdir_flags = format!(
-                "-Djava.io.tmpdir={scratch_str} -Djansi.tmpdir={scratch_str} -Djava.rmi.server.hostname=localhost -Djava.net.preferIPv6Addresses=true"
+                "-Djava.io.tmpdir={scratch_str} -Djansi.tmpdir={scratch_str} -Djava.rmi.server.hostname=localhost"
             );
             // Append to existing JAVA_TOOL_OPTIONS if present, otherwise create new
             if let Some(pos) = env.vars.iter().position(|(k, _)| k == "JAVA_TOOL_OPTIONS") {

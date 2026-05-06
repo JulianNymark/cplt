@@ -908,7 +908,10 @@ fn emit_network_rules(
         .unwrap();
     }
 
-    // Allow inbound for localhost services (proxy listener, MCP servers).
-    // This only allows accepting connections, not initiating them.
+    // Allow binding and accepting on localhost TCP ports only.
+    // Needed for: cplt proxy listener, MCP servers, Gradle/Kotlin daemons,
+    // dev servers started by the agent. Restricted to localhost to prevent
+    // binding on 0.0.0.0 (which would expose a listener to the network).
+    writeln!(sb, "(allow network-bind (local ip \"localhost:*\"))").unwrap();
     writeln!(sb, "(allow network-inbound (local tcp))").unwrap();
 }

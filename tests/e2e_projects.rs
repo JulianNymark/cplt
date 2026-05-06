@@ -1913,16 +1913,6 @@ case "$JTO" in
         ;;
 esac
 
-# Should contain -Djava.net.preferIPv6Addresses=true (consistent loopback on dual-stack)
-case "$JTO" in
-    *-Djava.net.preferIPv6Addresses=true*)
-        echo "RESULT:jto_has_ipv6_pref:OK"
-        ;;
-    *)
-        echo "RESULT:jto_has_ipv6_pref:FAIL:$JTO"
-        ;;
-esac
-
 # The -Djava.io.tmpdir should point to the scratch dir (same as TMPDIR)
 # Extract the value after -Djava.io.tmpdir=
 JTO_TMPDIR=$(echo "$JTO" | sed 's/.*-Djava.io.tmpdir=\([^ ]*\).*/\1/')
@@ -1943,7 +1933,6 @@ fi
         assert_result_ok(&stdout, "jto_has_tmpdir");
         assert_result_ok(&stdout, "jto_has_jansi");
         assert_result_ok(&stdout, "jto_has_rmi_hostname");
-        assert_result_ok(&stdout, "jto_has_ipv6_pref");
         assert_result_ok(&stdout, "jto_tmpdir_matches");
     }
 
