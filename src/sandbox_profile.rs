@@ -104,6 +104,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_docker_rules(&mut sb, &home, opts.allow_docker, opts.extra_deny);
     emit_network_rules(
         &mut sb,
+        &home,
         opts.extra_ports,
         opts.allow_localhost_any,
         opts.proxy_port,
@@ -619,6 +620,22 @@ fn emit_temp_rules(
             "(allow file-map-executable (subpath \"{scratch_path}\"))"
         )
         .unwrap();
+        // Allow Unix domain sockets in scratch dir (build daemons may create them here)
+        writeln!(
+            sb,
+            "(allow network-bind (local unix-socket (subpath \"{scratch_path}\")))"
+        )
+        .unwrap();
+        writeln!(
+            sb,
+            "(allow network-inbound (local unix-socket (subpath \"{scratch_path}\")))"
+        )
+        .unwrap();
+        writeln!(
+            sb,
+            "(allow network-outbound (remote unix-socket (subpath \"{scratch_path}\")))"
+        )
+        .unwrap();
         writeln!(sb).unwrap();
     }
 }
@@ -849,6 +866,7 @@ fn emit_docker_rules(sb: &mut String, home: &str, allow_docker: bool, extra_deny
 
 fn emit_network_rules(
     sb: &mut String,
+    home: &str,
     extra_ports: &[u16],
     allow_localhost_any: bool,
     proxy_port: Option<u16>,
@@ -910,8 +928,35 @@ fn emit_network_rules(
 
     // Allow binding and accepting on localhost TCP ports only.
     // Needed for: cplt proxy listener, MCP servers, Gradle/Kotlin daemons,
-    // dev servers started by the agent. Restricted to localhost to prevent
-    // binding on 0.0.0.0 (which would expose a listener to the network).
+    // dev servers started by the agent.
+    //
+    // SBPL quirk: `(allow network-bind (local ip "localhost:*"))` alone also
+    // matches INADDR_ANY (0.0.0.0) because macOS treats it as "all local
+    // addresses" which includes localhost. We add an explicit deny for all IP
+    // addresses first, then re-allow localhost. SBPL uses more-specific-wins
+    // semantics: `"localhost:*"` is more specific than `"*:*"`, so localhost
+    // binds are allowed while 0.0.0.0 and external IPs are blocked.
+    writeln!(sb, "(deny network-bind (local ip \"*:*\"))").unwrap();
+    writeln!(sb, "(deny network-inbound (local ip \"*:*\"))").unwrap();
     writeln!(sb, "(allow network-bind (local ip \"localhost:*\"))").unwrap();
-    writeln!(sb, "(allow network-inbound (local tcp))").unwrap();
+    writeln!(sb, "(allow network-inbound (local ip \"localhost:*\"))").unwrap();
+
+    // Allow Unix domain sockets in writable tool dirs (Gradle/Kotlin daemon IPC).
+    // Gradle 6+ uses UDS in ~/.gradle/daemon/<version>/ for client-daemon comms.
+    writeln!(sb, ";; Unix domain sockets for build daemon IPC").unwrap();
+    writeln!(
+        sb,
+        "(allow network-bind (local unix-socket (subpath \"{home}/.gradle\")))"
+    )
+    .unwrap();
+    writeln!(
+        sb,
+        "(allow network-inbound (local unix-socket (subpath \"{home}/.gradle\")))"
+    )
+    .unwrap();
+    writeln!(
+        sb,
+        "(allow network-outbound (remote unix-socket (subpath \"{home}/.gradle\")))"
+    )
+    .unwrap();
 }

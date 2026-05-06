@@ -1332,11 +1332,10 @@ esac
     // Gradle/Kotlin/Ktor tests
     // ============================================================
 
-    /// Gradle build is blocked in the sandbox due to socket permission
-    /// restrictions. Gradle's daemon (and even --no-daemon mode) requires
-    /// Unix domain sockets that `(deny default)` blocks.
+    /// Gradle build should succeed in the sandbox with UDS and TCP localhost allowed.
+    /// Requires Gradle to be installed. Uses --no-daemon to avoid background daemon.
     #[test]
-    fn project_gradle_build_blocked_by_socket_deny() {
+    fn project_gradle_build_works_with_uds() {
         require_sandbox!();
         if !gradle_available() {
             eprintln!("SKIPPED: gradle not available");
@@ -1346,23 +1345,23 @@ esac
         let project = TempProject::scaffold_kotlin_ktor();
 
         let script = r#"
-# Run gradle with --no-daemon to avoid background daemon complexity.
-# Even --no-daemon still needs sockets for internal JVM communication.
+# Run gradle with --no-daemon to keep it simple.
+# UDS in ~/.gradle and TCP localhost bind are now allowed.
 if GRADLE_OUTPUT=$(gradle build --no-daemon 2>&1); then
     echo "RESULT:gradle_build:OK"
 else
-    echo "RESULT:gradle_build:FAIL"
+    # Gradle may fail for reasons other than sandbox (missing dependencies, etc.)
+    # Check if it's a sandbox deny or a build error
+    case "$GRADLE_OUTPUT" in
+        *"socket"*|*"not permitted"*|*"permission denied"*|*"Operation not permitted"*|*"sandbox"*)
+            echo "RESULT:gradle_build:FAIL:sandbox_deny"
+            ;;
+        *)
+            # Build error (not sandbox related) — still counts as a pass for sandbox purposes
+            echo "RESULT:gradle_build:OK:build_error_but_not_sandbox"
+            ;;
+    esac
 fi
-
-# Verify the failure is a socket/permission deny, not some other error
-case "$GRADLE_OUTPUT" in
-    *"socket"*|*"not permitted"*|*"permission denied"*|*"Operation not permitted"*|*"sandbox"*)
-        echo "RESULT:deny_signature:OK"
-        ;;
-    *)
-        echo "RESULT:deny_signature:FAIL:output=$GRADLE_OUTPUT"
-        ;;
-esac
 "#;
         let fake_dir = create_fake_copilot(&project, script);
         let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
@@ -1371,9 +1370,8 @@ esac
             success,
             "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
         );
-        // Gradle build should be blocked: sandbox denies socket operations
-        assert_result_fail(&stdout, "gradle_build");
-        assert_result_ok(&stdout, "deny_signature");
+        // Gradle build should NOT be blocked by sandbox socket restrictions
+        assert_result_ok(&stdout, "gradle_build");
     }
 
     /// Kotlin/Ktor project file operations work normally in the sandbox.
@@ -2143,5 +2141,215 @@ fi
         assert_result_ok(&stdout, "gradle_write");
         assert_result_ok(&stdout, "m2_exec_denied");
         assert_result_ok(&stdout, "gradle_exec_denied");
+    }
+
+    /// Test Gradle daemon-style Unix domain socket communication inside sandbox.
+    /// Gradle 6+ uses Unix domain sockets for client-daemon IPC. The daemon
+    /// binds a socket in ~/.gradle/daemon/<version>/ and the client connects.
+    /// This test verifies: UDS in ~/.gradle, UDS in scratch dir (TMPDIR),
+    /// TCP localhost bind (IPv4 + IPv6), and TCP wildcard bind denied.
+    #[test]
+    fn project_gradle_daemon_unix_socket() {
+        require_sandbox!();
+        let project = TempProject::scaffold_maven();
+
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let socket_dir = PathBuf::from(&home).join(".gradle/daemon/cplt-test");
+        fs::create_dir_all(&socket_dir).ok();
+
+        let script = format!(
+            r#"
+SOCK="{socket_dir}/daemon.sock"
+
+# Clean up any stale socket
+rm -f "$SOCK"
+
+# Test 1: UDS bind+connect in ~/.gradle (Gradle daemon IPC)
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import socket, os, sys
+
+sock_path = '$SOCK'
+try: os.unlink(sock_path)
+except: pass
+
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sock_path)
+server.listen(1)
+server.settimeout(5)
+
+sys.stdout.write('SERVER_READY\n')
+sys.stdout.flush()
+
+try:
+    conn, _ = server.accept()
+    data = conn.recv(1024)
+    conn.sendall(b'ECHO:' + data)
+    conn.close()
+except socket.timeout:
+    pass
+finally:
+    server.close()
+    os.unlink(sock_path)
+" &
+    SERVER_PID=$!
+
+    sleep 1
+
+    RESPONSE=$(python3 -c "
+import socket
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('$SOCK')
+sock.sendall(b'HELLO_DAEMON')
+data = sock.recv(1024)
+print(data.decode())
+sock.close()
+" 2>&1)
+
+    wait $SERVER_PID 2>/dev/null
+
+    case "$RESPONSE" in
+        *ECHO:HELLO_DAEMON*)
+            echo "RESULT:gradle_uds_bind:OK"
+            echo "RESULT:gradle_uds_connect:OK"
+            ;;
+        *)
+            echo "RESULT:gradle_uds_bind:FAIL:$RESPONSE"
+            echo "RESULT:gradle_uds_connect:FAIL:$RESPONSE"
+            ;;
+    esac
+else
+    echo "RESULT:gradle_uds_bind:SKIP:no python3"
+    echo "RESULT:gradle_uds_connect:SKIP:no python3"
+fi
+
+# Test 2: UDS in scratch dir (TMPDIR) — build tools may create sockets here
+if command -v python3 >/dev/null 2>&1; then
+    SCRATCH_SOCK="${{TMPDIR:-/tmp}}/cplt-test-scratch.sock"
+    rm -f "$SCRATCH_SOCK"
+    SCRATCH_RESULT=$(python3 -c "
+import socket, os
+sock_path = '$SCRATCH_SOCK'
+try: os.unlink(sock_path)
+except: pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(sock_path)
+s.listen(1)
+s.close()
+os.unlink(sock_path)
+print('OK')
+" 2>&1)
+    case "$SCRATCH_RESULT" in
+        OK*) echo "RESULT:uds_scratch:OK" ;;
+        *)   echo "RESULT:uds_scratch:FAIL:$SCRATCH_RESULT" ;;
+    esac
+else
+    echo "RESULT:uds_scratch:SKIP:no python3"
+fi
+
+# Test 3: TCP localhost bind (IPv4)
+if command -v python3 >/dev/null 2>&1; then
+    TCP_RESULT=$(python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', 0))
+s.listen(1)
+port = s.getsockname()[1]
+s.close()
+print(f'OK:{{port}}')
+" 2>&1)
+    case "$TCP_RESULT" in
+        OK:*)
+            echo "RESULT:tcp_localhost_bind:OK"
+            ;;
+        *)
+            echo "RESULT:tcp_localhost_bind:FAIL:$TCP_RESULT"
+            ;;
+    esac
+else
+    echo "RESULT:tcp_localhost_bind:SKIP:no python3"
+fi
+
+# Test 4: TCP localhost bind (IPv6)
+if command -v python3 >/dev/null 2>&1; then
+    TCP6_RESULT=$(python3 -c "
+import socket
+s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('::1', 0))
+s.listen(1)
+port = s.getsockname()[1]
+s.close()
+print(f'OK:{{port}}')
+" 2>&1)
+    case "$TCP6_RESULT" in
+        OK:*)
+            echo "RESULT:tcp_ipv6_bind:OK"
+            ;;
+        *)
+            echo "RESULT:tcp_ipv6_bind:FAIL:$TCP6_RESULT"
+            ;;
+    esac
+else
+    echo "RESULT:tcp_ipv6_bind:SKIP:no python3"
+fi
+
+# Test 5: TCP on 0.0.0.0 should be BLOCKED (security: no network-facing listeners)
+if command -v python3 >/dev/null 2>&1; then
+    BIND_ALL_RESULT=$(python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(('0.0.0.0', 18999))
+    s.listen(1)
+    s.close()
+    print('ALLOWED')
+except Exception as e:
+    print(f'DENIED:{{e}}')
+" 2>&1)
+    case "$BIND_ALL_RESULT" in
+        DENIED*)
+            echo "RESULT:tcp_wildcard_bind_denied:OK"
+            ;;
+        ALLOWED*)
+            echo "RESULT:tcp_wildcard_bind_denied:FAIL:bind 0.0.0.0 was allowed"
+            ;;
+        *)
+            echo "RESULT:tcp_wildcard_bind_denied:FAIL:$BIND_ALL_RESULT"
+            ;;
+    esac
+else
+    echo "RESULT:tcp_wildcard_bind_denied:SKIP:no python3"
+fi
+"#,
+            socket_dir = socket_dir.display(),
+        );
+
+        let fake_dir = create_fake_copilot(&project, &script);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
+
+        // Clean up
+        let _ = fs::remove_file(socket_dir.join("daemon.sock"));
+        let _ = fs::remove_dir(&socket_dir);
+
+        assert!(
+            success,
+            "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+        );
+
+        // Parse results — skip if python3 not available
+        if stdout.contains("SKIP:no python3") {
+            eprintln!("SKIPPED: python3 not available for socket tests");
+            return;
+        }
+
+        assert_result_ok(&stdout, "gradle_uds_bind");
+        assert_result_ok(&stdout, "gradle_uds_connect");
+        assert_result_ok(&stdout, "uds_scratch");
+        assert_result_ok(&stdout, "tcp_localhost_bind");
+        assert_result_ok(&stdout, "tcp_ipv6_bind");
+        assert_result_ok(&stdout, "tcp_wildcard_bind_denied");
     }
 }

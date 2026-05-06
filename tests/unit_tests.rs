@@ -1651,8 +1651,8 @@ fn profile_denies_exec_from_tmp() {
     );
     // Must NOT contain JVM Attach API socket rules by default (opt-in via --allow-jvm-attach)
     assert!(
-        !p.contains("unix-socket"),
-        "Default profile must NOT contain unix-socket rules — JVM attach is opt-in"
+        !p.contains(".java_pid"),
+        "Default profile must NOT contain .java_pid socket rules — JVM attach is opt-in"
     );
 }
 
@@ -1727,6 +1727,67 @@ fn profile_allows_jvm_attach_when_flag_set() {
     assert!(
         !p.contains("unix-socket (subpath \"/private/tmp\")"),
         "Profile must NOT have broad subpath unix-socket rule — exposes SSH_AUTH_SOCK"
+    );
+}
+
+// ============================================================
+// TCP bind restricted to localhost — wildcard 0.0.0.0 must be denied
+// ============================================================
+
+#[test]
+fn profile_denies_wildcard_tcp_bind() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    // Explicit deny for all IP binds, then re-allow localhost.
+    // This blocks 0.0.0.0 and external IPs (SBPL more-specific-wins).
+    assert!(
+        p.contains(r#"(deny network-bind (local ip "*:*"))"#),
+        "Profile must deny wildcard IP bind"
+    );
+    assert!(
+        p.contains(r#"(deny network-inbound (local ip "*:*"))"#),
+        "Profile must deny wildcard IP inbound"
+    );
+    assert!(
+        p.contains(r#"(allow network-bind (local ip "localhost:*"))"#),
+        "Profile must allow localhost bind"
+    );
+    assert!(
+        p.contains(r#"(allow network-inbound (local ip "localhost:*"))"#),
+        "Profile must allow localhost inbound"
+    );
+    // Deny must come BEFORE allow for SBPL more-specific-wins to work correctly
+    let deny_pos = p.find(r#"(deny network-bind (local ip "*:*"))"#).unwrap();
+    let allow_pos = p
+        .find(r#"(allow network-bind (local ip "localhost:*"))"#)
+        .unwrap();
+    assert!(
+        deny_pos < allow_pos,
+        "Deny wildcard must come before allow localhost in profile"
     );
 }
 
