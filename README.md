@@ -942,6 +942,14 @@ Docker is **intentionally blocked** — `~/.docker` is denied and the Docker soc
 - Local databases via Docker Compose need `--allow-localhost <PORT>` for the exposed port (the database container runs outside the sandbox)
 - Consider running database/Kafka containers before starting cplt, then use `--allow-localhost` for the ports
 
+**Opting in (⚠️ dangerous):** If you understand the risks (container mounts bypass the sandbox entirely), you can allow Docker access:
+
+```bash
+cplt config set sandbox.allow_docker true
+# or per-session:
+cplt --allow-docker
+```
+
 ### SSH agent blocking
 
 SSH agent access is blocked (unix socket denied), which means:
