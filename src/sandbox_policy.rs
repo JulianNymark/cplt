@@ -105,6 +105,7 @@ pub(super) const TOOL_READ_DIRS: &[&str] = &[
     "/usr/local",
     "/opt/homebrew",
     "/Library/Developer/CommandLineTools",
+    "/Library/Java/JavaVirtualMachines",
 ];
 
 /// Suffixes of env var names that indicate secrets/credentials.

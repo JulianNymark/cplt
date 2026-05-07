@@ -1380,7 +1380,11 @@ fi
             "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
         );
         // Gradle JVM startup should NOT be blocked by sandbox
-        assert_result_ok(&stdout, "gradle_build");
+        let expected = "RESULT:gradle_build:OK";
+        assert!(
+            stdout.contains(expected),
+            "Expected {expected} in output.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
     }
 
     /// Kotlin/Ktor project file operations work normally in the sandbox.
