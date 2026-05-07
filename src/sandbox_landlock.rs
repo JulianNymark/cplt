@@ -72,6 +72,12 @@ pub struct NetRule {
 pub struct LandlockPolicy {
     pub fs_rules: Vec<FsRule>,
     pub net_rules: Vec<NetRule>,
+    /// Whether to handle (and thus restrict) TCP connect at the kernel level.
+    /// When false, all outbound TCP connect is unrestricted by Landlock.
+    /// This is set to false when `allow_localhost_any` is true because Landlock
+    /// network rules are port-based only — they cannot distinguish localhost
+    /// from remote hosts. The proxy still provides domain-level filtering.
+    pub restrict_net_connect: bool,
 }
 
 /// Pre-computed data for sandbox application in the child process.
@@ -94,6 +100,8 @@ pub struct PrecomputedSandbox {
     /// `O_CLOEXEC`; the parent leaks them (harmless — ~30 fds, program exits).
     pub pre_opened_fds: Vec<(i32, FsAccess)>,
     pub net_rules: Vec<NetRule>,
+    /// Whether to restrict TCP connect at the kernel level.
+    pub restrict_net_connect: bool,
     pub seccomp_filter: Vec<BpfInstruction>,
 }
 
@@ -586,9 +594,16 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
     // from the proxy (blocks exfiltration) and env hardening (blocks
     // hook injection). See module-level doc comment.
 
+    // Landlock network rules are port-based only — they cannot distinguish
+    // localhost from remote hosts. When allow_localhost_any is true, we must
+    // disable kernel-level ConnectTcp restriction entirely (the proxy still
+    // provides domain filtering and port enforcement for remote connections).
+    let restrict_net_connect = !config.allow_localhost_any;
+
     LandlockPolicy {
         fs_rules,
         net_rules,
+        restrict_net_connect,
     }
 }
 
@@ -660,7 +675,10 @@ pub fn describe_policy(policy: &LandlockPolicy) -> String {
         out.push('\n');
     }
 
-    if !policy.net_rules.is_empty() {
+    if !policy.restrict_net_connect {
+        out.push_str("## Network (TCP connect)\n");
+        out.push_str("  UNRESTRICTED (--allow-localhost-any; proxy provides filtering)\n\n");
+    } else if !policy.net_rules.is_empty() {
         out.push_str("## Network (TCP connect, requires kernel 6.7+ / ABI v4)\n");
         for rule in &policy.net_rules {
             let _ = writeln!(out, "  port {}", rule.port);
@@ -768,7 +786,7 @@ pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> 
 
     let abi_version = check_availability()?;
     let seccomp_filter = build_seccomp_filter();
-    if abi_version < ABI::V4 {
+    if abi_version < ABI::V4 && policy.restrict_net_connect {
         // Check if proxy is configured (proxy_port would have been added to net_rules)
         let has_proxy = policy.net_rules.iter().any(|r| r.port != 443);
         if has_proxy {
@@ -799,11 +817,13 @@ pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> 
     }
 
     let net_rules = policy.net_rules.clone();
+    let restrict_net_connect = policy.restrict_net_connect;
 
     Ok(PrecomputedSandbox {
         abi_version: abi_version as u32,
         pre_opened_fds,
         net_rules,
+        restrict_net_connect,
         seccomp_filter,
     })
 }
@@ -957,9 +977,10 @@ pub fn apply_precomputed(sandbox: &PrecomputedSandbox) -> std::io::Result<()> {
         .handle_access(AccessFs::from_all(abi))
         .map_err(std::io::Error::other)?;
 
-    // Always handle ConnectTcp on ABI v4+ — even with empty rules this means
-    // "deny all TCP connect" (deny-by-default for network).
-    let ruleset = if abi_version >= 4 {
+    // Handle ConnectTcp on ABI v4+ only when network restriction is enabled.
+    // When allow_localhost_any is set, we skip this — Landlock cannot
+    // distinguish localhost from remote, so we rely on the proxy instead.
+    let ruleset = if abi_version >= 4 && sandbox.restrict_net_connect {
         ruleset
             .handle_access(AccessNet::ConnectTcp)
             .map_err(std::io::Error::other)?
@@ -1019,8 +1040,8 @@ pub fn apply_precomputed(sandbox: &PrecomputedSandbox) -> std::io::Result<()> {
             .map_err(std::io::Error::other)?;
     }
 
-    // Add network rules (ABI v4+).
-    if abi_version >= 4 {
+    // Add network rules (ABI v4+, only when network restriction is active).
+    if abi_version >= 4 && sandbox.restrict_net_connect {
         for rule in &sandbox.net_rules {
             created = created
                 .add_rule(NetPort::new(rule.port, AccessNet::ConnectTcp))
@@ -1391,6 +1412,30 @@ mod tests {
 
         assert!(policy.net_rules.iter().any(|r| r.port == 3000));
         assert!(policy.net_rules.iter().any(|r| r.port == 5173));
+        assert!(policy.restrict_net_connect);
+    }
+
+    #[test]
+    fn allow_localhost_any_disables_net_connect_restriction() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let mut config = test_config(&project, &home);
+        config.allow_localhost_any = true;
+        let policy = generate_policy(&config);
+
+        // Net rules are still populated (used for display) but restriction is off
+        assert!(!policy.restrict_net_connect);
+    }
+
+    #[test]
+    fn default_config_restricts_net_connect() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let config = test_config(&project, &home);
+        let policy = generate_policy(&config);
+
+        assert!(policy.restrict_net_connect);
+        assert!(policy.net_rules.iter().any(|r| r.port == 443));
     }
 
     #[test]
@@ -1559,6 +1604,19 @@ mod tests {
         assert!(desc.contains("Network"));
         assert!(desc.contains("port 8080"));
         assert!(desc.contains("allowlist-only"));
+    }
+
+    #[test]
+    fn describe_policy_shows_unrestricted_when_localhost_any() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let mut config = test_config(&project, &home);
+        config.allow_localhost_any = true;
+        let policy = generate_policy(&config);
+        let desc = describe_policy(&policy);
+
+        assert!(desc.contains("UNRESTRICTED"));
+        assert!(desc.contains("--allow-localhost-any"));
     }
 
     #[test]

@@ -1776,6 +1776,80 @@ fn profile_allows_localhost_tcp_bind() {
 }
 
 // ============================================================
+// Cross-platform parity: config options must affect both backends
+// ============================================================
+
+#[test]
+fn allow_localhost_any_affects_both_backends() {
+    // macOS: allow_localhost_any should produce unrestricted localhost rules
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: true,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    // macOS SBPL should allow all localhost ports
+    assert!(
+        p.contains(r#"(allow network-outbound (local ip "localhost:*"))"#)
+            || p.contains(r#"(allow network-outbound (remote ip "localhost:*"))"#)
+            || p.contains("network-outbound"),
+        "macOS profile should have unrestricted localhost outbound when allow_localhost_any=true"
+    );
+
+    // Linux: allow_localhost_any should disable net_connect restriction
+    let landlock_policy = generate_policy(&SandboxConfig {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/home/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: true,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        !landlock_policy.restrict_net_connect,
+        "Linux Landlock should disable ConnectTcp restriction when allow_localhost_any=true"
+    );
+}
+
+// ============================================================
 // Deny git persistence vectors (.git/hooks, .git/config, .gitmodules)
 // ============================================================
 

@@ -924,6 +924,7 @@ Localhost outbound is blocked by default, which prevents sandboxed processes fro
 | ------------------------------ | ----------------- | ---------------------------------------------------- |
 | `npm install` (registry)       | ✅ Works           | Uses HTTPS to `registry.npmjs.org:443`               |
 | `gradle build` (Maven Central) | ✅ Works           | Uses HTTPS to `repo1.maven.org:443`                  |
+| Gradle daemon (ephemeral port) | ❌ Blocked         | Use `--allow-localhost-any` (daemon uses random ports) |
 | Local PostgreSQL (`:5432`)     | ❌ Blocked         | Use `--allow-localhost 5432`                         |
 | Local Redis (`:6379`)          | ❌ Blocked         | Use `--allow-localhost 6379`                         |
 | Local Kafka (`:9092`)          | ❌ Blocked         | Use `--allow-localhost 9092`                         |
@@ -1173,6 +1174,8 @@ read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
 
 - **Kernel 5.13+ required** — Landlock LSM must be enabled (`cat /sys/kernel/security/lsm`)
 - **TCP port filtering requires kernel 6.7+** — older kernels get filesystem-only enforcement; network security via proxy only
+- **Landlock network rules are port-based only** — cannot distinguish localhost from remote. When `--allow-localhost-any` is set, kernel TCP connect filtering is disabled entirely (the proxy still enforces domain filtering and port restrictions for remote connections)
+- **Gradle/JVM on Linux** — Gradle daemon uses ephemeral localhost ports. Use `--allow-localhost-any` or `cplt config set sandbox.allow_localhost_any true` to allow Gradle client↔daemon communication
 - **Landlock cannot deny subpaths within allowed paths** — unlike macOS Seatbelt, Landlock cannot deny `.env` reads or `.git/hooks` writes *inside* the project directory at the kernel level. Defense-in-depth comes from the proxy (blocks exfiltration) and env hardening (`GIT_CONFIG_NOSYSTEM`, etc.)
 - **`--deny-path` has no effect** — Landlock is allowlist-only; a runtime warning is emitted
 - **Some macOS flags are not applicable** — `--allow-docker`, `--allow-jvm-attach`, `--allow-cache-exec` emit warnings and are ignored on Linux
