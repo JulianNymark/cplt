@@ -893,6 +893,17 @@ cplt config set sandbox.allow_tmp_exec true
 cplt config set sandbox.allow_jvm_attach true
 ```
 
+**Kotlin daemon on Linux:** The Kotlin compiler daemon writes marker files to `~/.local/share/kotlin/daemon/` and communicates via localhost. If you see `AccessDeniedException: .../kotlin-daemon-client-tsmarker*.tmp`, cplt grants write access to `~/.local/share/kotlin/` automatically. If the daemon still can't connect (falls back to non-daemon compilation with garbled Unicode paths), ensure `--allow-localhost-any` is set — the daemon uses ephemeral ports:
+
+```bash
+# Recommended for Kotlin/Gradle on Linux:
+cplt config set sandbox.allow_localhost_any true
+cplt config set sandbox.allow_jvm_attach true
+
+# If you need additional write paths (e.g. custom Kotlin data dir):
+cplt config set sandbox.allow_write '["~/.local/share/kotlin"]'
+```
+
 If you're still seeing this error, check that you haven't set `scratch_dir = false` in your config:
 
 ```bash

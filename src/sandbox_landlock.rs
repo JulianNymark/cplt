@@ -170,119 +170,6 @@ const LINUX_TOOL_DIRS: &[&str] = &[
     "/run/current-system", // NixOS
 ];
 
-/// Home tool directories for Linux.
-///
-/// Shares most entries with macOS HOME_TOOL_DIRS (in sandbox_policy.rs)
-/// but replaces macOS-specific `Library/Caches` and `Library/pnpm` with
-/// their Linux equivalents.
-pub(crate) const LINUX_HOME_TOOL_DIRS: &[HomeToolDir] = &[
-    // ── Shared with macOS (same paths, same permissions) ──
-    HomeToolDir {
-        path: ".local",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".mise",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".nvm",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".pyenv",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".cargo",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".rustup",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".sdkman",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: "go/bin",
-        process_exec: true,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".gradle",
-        process_exec: false,
-        map_exec: true,
-        write: true,
-    },
-    HomeToolDir {
-        path: ".m2",
-        process_exec: false,
-        map_exec: true,
-        write: true,
-    },
-    HomeToolDir {
-        path: ".konan",
-        process_exec: false,
-        map_exec: true,
-        write: true,
-    },
-    HomeToolDir {
-        path: "go/pkg",
-        process_exec: false,
-        map_exec: true,
-        write: false,
-    },
-    HomeToolDir {
-        path: ".yarn",
-        process_exec: false,
-        map_exec: false,
-        write: true,
-    },
-    // ── Linux-specific (replaces macOS Library/* paths) ──
-    HomeToolDir {
-        path: ".cache",
-        process_exec: false,
-        map_exec: false,
-        write: true,
-    },
-    HomeToolDir {
-        path: ".local/share/pnpm",
-        process_exec: true,
-        map_exec: true,
-        write: true,
-    },
-    // ── Linux-only runtimes ──
-    HomeToolDir {
-        path: ".deno",
-        process_exec: true,
-        map_exec: true,
-        write: true,
-    },
-    HomeToolDir {
-        path: ".bun",
-        process_exec: true,
-        map_exec: true,
-        write: true,
-    },
-];
-
 /// Individual home config files (and select config directories) that tools
 /// need read access to.
 ///
@@ -377,7 +264,7 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
     }
 
     // ── Home tool directories (filtered by discovery) ──
-    for dir in LINUX_HOME_TOOL_DIRS {
+    for dir in policy::home_tool_dirs() {
         if should_include_tool_dir(dir, config) {
             fs_rules.push(FsRule {
                 path: home.join(dir.path),
@@ -1296,7 +1183,7 @@ mod tests {
         let config = test_config(&project, &home);
         let policy = generate_policy(&config);
 
-        for dir in LINUX_HOME_TOOL_DIRS {
+        for dir in policy::home_tool_dirs() {
             let path = home.join(dir.path);
             let rule = policy
                 .fs_rules

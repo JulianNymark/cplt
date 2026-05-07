@@ -364,6 +364,13 @@ pub struct HomeToolDir {
 }
 
 /// Tool directories under $HOME with per-directory permissions.
+///
+/// **IMPORTANT: This is the single source of truth for both macOS (SBPL) and
+/// Linux (Landlock) sandboxes.** Do NOT create platform-specific lists.
+/// Include both macOS paths (e.g. `Library/Caches`) and XDG paths (e.g. `.cache`)
+/// in this one list — entries for paths that don't exist on a given platform
+/// are harmlessly skipped at runtime (the profile generator checks existence).
+///
 /// NOTE: Only tool/binary dirs, never source code dirs.
 /// ~/go/src is intentionally excluded — it contains other repos.
 pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
@@ -423,6 +430,18 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         write: false,
     },
     HomeToolDir {
+        path: ".deno",
+        process_exec: true,
+        map_exec: true,
+        write: true,
+    },
+    HomeToolDir {
+        path: ".bun",
+        process_exec: true,
+        map_exec: true,
+        write: true,
+    },
+    HomeToolDir {
         path: "go/bin",
         process_exec: true,
         map_exec: true,
@@ -471,15 +490,38 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         map_exec: false,
         write: true,
     },
+    // XDG cache (Linux equivalent of Library/Caches)
+    HomeToolDir {
+        path: ".cache",
+        process_exec: false,
+        map_exec: false,
+        write: true,
+    },
     // pnpm global store: contains packages + executable shims
+    // macOS-native path
     HomeToolDir {
         path: "Library/pnpm",
         process_exec: true,
         map_exec: true,
         write: true,
     },
+    // XDG path (Linux)
+    HomeToolDir {
+        path: ".local/share/pnpm",
+        process_exec: true,
+        map_exec: true,
+        write: true,
+    },
     // Kotlin compiler daemon: client marker files and run files.
     // The Kotlin Maven/Gradle plugin uses this for daemon lifecycle management.
+    // XDG path (Linux, some macOS setups)
+    HomeToolDir {
+        path: ".local/share/kotlin",
+        process_exec: false,
+        map_exec: false,
+        write: true,
+    },
+    // macOS-native path
     HomeToolDir {
         path: "Library/Application Support/kotlin",
         process_exec: false,
@@ -488,23 +530,13 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
     },
 ];
 
-/// Return the platform-appropriate home tool directory list.
+/// Return the home tool directory list.
 ///
-/// macOS uses `HOME_TOOL_DIRS` (includes `Library/Caches`, `Library/pnpm`).
-/// Linux uses `LINUX_HOME_TOOL_DIRS` (includes `.cache`, `.local/share/pnpm`).
+/// A single unified list covers both macOS and Linux paths. Entries for
+/// paths that don't exist on a given platform are harmlessly skipped at
+/// runtime (the profile generator checks `dir.exists()` before emitting rules).
 pub fn home_tool_dirs() -> &'static [HomeToolDir] {
-    #[cfg(target_os = "macos")]
-    {
-        HOME_TOOL_DIRS
-    }
-    #[cfg(target_os = "linux")]
-    {
-        super::landlock_mod::LINUX_HOME_TOOL_DIRS
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        HOME_TOOL_DIRS
-    }
+    HOME_TOOL_DIRS
 }
 
 /// Validate that a path is safe for interpolation into SBPL profile strings.

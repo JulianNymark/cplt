@@ -111,6 +111,9 @@ Do not modify `blocked-domains.txt` without reviewing the domain's purpose.
 - `(deny default)` + specific allows — deny-by-default sandbox
 - `ENV_ALLOWLIST` — only safe env vars pass through
 - `HARDENING_ENV_VARS` — declarative security env injection (add new entries here)
+- `HOME_TOOL_DIRS` — **single unified list** for both macOS and Linux. Include both
+  `Library/*` (macOS) and `.cache`/`.local/share/*` (XDG/Linux) paths in this one list.
+  Do NOT create platform-specific duplicates. Non-existent paths are skipped at runtime.
 - `HomeToolDir` — per-directory exec/map/write permissions
 - Config precedence: CLI flag > config file > default (secure default)
 
