@@ -1345,19 +1345,21 @@ esac
         let project = TempProject::scaffold_kotlin_ktor();
 
         let script = r#"
-# Run gradle with --no-daemon to keep it simple.
-# UDS in ~/.gradle and TCP localhost bind are now allowed.
-if GRADLE_OUTPUT=$(gradle build --no-daemon 2>&1); then
+# Run "gradle tasks" with --no-daemon — exercises Gradle startup, daemon IPC,
+# and project parsing without downloading dependencies from Maven Central.
+# This isolates sandbox permission issues from network availability.
+if GRADLE_OUTPUT=$(gradle tasks --no-daemon 2>&1); then
     echo "RESULT:gradle_build:OK"
 else
-    # Gradle may fail for reasons other than sandbox (missing dependencies, etc.)
-    # Check if it's a sandbox deny or a build error
+    # Check if it's a sandbox deny or an unrelated build/config error.
+    # Only match patterns that indicate OS-level permission denial, NOT
+    # generic network errors (which may contain "socket" from timeouts).
     case "$GRADLE_OUTPUT" in
-        *"socket"*|*"not permitted"*|*"permission denied"*|*"Operation not permitted"*|*"sandbox"*)
+        *"Operation not permitted"*|*"not permitted"*|*"permission denied"*|*"Permission denied"*|*"sandbox"*|*"deny("*)
             echo "RESULT:gradle_build:FAIL:sandbox_deny"
             ;;
         *)
-            # Build error (not sandbox related) — still counts as a pass for sandbox purposes
+            # Config/version error (not sandbox related) — pass for sandbox purposes
             echo "RESULT:gradle_build:OK:build_error_but_not_sandbox"
             ;;
     esac
