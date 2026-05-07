@@ -1843,6 +1843,10 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
     // Ensure pkg_base exists — Copilot needs it for extraction
     let _ = std::fs::create_dir_all(&pkg_base);
 
+    // Clean up stale .extracting-* temp dirs from previous failed attempts.
+    // These can confuse the SEA loader into thinking extraction is in progress.
+    clean_stale_extracting_dirs(&pkg_base);
+
     // Snapshot existing extraction dirs so we can detect the new one.
     let dirs_before = extraction_dirs(&pkg_base);
 
@@ -1911,25 +1915,32 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
         extracted_dir_name = find_new_extracted_dir(&pkg_base, &dirs_before);
     }
 
+    // If --version didn't produce a new dir, check if copilot already has a
+    // valid extraction on disk. This handles two cases:
+    //   1. Migration: first cplt run on a system with pre-existing extraction
+    //   2. Lazy SEA: newer copilot versions may not extract on --version alone
+    if extracted_dir_name.is_none() {
+        extracted_dir_name = find_any_complete_dir(&pkg_base);
+    }
+
+    // Last resort: if no complete dir exists, try `-p exit` which forces full
+    // startup (and thus extraction) in case --version uses a lazy code path.
+    if extracted_dir_name.is_none() {
+        extracted_dir_name = try_extraction_fallback(copilot_bin, &pkg_base, &dirs_before);
+        // Check again for any complete dir after fallback
+        if extracted_dir_name.is_none() {
+            extracted_dir_name = find_any_complete_dir(&pkg_base);
+        }
+    }
+
     if let Some(ref dir_name) = extracted_dir_name {
         // Persist success: binary identity + extracted dir name
         let _ = std::fs::create_dir_all(&cache_dir);
         let _ = std::fs::write(&cache_file, format!("{binary_id}\n{dir_name}"));
-        ok("Copilot runtime extracted");
-        Ok(())
-    } else if !cache_file.exists() {
-        // Migration: first run of new cplt with an already-extracted Copilot.
-        // Only cache an existing dir when no marker file exists yet (i.e. this
-        // is genuinely the first time cplt tracks extraction). On subsequent
-        // runs with a changed binary, we must NOT fall back to an old dir —
-        // that would recreate the original version-mismatch bug.
-        if let Some(name) = find_any_complete_dir(&pkg_base) {
-            let _ = std::fs::create_dir_all(&cache_dir);
-            let _ = std::fs::write(&cache_file, format!("{binary_id}\n{name}"));
-            Ok(())
-        } else {
-            Ok(()) // No pkg dir yet — Copilot may not use SEA on this system
+        if !dirs_before.contains(dir_name) {
+            ok("Copilot runtime extracted");
         }
+        Ok(())
     } else {
         Err(
             "Copilot runtime extraction failed. The sandbox blocks writes to copilot/pkg,\n  \
@@ -2046,6 +2057,21 @@ fn has_extracting_dir(pkg_base: &Path) -> bool {
             let name = e.file_name().to_string_lossy().into_owned();
             name.starts_with(".extracting-")
         })
+}
+
+/// Remove stale `.extracting-*` temp dirs left over from previous failed attempts.
+/// These can prevent the SEA loader from starting a fresh extraction.
+#[cfg(target_os = "macos")]
+fn clean_stale_extracting_dirs(pkg_base: &Path) {
+    let Ok(entries) = std::fs::read_dir(pkg_base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(".extracting-") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Find a newly created extraction dir (not in `before`) that has `.extraction-complete`.
