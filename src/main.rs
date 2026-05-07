@@ -1213,6 +1213,7 @@ fn run_doctor() -> ExitCode {
             .unwrap_or_else(|_| PathBuf::from("."))
     };
 
+    info(&format!("cplt:     {}", LONG_VERSION));
     info(&format!("Project:  {}", project_dir.display()));
     info(&format!("Home:     {}", home_dir.display()));
     eprintln!();

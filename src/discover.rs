@@ -18,8 +18,18 @@ use std::path::{Path, PathBuf};
 pub struct Discovery {
     pub auth: AuthDiscovery,
     pub copilot: CopilotDiscovery,
+    pub agents: Vec<AgentInfo>,
     pub tools: ToolDiscovery,
     pub paths: PathDiscovery,
+}
+
+/// Discovered agent binary with version info.
+#[derive(Debug)]
+pub struct AgentInfo {
+    pub name: &'static str,
+    pub binary_name: &'static str,
+    pub path: PathBuf,
+    pub version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -179,6 +189,48 @@ pub fn discover_copilot(home_dir: &Path) -> CopilotDiscovery {
     }
 }
 
+// ── Agent discovery ─────────────────────────────────────────────
+
+/// Agents to probe: (display_name, binary_name, version_flag)
+const AGENTS_TO_CHECK: &[(&str, &str, &[&str])] = &[
+    ("Copilot", "copilot", &["--version"]),
+    ("OpenCode", "opencode", &["--version"]),
+    ("Gemini", "gemini", &["--version"]),
+    ("Claude", "claude", &["--version"]),
+];
+
+/// Discover all available AI coding agents in PATH.
+pub fn discover_agents() -> Vec<AgentInfo> {
+    AGENTS_TO_CHECK
+        .iter()
+        .filter_map(|(name, binary, version_args)| {
+            let path = which_resolved(binary)?;
+            let version = std::process::Command::new(binary)
+                .args(*version_args)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        let stdout = String::from_utf8_lossy(&o.stdout);
+                        // Extract first token that starts with a digit (version number)
+                        stdout
+                            .split_whitespace()
+                            .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                            .map(|v| v.trim_end_matches('.').to_string())
+                    } else {
+                        None
+                    }
+                });
+            Some(AgentInfo {
+                name,
+                binary_name: binary,
+                path,
+                version,
+            })
+        })
+        .collect()
+}
+
 // ── Tool discovery ──────────────────────────────────────────────
 
 const TOOLS_TO_CHECK: &[&str] = &[
@@ -266,6 +318,7 @@ pub fn discover_all(home_dir: &Path, project_dir: &Path) -> Discovery {
     Discovery {
         auth: discover_auth(home_dir),
         copilot: discover_copilot(home_dir),
+        agents: discover_agents(),
         tools: discover_tools(home_dir),
         paths: discover_paths(home_dir, project_dir),
     }
@@ -319,18 +372,29 @@ impl Discovery {
         }
         eprintln!();
 
-        // Copilot CLI section
-        eprintln!("{BOLD}{BLUE}[doctor]{NC} {BOLD}Copilot CLI{NC}");
-        if let Some(ref path) = self.copilot.binary_path {
-            eprintln!("  {GREEN}✓{NC} Path: {}", path.display());
-        } else {
-            eprintln!("  {RED}✗{NC} copilot not found in PATH");
+        // Agents section
+        eprintln!("{BOLD}{BLUE}[doctor]{NC} {BOLD}Agents{NC}");
+        if self.agents.is_empty() {
+            eprintln!("  {RED}✗{NC} No supported agents found in PATH");
             critical_ok = false;
-        }
-        if let Some(ref version) = self.copilot.version {
-            eprintln!("  {GREEN}✓{NC} Version: {version}");
-        } else if self.copilot.binary_path.is_some() {
-            eprintln!("  {YELLOW}⚠{NC} Could not determine version");
+        } else {
+            for agent in &self.agents {
+                if let Some(ref ver) = agent.version {
+                    eprintln!(
+                        "  {GREEN}✓{NC} {} ({}) v{ver}: {}",
+                        agent.name,
+                        agent.binary_name,
+                        agent.path.display()
+                    );
+                } else {
+                    eprintln!(
+                        "  {GREEN}✓{NC} {} ({}): {}",
+                        agent.name,
+                        agent.binary_name,
+                        agent.path.display()
+                    );
+                }
+            }
         }
         if !self.copilot.native_modules.is_empty() {
             let names: Vec<&str> = self
@@ -339,9 +403,10 @@ impl Discovery {
                 .iter()
                 .map(|m| m.name.as_str())
                 .collect();
-            eprintln!("  {GREEN}✓{NC} Native modules: {}", names.join(", "));
-        } else {
-            eprintln!("  {YELLOW}⚠{NC} No native .node modules found in ~/.copilot/pkg/");
+            eprintln!(
+                "  {GREEN}✓{NC} Copilot native modules: {}",
+                names.join(", ")
+            );
         }
         eprintln!();
 
