@@ -484,8 +484,8 @@ mod e2e_tests {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         assert!(
-            stderr.contains("Copilot CLI") && stderr.contains("Version"),
-            "--doctor should show Copilot CLI section with version.\nstderr: {stderr}"
+            stderr.contains("Agents") && stderr.contains("Copilot"),
+            "--doctor should show Agents section with Copilot.\nstderr: {stderr}"
         );
     }
 

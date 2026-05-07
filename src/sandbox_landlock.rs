@@ -335,13 +335,15 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
         });
     }
 
-    // ── /tmp: read + write, execute only if explicitly allowed ──
+    // ── /tmp: read + write, execute if allow_tmp_exec OR allow_jvm_attach ──
+    // ByteBuddy/MockK self-attach spawns a helper process that writes temp files
+    // to /tmp and the JVM may dlopen() native libs from there.
     fs_rules.push(FsRule {
         path: PathBuf::from("/tmp"),
         access: FsAccess {
             read: true,
             write: true,
-            execute: config.allow_tmp_exec,
+            execute: config.allow_tmp_exec || config.allow_jvm_attach,
             ioctl: false,
         },
     });
@@ -374,6 +376,22 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
             ioctl: false,
         },
     });
+
+    // ── /proc: JVM Attach API needs to read /proc/<pid>/ of the target JVM ──
+    // ByteBuddy/MockK self-attach spawns an external process that reads
+    // /proc/<target_pid>/cmdline, /proc/<target_pid>/root/tmp/, etc.
+    // Only granted with allow_jvm_attach since /proc can expose process info.
+    if config.allow_jvm_attach {
+        fs_rules.push(FsRule {
+            path: PathBuf::from("/proc"),
+            access: FsAccess {
+                read: true,
+                write: false,
+                execute: false,
+                ioctl: false,
+            },
+        });
+    }
 
     // ── Extra read paths from config ──
     for p in config.extra_read {
@@ -1485,6 +1503,34 @@ mod tests {
             !rule.access.execute,
             "/tmp should not have execute by default"
         );
+    }
+
+    #[test]
+    fn jvm_attach_grants_tmp_exec_and_proc_read() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let mut config = test_config(&project, &home);
+        config.allow_jvm_attach = true;
+        let policy = generate_policy(&config);
+
+        let tmp_rule = policy
+            .fs_rules
+            .iter()
+            .find(|r| r.path == Path::new("/tmp"))
+            .expect("/tmp should be in rules");
+        assert!(
+            tmp_rule.access.execute,
+            "/tmp should have execute when allow_jvm_attach is true"
+        );
+
+        let proc_rule = policy
+            .fs_rules
+            .iter()
+            .find(|r| r.path == Path::new("/proc"))
+            .expect("/proc should be in rules when allow_jvm_attach is true");
+        assert!(proc_rule.access.read, "/proc should have read");
+        assert!(!proc_rule.access.write, "/proc should not have write");
+        assert!(!proc_rule.access.execute, "/proc should not have execute");
     }
 
     #[test]
