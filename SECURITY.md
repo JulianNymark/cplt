@@ -614,7 +614,7 @@ These invoke `sandbox-exec` with real Seatbelt profiles and verify **kernel-leve
 | Tool dir permissions | 15 | Each HOME_TOOL_DIR has correct exec/map-exec/write at kernel level |
 | GPG signing | 4 | Default blocks `~/.gnupg`, flag allows pubring read, private keys stay denied, writes stay denied |
 
-### E2E Project Tests (macOS only, 37 tests)
+### E2E Project Tests (macOS only, 38 tests)
 
 End-to-end tests using realistic project scaffolding (Node, Go, Python, Rust, Java/Maven, Kotlin) with fake copilot scripts:
 

@@ -6,10 +6,11 @@ Rust project — macOS Seatbelt sandbox wrapper for GitHub Copilot CLI.
 
 ```bash
 mise run check          # fmt + clippy + unit/lib tests (works inside sandbox)
-mise run test:all       # all suites except live smoke tests (macOS only)
+mise run test:all       # all suites except live smoke tests (macOS only, sandbox-safe)
+mise run test:everything # ALL tests including live smoke (macOS only, NOT sandbox-safe)
 mise run test           # all tests via cargo test (macOS only)
-mise run test:unit      # unit tests only (cross-platform)
-mise run test:lib       # library crate module tests
+mise run test:unit      # unit tests only (cross-platform, sandbox-safe)
+mise run test:lib       # library crate module tests (cross-platform, sandbox-safe)
 mise run clippy         # linter
 mise run fmt            # auto-format
 ```
@@ -40,11 +41,11 @@ Always run `mise run check` at the end of a coding session.
 - `src/main.rs` — CLI entry point, orchestration
 - `src/lib.rs` — library crate root (re-exports modules for test access)
 - `src/proxy.rs` + `src/proxy/` — CONNECT proxy, domain blocking
-- `tests/unit_tests.rs` — cross-platform unit tests (137 tests)
-- `tests/integration.rs` — macOS sandbox-exec kernel-level tests (37 tests)
+- `tests/unit_tests.rs` — cross-platform unit tests (161 tests)
+- `tests/integration.rs` — macOS sandbox-exec kernel-level tests (39 tests)
 - `tests/integration_linux.rs` — Linux Landlock+seccomp kernel-level tests (24 tests)
 - `tests/e2e.rs` — end-to-end with compiled binary + smoke tests (67 tests)
-- `tests/e2e_projects.rs` — e2e tests with realistic project scaffolding (37 tests)
+- `tests/e2e_projects.rs` — e2e tests with realistic project scaffolding (38 tests)
 - `src/agent.rs` — includes 10 agent unit tests (in lib tests)
 - `SECURITY.md` — threat model, defense layers, honest gaps
 
@@ -63,6 +64,7 @@ Test suites and where they can run:
 | `mise run test:e2e-live`| e2e (ignored)  | ❌         | ❌       | ⚠️       | macOS + Copilot auth + network|
 | `mise run check`        | fmt+clippy+unit+lib | ✅    | ✅       | ✅       | None (safe everywhere)        |
 | `mise run test:all`     | all above      | ✅         | ❌       | ✅       | macOS + `copilot` in PATH     |
+| `mise run test:everything` | all + live  | ❌         | ❌       | ⚠️       | macOS + Copilot auth + network|
 
 - **check** runs fmt, clippy, unit_tests, and lib tests — safe inside sandbox, CI, anywhere
 - **unit_tests** + **lib** are cross-platform — use `check` on Linux CI or inside sandbox
