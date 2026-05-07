@@ -1332,8 +1332,11 @@ esac
     // Gradle/Kotlin/Ktor tests
     // ============================================================
 
-    /// Gradle build should succeed in the sandbox with UDS and TCP localhost allowed.
-    /// Requires Gradle to be installed. Uses --no-daemon to avoid background daemon.
+    /// Gradle JVM can launch inside the sandbox. Requires --allow-tmp-exec because
+    /// the JVM extracts native libraries to the system temp dir (/var/folders/...)
+    /// and loads them via dlopen (file-map-executable). Also needs --allow-localhost-any
+    /// since Gradle daemon uses ephemeral localhost ports for IPC.
+    /// UDS is covered by `project_gradle_daemon_unix_socket`.
     #[test]
     fn project_gradle_build_works_with_uds() {
         require_sandbox!();
@@ -1345,35 +1348,38 @@ esac
         let project = TempProject::scaffold_kotlin_ktor();
 
         let script = r#"
-# Run "gradle tasks" with --no-daemon — exercises Gradle startup, daemon IPC,
-# and project parsing without downloading dependencies from Maven Central.
-# This isolates sandbox permission issues from network availability.
-if GRADLE_OUTPUT=$(gradle tasks --no-daemon 2>&1); then
+# Verify Gradle/JVM can launch inside the sandbox.
+# --version exercises: JVM startup (process-exec + file-map-executable for
+# native libs in /var/folders), reading JDK/Gradle files, writing to ~/.gradle/.
+if GRADLE_OUTPUT=$(gradle --version --no-daemon 2>&1); then
     echo "RESULT:gradle_build:OK"
 else
-    # Check if it's a sandbox deny or an unrelated build/config error.
-    # Only match patterns that indicate OS-level permission denial, NOT
-    # generic network errors (which may contain "socket" from timeouts).
+    # Print actual error for CI debugging
+    echo "GRADLE_ERROR: $GRADLE_OUTPUT" >&2
     case "$GRADLE_OUTPUT" in
-        *"Operation not permitted"*|*"not permitted"*|*"permission denied"*|*"Permission denied"*|*"sandbox"*|*"deny("*)
+        *"Operation not permitted"*|*"not permitted"*|*"Permission denied"*|*"sandbox"*|*"deny("*)
             echo "RESULT:gradle_build:FAIL:sandbox_deny"
             ;;
         *)
-            # Config/version error (not sandbox related) — pass for sandbox purposes
             echo "RESULT:gradle_build:OK:build_error_but_not_sandbox"
             ;;
     esac
 fi
 "#;
         let fake_dir = create_fake_copilot(&project, script);
-        // Gradle daemon uses ephemeral localhost ports for client↔daemon IPC
-        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &["--allow-localhost-any"]);
+        // JVM needs file-map-executable in /var/folders for native libs (libjli.dylib etc.)
+        // Gradle daemon needs localhost ports for client↔daemon IPC
+        let (stdout, stderr, success) = run_cplt(
+            &project,
+            &fake_dir,
+            &["--allow-localhost-any", "--allow-tmp-exec"],
+        );
 
         assert!(
             success,
             "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
         );
-        // Gradle build should NOT be blocked by sandbox socket restrictions
+        // Gradle JVM startup should NOT be blocked by sandbox
         assert_result_ok(&stdout, "gradle_build");
     }
 

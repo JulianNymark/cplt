@@ -881,6 +881,18 @@ Tools that compile-then-execute from `$TMPDIR` are **blocked by default** becaus
 
 **JVM note:** On macOS, the JVM ignores `TMPDIR` — it reads `java.io.tmpdir` from `confstr(_CS_DARWIN_USER_TEMP_DIR)` which always returns `/var/folders/...`. cplt automatically injects `-Djava.io.tmpdir=<scratch> -Djansi.tmpdir=<scratch> -Djava.rmi.server.hostname=localhost` via `JAVA_TOOL_OPTIONS` so that Maven Surefire forks, the Kotlin compiler daemon, and Jansi native lib extraction all use the scratch dir. The RMI hostname flag ensures the Kotlin daemon's Java RMI communication stays on `localhost` (without it, `InetAddress.getLocalHost()` may resolve to a non-loopback IP via mDNS, which the sandbox blocks). Override with `--pass-env JAVA_TOOL_OPTIONS` if you need custom JVM flags. For inline mocking (MockK, Mockito, ByteBuddy), also add `--allow-jvm-attach` — see [JVM Attach API](#jvm-attach-api).
 
+**Gradle/JVM still failing?** Some JVM native libraries (e.g. `libjli.dylib`, JNI libs) use `dlopen` from the system temp dir *before* `JAVA_TOOL_OPTIONS` takes effect. If you see "Operation not permitted" during JVM startup itself (not Gradle build), add `--allow-tmp-exec`:
+
+```bash
+# Recommended for Gradle projects (localhost + tmp exec + JVM attach):
+cplt --allow-localhost-any --allow-tmp-exec --allow-jvm-attach -- -p "run tests"
+
+# Or set permanently:
+cplt config set sandbox.allow_localhost_any true
+cplt config set sandbox.allow_tmp_exec true
+cplt config set sandbox.allow_jvm_attach true
+```
+
 If you're still seeing this error, check that you haven't set `scratch_dir = false` in your config:
 
 ```bash
@@ -925,6 +937,7 @@ Localhost outbound is blocked by default, which prevents sandboxed processes fro
 | `npm install` (registry)       | ✅ Works           | Uses HTTPS to `registry.npmjs.org:443`               |
 | `gradle build` (Maven Central) | ✅ Works           | Uses HTTPS to `repo1.maven.org:443`                  |
 | Gradle daemon (ephemeral port) | ❌ Blocked         | Use `--allow-localhost-any` (daemon uses random ports) |
+| Gradle/JVM startup (native libs)| ❌ Blocked        | Use scratch dir (default) or `--allow-tmp-exec` — see [JVM note](#temp-dir-exec) |
 | Local PostgreSQL (`:5432`)     | ❌ Blocked         | Use `--allow-localhost 5432`                         |
 | Local Redis (`:6379`)          | ❌ Blocked         | Use `--allow-localhost 6379`                         |
 | Local Kafka (`:9092`)          | ❌ Blocked         | Use `--allow-localhost 9092`                         |
@@ -1175,7 +1188,7 @@ read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
 - **Kernel 5.13+ required** — Landlock LSM must be enabled (`cat /sys/kernel/security/lsm`)
 - **TCP port filtering requires kernel 6.7+** — older kernels get filesystem-only enforcement; network security via proxy only
 - **Landlock network rules are port-based only** — cannot distinguish localhost from remote. When `--allow-localhost-any` is set, kernel TCP connect filtering is disabled entirely (the proxy still enforces domain filtering and port restrictions for remote connections)
-- **Gradle/JVM on Linux** — Gradle daemon uses ephemeral localhost ports. Use `--allow-localhost-any` or `cplt config set sandbox.allow_localhost_any true` to allow Gradle client↔daemon communication
+- **Gradle/JVM on Linux** — Gradle daemon uses ephemeral localhost ports. Use `--allow-localhost-any` or `cplt config set sandbox.allow_localhost_any true` to allow Gradle client↔daemon communication. If JVM startup itself fails, also add `--allow-tmp-exec` (native lib loading from temp)
 - **Landlock cannot deny subpaths within allowed paths** — unlike macOS Seatbelt, Landlock cannot deny `.env` reads or `.git/hooks` writes *inside* the project directory at the kernel level. Defense-in-depth comes from the proxy (blocks exfiltration) and env hardening (`GIT_CONFIG_NOSYSTEM`, etc.)
 - **`--deny-path` has no effect** — Landlock is allowlist-only; a runtime warning is emitted
 - **Some macOS flags are not applicable** — `--allow-docker`, `--allow-jvm-attach`, `--allow-cache-exec` emit warnings and are ignored on Linux
