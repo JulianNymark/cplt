@@ -1020,6 +1020,11 @@ Git commit and push **work out of the box** over HTTPS — no extra flags needed
    # If you see git@github.com:org/repo.git, switch to HTTPS:
    git remote set-url origin https://github.com/org/repo.git
    ```
+   Or rewrite globally for all repos (no remote changes needed):
+   ```bash
+   git config --global url."https://github.com/".insteadOf "git@github.com:"
+   ```
+   This makes git transparently use HTTPS even when remotes are configured as SSH. The rewrite is read from `~/.gitconfig` which is readable inside the sandbox.
 2. **Authenticate with `gh`** — cplt allows the agent to read `gh auth token`:
    ```bash
    gh auth login   # one-time setup outside the sandbox
