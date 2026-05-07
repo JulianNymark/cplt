@@ -138,6 +138,13 @@ impl Agent {
                     .unwrap_or_else(|| home.join(".local/share"));
                 let data_dir = data_base.join("opencode");
 
+                // Respect XDG_STATE_HOME for state data dir (locks, history, statistics)
+                let state_base = std::env::var("XDG_STATE_HOME")
+                    .ok()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".local/state"));
+                let state_dir = state_base.join("opencode");
+
                 vec![
                     AgentDir {
                         path: config_dir,
@@ -150,6 +157,13 @@ impl Agent {
                         write: true,
                         map_exec: false,
                         // Explicitly deny exec on writable data dir
+                        process_exec: false,
+                    },
+                    AgentDir {
+                        path: state_dir,
+                        write: true,
+                        map_exec: false,
+                        // Explicitly deny exec on writable state data dir
                         process_exec: false,
                     },
                 ]
@@ -422,8 +436,8 @@ mod tests {
     fn opencode_config_dirs_xdg_default() {
         let home = Path::new("/Users/test");
         let dirs = Agent::OpenCode.config_dirs(home);
-        assert!(dirs.len() >= 2, "should have config + data dirs");
-        // Config dir is read-only, data dir is writable
+        assert!(dirs.len() >= 2, "should have config + data + state dirs");
+        // Config dir is read-only, data dir and state dir are writable
         let config_dir = dirs
             .iter()
             .find(|d| d.path.to_str().unwrap().contains("config"))
@@ -432,9 +446,14 @@ mod tests {
             .iter()
             .find(|d| d.path.to_str().unwrap().contains("share"))
             .unwrap();
+        let state_dir = dirs
+            .iter()
+            .find(|d| d.path.to_str().unwrap().contains("state"))
+            .unwrap();
         assert!(!config_dir.write, "config dir should be read-only");
         assert!(data_dir.write, "data dir should be writable");
-        // Neither should be executable
+        assert!(state_dir.write, "state data dir should be writable");
+        // None should be executable
         assert!(dirs.iter().all(|d| !d.process_exec && !d.map_exec));
     }
 
