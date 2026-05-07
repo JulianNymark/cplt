@@ -1364,7 +1364,8 @@ else
 fi
 "#;
         let fake_dir = create_fake_copilot(&project, script);
-        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
+        // Gradle daemon uses ephemeral localhost ports for client↔daemon IPC
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &["--allow-localhost-any"]);
 
         assert!(
             success,

@@ -1849,6 +1849,170 @@ fn allow_localhost_any_affects_both_backends() {
     );
 }
 
+/// Verify that config options affecting network/filesystem behavior
+/// are consistently applied to both macOS SBPL and Linux Landlock backends.
+/// Platform-specific options are documented but not required to be cross-platform.
+#[test]
+fn config_options_parity_across_backends() {
+    use std::path::{Path, PathBuf};
+
+    let project = Path::new("/tmp/proj");
+    let home = Path::new("/home/test");
+    let extra_read = vec![PathBuf::from("/extra/read")];
+    let extra_write = vec![PathBuf::from("/extra/write")];
+    let ports = vec![8443u16];
+    let lh_ports = vec![3000u16];
+    let scratch = PathBuf::from("/tmp/scratch");
+
+    let config = SandboxConfig {
+        project_dir: project,
+        home_dir: home,
+        extra_read: &extra_read,
+        extra_write: &extra_write,
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &ports,
+        localhost_ports: &lh_ports,
+        proxy_port: Some(9090),
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: Some(&scratch),
+        allow_tmp_exec: true,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: true,
+        allow_jvm_attach: true,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    };
+
+    // ── Landlock policy ──
+    let ll = generate_policy(&config);
+
+    // extra_ports → ConnectTcp net rules
+    assert!(
+        ll.net_rules.iter().any(|r| r.port == 8443),
+        "Landlock: extra_ports should add ConnectTcp rule"
+    );
+    // localhost_ports → ConnectTcp net rules
+    assert!(
+        ll.net_rules.iter().any(|r| r.port == 3000),
+        "Landlock: localhost_ports should add ConnectTcp rule"
+    );
+    // proxy_port → ConnectTcp net rules
+    assert!(
+        ll.net_rules.iter().any(|r| r.port == 9090),
+        "Landlock: proxy_port should add ConnectTcp rule"
+    );
+    // extra_read → FsRule with read access
+    assert!(
+        ll.fs_rules
+            .iter()
+            .any(|r| r.path == Path::new("/extra/read") && r.access.read),
+        "Landlock: extra_read should create read FsRule"
+    );
+    // extra_write → FsRule with write access
+    assert!(
+        ll.fs_rules
+            .iter()
+            .any(|r| r.path == Path::new("/extra/write") && r.access.write),
+        "Landlock: extra_write should create write FsRule"
+    );
+    // scratch_dir → FsRule with write + execute
+    assert!(
+        ll.fs_rules
+            .iter()
+            .any(|r| r.path == scratch && r.access.write && r.access.execute),
+        "Landlock: scratch_dir should have write+execute"
+    );
+    // allow_tmp_exec → /tmp gets execute
+    assert!(
+        ll.fs_rules
+            .iter()
+            .any(|r| r.path == Path::new("/tmp") && r.access.execute),
+        "Landlock: allow_tmp_exec should grant /tmp execute"
+    );
+    // restrict_net_connect is true by default
+    assert!(
+        ll.restrict_net_connect,
+        "Landlock: default should restrict net connect"
+    );
+
+    // ── macOS SBPL profile ──
+    let profile = generate_profile(&ProfileOptions {
+        project_dir: project,
+        home_dir: home,
+        extra_read: &extra_read,
+        extra_write: &extra_write,
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &ports,
+        localhost_ports: &lh_ports,
+        proxy_port: Some(9090),
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: Some(&scratch),
+        allow_tmp_exec: true,
+        copilot_install_dir: None,
+        git_hooks_path: None,
+        allow_gpg_signing: true,
+        allow_jvm_attach: true,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+
+    // extra_ports → SBPL port allow
+    assert!(
+        profile.contains("8443"),
+        "SBPL: extra_ports should appear in profile"
+    );
+    // localhost_ports → SBPL localhost allow
+    assert!(
+        profile.contains("localhost:3000"),
+        "SBPL: localhost_ports should create outbound rule"
+    );
+    // proxy_port → SBPL proxy allow
+    assert!(
+        profile.contains("localhost:9090"),
+        "SBPL: proxy_port should create outbound rule"
+    );
+    // extra_read → SBPL file-read allow
+    assert!(
+        profile.contains("/extra/read"),
+        "SBPL: extra_read should appear in profile"
+    );
+    // extra_write → SBPL file-write allow
+    assert!(
+        profile.contains("/extra/write"),
+        "SBPL: extra_write should appear in profile"
+    );
+    // scratch_dir → SBPL allows
+    assert!(
+        profile.contains("/tmp/scratch"),
+        "SBPL: scratch_dir should appear in profile"
+    );
+    // allow_gpg_signing → SBPL gnupg rules
+    assert!(
+        profile.contains(".gnupg"),
+        "SBPL: allow_gpg_signing should add gnupg rules"
+    );
+    // allow_jvm_attach → SBPL java_pid pattern
+    assert!(
+        profile.contains("java_pid"),
+        "SBPL: allow_jvm_attach should add JVM socket rule"
+    );
+}
+
 // ============================================================
 // Deny git persistence vectors (.git/hooks, .git/config, .gitmodules)
 // ============================================================
