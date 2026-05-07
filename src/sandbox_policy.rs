@@ -204,6 +204,8 @@ pub const ENV_ALLOWLIST: &[&str] = &[
     "VIRTUAL_ENV",
     "PYTHONPATH",
     "PYENV_ROOT",              // pyenv install location
+    "ASDF_DIR",                // asdf install directory
+    "ASDF_DATA_DIR",           // asdf data directory (installs, shims)
     "PYTHONDONTWRITEBYTECODE", // Prevent .pyc writes (common in CI/sandboxed envs)
     // pnpm
     "PNPM_HOME", // pnpm binary location
@@ -224,6 +226,7 @@ pub const ENV_PREFIX_ALLOWLIST: &[&str] = &[
     "COPILOT_",  // Copilot-specific config
     "COREPACK_", // Node.js Corepack (package manager manager)
     "JENV_",     // jenv (Java version manager)
+    "ASDF_",     // asdf version manager
     "MISE_",     // mise tool manager
     "NVM_",      // nvm
     "PYENV_",    // pyenv (Python version manager)
@@ -373,6 +376,12 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
     },
     HomeToolDir {
         path: ".mise",
+        process_exec: true,
+        map_exec: true,
+        write: false,
+    },
+    HomeToolDir {
+        path: ".asdf",
         process_exec: true,
         map_exec: true,
         write: false,
