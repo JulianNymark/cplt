@@ -926,18 +926,18 @@ fn emit_network_rules(
         .unwrap();
     }
 
-    // Allow binding and accepting on localhost TCP ports only.
+    // Allow binding and accepting on localhost TCP ports.
     // Needed for: cplt proxy listener, MCP servers, Gradle/Kotlin daemons,
     // dev servers started by the agent.
     //
-    // SBPL quirk: `(allow network-bind (local ip "localhost:*"))` alone also
-    // matches INADDR_ANY (0.0.0.0) because macOS treats it as "all local
-    // addresses" which includes localhost. We add an explicit deny for all IP
-    // addresses first, then re-allow localhost. SBPL uses more-specific-wins
-    // semantics: `"localhost:*"` is more specific than `"*:*"`, so localhost
-    // binds are allowed while 0.0.0.0 and external IPs are blocked.
-    writeln!(sb, "(deny network-bind (local ip \"*:*\"))").unwrap();
-    writeln!(sb, "(deny network-inbound (local ip \"*:*\"))").unwrap();
+    // Known SBPL limitation: `(local ip "localhost:*")` also matches INADDR_ANY
+    // (0.0.0.0) — macOS treats "localhost" as "all local addresses". SBPL only
+    // accepts `*` or `localhost` as the host part (literal IPs like 127.0.0.1
+    // cause "host must be * or localhost" error). This means we cannot prevent
+    // binding on 0.0.0.0 via SBPL alone. Mitigations:
+    //   1. Outbound is locked to port 443 via proxy — no data exfiltration
+    //   2. Dev machines are typically behind NAT/firewall
+    //   3. Inbound connections from external IPs are rare in practice
     writeln!(sb, "(allow network-bind (local ip \"localhost:*\"))").unwrap();
     writeln!(sb, "(allow network-inbound (local ip \"localhost:*\"))").unwrap();
 

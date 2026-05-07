@@ -572,6 +572,7 @@ SBPL has fundamental limitations for network filtering:
 - **No domain-based rules** — SBPL operates at the syscall level, not the application level. It cannot match on hostnames.
 - **No wildcard port filtering** — there is no syntax for "allow any host on port 443 only"
 - **IP-based rules require known IPs** — Copilot's API endpoints use CDN-backed IPs that change regularly
+- **No loopback-only bind** — SBPL only accepts `*` or `localhost` as the host part of IP filters. Literal IPs like `127.0.0.1` cause `"host must be * or localhost"` errors. The `localhost` host matches `INADDR_ANY` (`0.0.0.0`), meaning `(allow network-bind (local ip "localhost:*"))` also permits binding on all interfaces. This is a macOS Seatbelt limitation — processes inside the sandbox can start listeners accessible on the network. Mitigations: outbound is locked to port 443 (no exfiltration via inbound connections), dev machines are typically behind NAT/firewall, and the proxy intercepts all outbound traffic.
 
 The only viable options are `(allow network-outbound (remote tcp))` (allow all) or `(deny network*)` (deny all). We allow outbound TCP because Copilot cannot function without network access, and use port restrictions as a secondary control.
 
@@ -600,7 +601,7 @@ These test core logic without invoking `sandbox-exec`, using the real library fu
 | Env behavior | 17 | Sanitization, hardening injection, pass-env overrides, LANG prefix leak prevention, YARN hardening bypass prevention, scratch dir TMPDIR redirect, JAVA_TOOL_OPTIONS injection/append/override |
 | Config parsing | 24 | TOML parsing, CLI/config merge precedence, tilde expansion, SBPL validation, scratch dir, allow-tmp-exec |
 
-### Integration Tests (macOS only, 36 tests)
+### Integration Tests (macOS only, 39 tests)
 
 These invoke `sandbox-exec` with real Seatbelt profiles and verify **kernel-level enforcement**:
 
@@ -608,7 +609,7 @@ These invoke `sandbox-exec` with real Seatbelt profiles and verify **kernel-leve
 |---|---|---|
 | File access | 5 | Project read/write, copilot config, temp write, process execution |
 | Sensitive dir blocks | 4 | `~/.ssh`, `~/.aws`, `~/.docker`, `~/.kube` blocked |
-| Network | 4 | Outbound connections blocked, JVM Attach API socket allowed, SSH agent socket blocked, arbitrary `/tmp` sockets blocked |
+| Network | 6 | Outbound blocked, JVM Attach socket allowed, SSH agent blocked, `/tmp` sockets blocked, localhost TCP bind allowed, wildcard bind SBPL limitation documented |
 | Binary CLI | 4 | Version, help, root/home dir rejection |
 | Tool dir permissions | 15 | Each HOME_TOOL_DIR has correct exec/map-exec/write at kernel level |
 | GPG signing | 4 | Default blocks `~/.gnupg`, flag allows pubring read, private keys stay denied, writes stay denied |

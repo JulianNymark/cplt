@@ -1796,6 +1796,12 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
         _ => return Ok(()),
     };
 
+    // Skip extraction for non-Mach-O binaries (e.g. shell script wrappers).
+    // SEA extraction only applies to the compiled Copilot Mach-O binary.
+    if !is_macho_binary(copilot_bin) {
+        return Ok(());
+    }
+
     let binary_id = match binary_identity(copilot_bin) {
         Some(id) => id,
         None => return Ok(()),
@@ -1977,6 +1983,30 @@ fn binary_identity(path: &Path) -> Option<String> {
     ))
 }
 
+/// Check if a file is a Mach-O binary by reading its magic bytes.
+/// Detects: thin Mach-O (32/64-bit, both endiannesses) and fat/universal binaries.
+/// Returns false for scripts, text files, or unreadable files.
+#[cfg(target_os = "macos")]
+fn is_macho_binary(path: &Path) -> bool {
+    use std::io::Read;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut magic = [0u8; 4];
+    if f.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    matches!(
+        magic,
+        [0xFE, 0xED, 0xFA, 0xCE] // MH_MAGIC (32-bit)
+            | [0xFE, 0xED, 0xFA, 0xCF] // MH_MAGIC_64
+            | [0xCE, 0xFA, 0xED, 0xFE] // MH_CIGAM (32-bit, reversed)
+            | [0xCF, 0xFA, 0xED, 0xFE] // MH_CIGAM_64 (reversed)
+            | [0xCA, 0xFE, 0xBA, 0xBE] // FAT_MAGIC (universal)
+            | [0xBE, 0xBA, 0xFE, 0xCA] // FAT_CIGAM (universal, reversed)
+    )
+}
 /// List non-hidden directory names under `pkg_base` (extraction version dirs).
 #[cfg(target_os = "macos")]
 fn extraction_dirs(pkg_base: &Path) -> std::collections::HashSet<String> {

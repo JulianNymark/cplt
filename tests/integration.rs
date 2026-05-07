@@ -1158,4 +1158,98 @@ finally:
             "error should mention 'too broad', got: {stderr}"
         );
     }
+
+    // ── Network bind enforcement ─────────────────────────────────
+    // Verify kernel-level network-bind behavior with the real generated profile.
+    // These are the ground truth for what SBPL actually enforces.
+
+    #[test]
+    fn real_profile_allows_localhost_tcp_bind() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let opts = default_opts(&project, &home);
+        let profile = write_real_profile(&opts);
+
+        // IPv4 localhost bind
+        let (output, success) = run_sandboxed(
+            &profile,
+            r#"python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', 0))
+s.listen(1)
+port = s.getsockname()[1]
+s.close()
+print(f'OK:{port}')
+""#,
+        );
+        assert!(
+            success && output.contains("OK:"),
+            "IPv4 localhost bind should be allowed.\noutput: {output}"
+        );
+
+        // IPv6 localhost bind
+        let (output, success) = run_sandboxed(
+            &profile,
+            r#"python3 -c "
+import socket
+s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('::1', 0))
+s.listen(1)
+port = s.getsockname()[1]
+s.close()
+print(f'OK:{port}')
+""#,
+        );
+        assert!(
+            success && output.contains("OK:"),
+            "IPv6 localhost bind should be allowed.\noutput: {output}"
+        );
+
+        let _ = fs::remove_file(&profile);
+    }
+
+    /// SBPL platform limitation: `(local ip "localhost:*")` matches INADDR_ANY (0.0.0.0).
+    /// SBPL only accepts `*` or `localhost` as host — literal IPs are rejected.
+    /// This test documents the gap: wildcard bind is NOT denied by the sandbox.
+    #[test]
+    fn real_profile_wildcard_bind_is_sbpl_limitation() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let opts = default_opts(&project, &home);
+        let profile = write_real_profile(&opts);
+
+        let (output, success) = run_sandboxed(
+            &profile,
+            r#"python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(('0.0.0.0', 18998))
+    s.listen(1)
+    s.close()
+    print('ALLOWED')
+except Exception as e:
+    print(f'DENIED:{e}')
+""#,
+        );
+
+        // This SHOULD be denied but SBPL can't distinguish localhost from INADDR_ANY.
+        // If SBPL is ever fixed (or we find a workaround), this test will start
+        // failing with "DENIED" — update it to assert denied at that point.
+        assert!(
+            success && output.contains("ALLOWED"),
+            "SBPL limitation: wildcard bind should (unfortunately) be allowed.\n\
+             If this fails with DENIED, great — SBPL behavior changed and we can \n\
+             now properly restrict bind. Update this test and remove the limitation \n\
+             documentation.\noutput: {output}"
+        );
+
+        let _ = fs::remove_file(&profile);
+    }
 }

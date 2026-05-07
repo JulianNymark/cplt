@@ -1731,11 +1731,11 @@ fn profile_allows_jvm_attach_when_flag_set() {
 }
 
 // ============================================================
-// TCP bind restricted to localhost — wildcard 0.0.0.0 must be denied
+// TCP bind uses localhost (SBPL limitation: cannot restrict to loopback only)
 // ============================================================
 
 #[test]
-fn profile_denies_wildcard_tcp_bind() {
+fn profile_allows_localhost_tcp_bind() {
     let p = generate_profile(&ProfileOptions {
         project_dir: std::path::Path::new("/tmp/proj"),
         home_dir: std::path::Path::new("/Users/test"),
@@ -1762,16 +1762,9 @@ fn profile_denies_wildcard_tcp_bind() {
         allow_cache_exec_any: false,
         allow_browser: false,
     });
-    // Explicit deny for all IP binds, then re-allow localhost.
-    // This blocks 0.0.0.0 and external IPs (SBPL more-specific-wins).
-    assert!(
-        p.contains(r#"(deny network-bind (local ip "*:*"))"#),
-        "Profile must deny wildcard IP bind"
-    );
-    assert!(
-        p.contains(r#"(deny network-inbound (local ip "*:*"))"#),
-        "Profile must deny wildcard IP inbound"
-    );
+    // SBPL only accepts `*` or `localhost` as the host part of IP filters.
+    // Literal IPs like 127.0.0.1 cause "host must be * or localhost" errors.
+    // Known limitation: "localhost" also matches INADDR_ANY (0.0.0.0).
     assert!(
         p.contains(r#"(allow network-bind (local ip "localhost:*"))"#),
         "Profile must allow localhost bind"
@@ -1779,15 +1772,6 @@ fn profile_denies_wildcard_tcp_bind() {
     assert!(
         p.contains(r#"(allow network-inbound (local ip "localhost:*"))"#),
         "Profile must allow localhost inbound"
-    );
-    // Deny must come BEFORE allow for SBPL more-specific-wins to work correctly
-    let deny_pos = p.find(r#"(deny network-bind (local ip "*:*"))"#).unwrap();
-    let allow_pos = p
-        .find(r#"(allow network-bind (local ip "localhost:*"))"#)
-        .unwrap();
-    assert!(
-        deny_pos < allow_pos,
-        "Deny wildcard must come before allow localhost in profile"
     );
 }
 
