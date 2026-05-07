@@ -37,6 +37,10 @@ pub struct ProfileOptions<'a> {
     /// Needed when Copilot is installed in a non-standard location (e.g. ~/n/
     /// via the `n` Node version manager) that isn't covered by TOOL_READ_DIRS.
     pub copilot_install_dir: Option<&'a Path>,
+    /// JAVA_HOME directory for JDK read + dylib loading.
+    /// Needed when Java is installed outside TOOL_READ_DIRS (e.g. ~/hostedtoolcache,
+    /// sdkman, or other version managers).
+    pub java_home: Option<&'a Path>,
     /// Global git hooks directory from `core.hooksPath`.
     /// Git needs to read and execute hooks from this directory for commits.
     pub git_hooks_path: Option<&'a Path>,
@@ -89,6 +93,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
         opts.allow_cache_exec_any,
     );
     emit_copilot_install(&mut sb, opts.copilot_install_dir);
+    emit_java_home(&mut sb, opts.java_home);
     emit_electron_app(&mut sb, opts.electron_app_dir);
     emit_system_files(&mut sb);
     emit_temp_rules(
@@ -505,6 +510,19 @@ fn emit_copilot_install(sb: &mut String, install_dir: Option<&Path>) {
     if let Some(dir) = install_dir {
         let p = dir.to_string_lossy();
         writeln!(sb, ";; Copilot CLI installation directory").unwrap();
+        writeln!(sb, "(allow file-read* (subpath \"{p}\"))").unwrap();
+        writeln!(sb, "(allow file-map-executable (subpath \"{p}\"))").unwrap();
+        writeln!(sb).unwrap();
+    }
+}
+
+/// Allow reading and loading JDK libraries from JAVA_HOME.
+/// Needed when Java is installed outside TOOL_READ_DIRS — e.g. version managers
+/// (sdkman, actions/setup-java hostedtoolcache) that place the JDK under HOME.
+fn emit_java_home(sb: &mut String, java_home: Option<&Path>) {
+    if let Some(dir) = java_home {
+        let p = dir.to_string_lossy();
+        writeln!(sb, ";; JAVA_HOME — JDK read + dylib loading").unwrap();
         writeln!(sb, "(allow file-read* (subpath \"{p}\"))").unwrap();
         writeln!(sb, "(allow file-map-executable (subpath \"{p}\"))").unwrap();
         writeln!(sb).unwrap();

@@ -382,6 +382,7 @@ mod macos_tests {
             scratch_dir: None,
             allow_tmp_exec: false,
             copilot_install_dir: None,
+            java_home: None,
             git_hooks_path: None,
             allow_gpg_signing: false,
             allow_jvm_attach: false,

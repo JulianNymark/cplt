@@ -92,6 +92,8 @@ pub struct SandboxConfig<'a> {
     pub allow_tmp_exec: bool,
     /// Copilot CLI package directory (resolved from the binary location).
     pub copilot_install_dir: Option<&'a Path>,
+    /// JAVA_HOME directory — grants JDK read + dylib loading.
+    pub java_home: Option<&'a Path>,
     /// Global git hooks directory from `core.hooksPath`.
     pub git_hooks_path: Option<&'a Path>,
     pub allow_gpg_signing: bool,
@@ -225,6 +227,7 @@ fn prepare_impl(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         scratch_dir: config.scratch_dir,
         allow_tmp_exec: config.allow_tmp_exec,
         copilot_install_dir: config.copilot_install_dir,
+        java_home: config.java_home,
         git_hooks_path: config.git_hooks_path,
         allow_gpg_signing: config.allow_gpg_signing,
         allow_jvm_attach: config.allow_jvm_attach,
@@ -329,6 +332,9 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
 
     if let Some(dir) = config.copilot_install_dir {
         policy::validate_sbpl_path(dir).map_err(|e| format!("Copilot install dir: {e}"))?;
+    }
+    if let Some(dir) = config.java_home {
+        policy::validate_sbpl_path(dir).map_err(|e| format!("JAVA_HOME: {e}"))?;
     }
     if let Some(p) = config.git_hooks_path {
         policy::validate_sbpl_path(p).map_err(|e| format!("Git hooks path: {e}"))?;

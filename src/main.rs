@@ -886,6 +886,15 @@ fn main() -> ExitCode {
     // dyld access to load Electron Framework from within the .app bundle.
     let electron_app_dir = discover_electron_app_dir(&agent_bin_result, active_agent);
 
+    // Discover JAVA_HOME for JDK read access when installed outside TOOL_READ_DIRS.
+    // Covers: sdkman (~/.sdkman/candidates/java/), actions/setup-java (hostedtoolcache),
+    // jabba, or any other version manager that places JDK under HOME.
+    let java_home_dir = std::env::var("JAVA_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .filter(|p| !crate::is_unsafe_root(p, &home_dir));
+
     // Compute agent-specific sandbox directories
     let agent_dirs = active_agent.config_dirs(&home_dir);
 
@@ -1006,6 +1015,7 @@ fn main() -> ExitCode {
         scratch_dir: scratch_path,
         allow_tmp_exec: resolved.allow_tmp_exec,
         copilot_install_dir: copilot_install_dir.as_deref(),
+        java_home: java_home_dir.as_deref(),
         git_hooks_path: git_hooks_path.as_deref(),
         allow_gpg_signing: resolved.allow_gpg_signing,
         allow_jvm_attach: resolved.allow_jvm_attach,
