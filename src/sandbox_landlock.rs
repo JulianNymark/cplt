@@ -25,6 +25,11 @@ use super::policy::{self, HomeToolDir};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+use landlock::{ABI, PathBeneath};
+#[cfg(target_os = "linux")]
+use std::os::fd::{BorrowedFd, RawFd};
+
 // ── Cross-platform types ───────────────────────────────────────
 
 /// Filesystem access flags for a Landlock rule.
@@ -84,21 +89,31 @@ pub struct LandlockPolicy {
 ///
 /// Everything here is computed in the parent (where allocation and I/O
 /// are safe). The `pre_exec` hook only receives this immutable data and
-/// makes raw syscalls — no allocation, no file I/O.
+/// makes raw syscalls — no allocation, no file I/O, with one exception:
+/// paths in `deferred_paths` are magic symlinks (e.g. `/proc/self`) that
+/// must be opened in the child after fork so they resolve to the child's
+/// pid rather than the parent's.
 ///
 /// File descriptors in `pre_opened_fds` are opened with `O_PATH | O_CLOEXEC`
 /// in `precompute()`. They survive `fork()` and are used by
 /// `apply_precomputed()` via `BorrowedFd` — no `open()` or allocation
-/// in the async-signal-unsafe post-fork context.
+/// in the async-signal-unsafe post-fork context, except for the deferred
+/// paths described above.
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub struct PrecomputedSandbox {
-    pub abi_version: u32,
+    pub abi_version: ABI,
     /// Pre-opened `O_PATH` file descriptors for Landlock filesystem rules.
     /// Opened in `precompute()` (parent), used in `apply_precomputed()` (child).
     /// Raw fds (i32) so the struct remains Clone-able. Closed on exec via
     /// `O_CLOEXEC`; the parent leaks them (harmless — ~30 fds, program exits).
-    pub pre_opened_fds: Vec<(i32, FsAccess)>,
+    pub pre_opened_fds: Vec<(RawFd, FsAccess)>,
+    /// Paths that must be opened in the child process because they are magic
+    /// symlinks that resolve differently per-process (e.g. `/proc/self` resolves
+    /// to `/proc/<pid>` — the parent's pid, not the child's).
+    /// `CString` allocation happens in `precompute()` (parent, safe).
+    /// The actual `open()` call happens in `apply_precomputed()` (child).
+    pub deferred_paths: Vec<(std::ffi::CString, FsAccess)>,
     pub net_rules: Vec<NetRule>,
     /// Whether to restrict TCP connect at the kernel level.
     pub restrict_net_connect: bool,
@@ -347,7 +362,9 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
         });
     }
 
-    // ── /proc/self: Node.js reads /proc/self/exe, /proc/self/maps ──
+    // ── /proc/self: Node.js reads /proc/self/exe, /proc/self/maps, /proc/self/cgroup ──
+    // This path is a magic symlink resolved per-process. It is deferred to the
+    // child in apply_precomputed() where it resolves to the correct pid.
     fs_rules.push(FsRule {
         path: PathBuf::from("/proc/self"),
         access: FsAccess {
@@ -592,9 +609,7 @@ pub fn describe_policy(policy: &LandlockPolicy) -> String {
 ///
 /// Called in the parent process during `prepare()` — never in `pre_exec`.
 #[cfg(target_os = "linux")]
-pub fn check_availability() -> Result<landlock::ABI, String> {
-    use landlock::ABI;
-
+pub fn check_availability() -> Result<ABI, String> {
     const ABI_PROBE_ORDER: [ABI; 6] = [ABI::V6, ABI::V5, ABI::V4, ABI::V3, ABI::V2, ABI::V1];
 
     let mut last_error = None;
@@ -620,7 +635,7 @@ pub fn check_availability() -> Result<landlock::ABI, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn probe_abi_candidate(abi: landlock::ABI) -> Result<(), String> {
+fn probe_abi_candidate(abi: ABI) -> Result<(), String> {
     use landlock::{
         Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr, Scope,
     };
@@ -663,11 +678,15 @@ fn probe_abi_candidate(abi: landlock::ABI) -> Result<(), String> {
 /// `CString` allocation for path conversion happens safely in the parent.
 /// The child's `pre_exec` hook receives only raw fd numbers.
 ///
+/// Exception: paths that are magic symlinks (e.g. `/proc/self`) cannot
+/// be resolved in the parent because they would yield the parent's pid.
+/// These are stored in `deferred_paths` and opened with a single `open()`
+/// call in the child after fork.
+///
 /// Called once in `prepare()`. The returned `PrecomputedSandbox` is
 /// cloned into the `pre_exec` closure.
 #[cfg(target_os = "linux")]
 pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> {
-    use landlock::ABI;
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -692,10 +711,17 @@ pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> 
 
     // Pre-open all filesystem paths in the parent process.
     // This avoids CString allocation and open() calls in pre_exec.
+    // Paths under /proc/self are magic symlinks that resolve to /proc/<pid> —
+    // the parent's pid, not the child's. Defer those to apply_precomputed().
     let mut pre_opened_fds = Vec::new();
+    let mut deferred_paths = Vec::new();
     for rule in &policy.fs_rules {
         let c_path = CString::new(rule.path.as_os_str().as_bytes())
             .map_err(|_| format!("Path contains null byte: {}", rule.path.display()))?;
+        if rule.path.starts_with("/proc/self") {
+            deferred_paths.push((c_path, rule.access));
+            continue;
+        }
         let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
         if fd >= 0 {
             pre_opened_fds.push((fd, rule.access));
@@ -707,8 +733,9 @@ pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> 
     let restrict_net_connect = policy.restrict_net_connect;
 
     Ok(PrecomputedSandbox {
-        abi_version: abi_version as u32,
+        abi_version,
         pre_opened_fds,
+        deferred_paths,
         net_rules,
         restrict_net_connect,
         seccomp_filter,
@@ -839,35 +866,26 @@ fn build_seccomp_filter() -> Vec<BpfInstruction> {
 /// 3. This is the same risk profile as any Rust program using
 ///    Command::spawn() with pre_exec in a multi-threaded context.
 ///
+/// Deferred paths (magic symlinks like `/proc/self`) also require one
+/// `open()` call per path in the child.
+/// The risk profile is the same as the heap allocation above.
+///
 /// The seccomp filter application is allocation-free (raw prctl syscall).
 #[cfg(target_os = "linux")]
 pub fn apply_precomputed(sandbox: &PrecomputedSandbox) -> std::io::Result<()> {
-    use std::os::fd::BorrowedFd;
-
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, NetPort, PathBeneath, Ruleset, RulesetAttr,
-        RulesetCreatedAttr, RulesetStatus,
+        ABI, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr,
+        RulesetStatus,
     };
-
-    // Map the detected kernel ABI to the landlock crate's ABI enum.
-    let abi = match sandbox.abi_version {
-        1 => ABI::V1,
-        2 => ABI::V2,
-        3 => ABI::V3,
-        4 => ABI::V4,
-        5 => ABI::V5,
-        _ => ABI::V6,
-    };
-    let abi_version = sandbox.abi_version;
 
     let ruleset = Ruleset::default()
-        .handle_access(AccessFs::from_all(abi))
+        .handle_access(AccessFs::from_all(sandbox.abi_version))
         .map_err(std::io::Error::other)?;
 
     // Handle ConnectTcp on ABI v4+ only when network restriction is enabled.
     // When allow_localhost_any is set, we skip this — Landlock cannot
     // distinguish localhost from remote, so we rely on the proxy instead.
-    let ruleset = if abi_version >= 4 && sandbox.restrict_net_connect {
+    let ruleset = if sandbox.abi_version >= ABI::V4 && sandbox.restrict_net_connect {
         ruleset
             .handle_access(AccessNet::ConnectTcp)
             .map_err(std::io::Error::other)?
@@ -877,58 +895,33 @@ pub fn apply_precomputed(sandbox: &PrecomputedSandbox) -> std::io::Result<()> {
 
     let mut created = ruleset.create().map_err(std::io::Error::other)?;
 
+    // Add filesystem rules for deferred paths (e.g. /proc/self).
+    // These are magic symlinks that resolve per-process — opened here in the
+    // child so /proc/self resolves to the child's pid, not the parent's.
+    // Deferred paths should only be used in special cases (such as /proc/self),
+    // and are probably required for proper operation so failing to open is an error.
+    for (c_path, access) in &sandbox.deferred_paths {
+        let raw_fd: RawFd = unsafe { libc::open(c_path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if raw_fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let path_beneath_rule = create_path_beneath_rule(sandbox.abi_version, &raw_fd, access);
+        created = created
+            .add_rule(path_beneath_rule)
+            .map_err(std::io::Error::other)?;
+    }
+
     // Add filesystem rules using pre-opened file descriptors.
     // No open() or CString allocation — just borrow the raw fd.
     for &(raw_fd, access) in &sandbox.pre_opened_fds {
-        let mut access_flags = if access.read {
-            AccessFs::ReadFile | AccessFs::ReadDir
-        } else {
-            landlock::BitFlags::EMPTY
-        };
-
-        if access.write {
-            let mut write_flags = AccessFs::WriteFile
-                | AccessFs::RemoveDir
-                | AccessFs::RemoveFile
-                | AccessFs::MakeDir
-                | AccessFs::MakeReg
-                | AccessFs::MakeSym
-                | AccessFs::MakeFifo
-                | AccessFs::MakeSock;
-            if abi_version >= 2 {
-                // Refer controls rename()/link() across different Landlock
-                // domains. Without it, build tools (cargo, git) that move
-                // files between directories would fail.
-                write_flags |= AccessFs::Refer;
-            }
-            if abi_version >= 3 {
-                write_flags |= AccessFs::Truncate;
-            }
-            access_flags |= write_flags;
-        }
-
-        if access.execute {
-            access_flags |= AccessFs::Execute;
-        }
-
-        if access.ioctl && abi_version >= 5 {
-            // Landlock ABI v5 (kernel ≥ 6.8) enforces IOCTL_DEV for character
-            // and block devices. Grant it for device paths so tcsetattr() on
-            // /dev/tty and /dev/pts/* succeeds — without this, raw mode fails,
-            // the terminal stays in cooked/echo mode and Copilot's TUI hangs.
-            access_flags |= AccessFs::IoctlDev;
-        }
-
-        // Safety: raw_fd was opened in precompute() and is still valid
-        // (O_CLOEXEC keeps it alive until exec, fork inherits it).
-        let fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+        let path_beneath_rule = create_path_beneath_rule(sandbox.abi_version, &raw_fd, &access);
         created = created
-            .add_rule(PathBeneath::new(fd, access_flags))
+            .add_rule(path_beneath_rule)
             .map_err(std::io::Error::other)?;
     }
 
     // Add network rules (ABI v4+, only when network restriction is active).
-    if abi_version >= 4 && sandbox.restrict_net_connect {
+    if sandbox.abi_version >= ABI::V4 && sandbox.restrict_net_connect {
         for rule in &sandbox.net_rules {
             created = created
                 .add_rule(NetPort::new(rule.port, AccessNet::ConnectTcp))
@@ -949,6 +942,61 @@ pub fn apply_precomputed(sandbox: &PrecomputedSandbox) -> std::io::Result<()> {
     apply_seccomp_filter(&sandbox.seccomp_filter)?;
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn create_path_beneath_rule<'fd>(
+    abi_version: ABI,
+    raw_fd: &'fd RawFd,
+    access: &FsAccess,
+) -> PathBeneath<BorrowedFd<'fd>> {
+    use std::os::fd::BorrowedFd;
+
+    use landlock::{AccessFs, PathBeneath};
+
+    let mut access_flags = if access.read {
+        AccessFs::ReadFile | AccessFs::ReadDir
+    } else {
+        landlock::BitFlags::EMPTY
+    };
+
+    if access.write {
+        let mut write_flags = AccessFs::WriteFile
+            | AccessFs::RemoveDir
+            | AccessFs::RemoveFile
+            | AccessFs::MakeDir
+            | AccessFs::MakeReg
+            | AccessFs::MakeSym
+            | AccessFs::MakeFifo
+            | AccessFs::MakeSock;
+        if abi_version >= ABI::V2 {
+            // Refer controls rename()/link() across different Landlock
+            // domains. Without it, build tools (cargo, git) that move
+            // files between directories would fail.
+            write_flags |= AccessFs::Refer;
+        }
+        if abi_version >= ABI::V3 {
+            write_flags |= AccessFs::Truncate;
+        }
+        access_flags |= write_flags;
+    }
+
+    if access.execute {
+        access_flags |= AccessFs::Execute;
+    }
+
+    if access.ioctl && abi_version >= ABI::V5 {
+        // Landlock ABI v5 (kernel ≥ 6.8) enforces IOCTL_DEV for character
+        // and block devices. Grant it for device paths so tcsetattr() on
+        // /dev/tty and /dev/pts/* succeeds — without this, raw mode fails,
+        // the terminal stays in cooked/echo mode and Copilot's TUI hangs.
+        access_flags |= AccessFs::IoctlDev;
+    }
+
+    // Safety: raw_fd was opened in precompute() and is still valid
+    // (O_CLOEXEC keeps it alive until exec, fork inherits it).
+    let fd = unsafe { BorrowedFd::borrow_raw(*raw_fd) };
+    PathBeneath::new(fd, access_flags)
 }
 
 /// Apply a pre-built seccomp BPF filter via prctl.
@@ -1621,6 +1669,55 @@ mod tests {
         assert!(
             !data_rule.access.execute,
             "data dir should NOT be executable"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_self_is_deferred_not_pre_opened() {
+        let policy = LandlockPolicy {
+            fs_rules: vec![
+                FsRule {
+                    path: PathBuf::from("/proc/self"),
+                    access: FsAccess {
+                        read: true,
+                        write: false,
+                        execute: false,
+                        ioctl: false,
+                    },
+                },
+                FsRule {
+                    path: PathBuf::from("/tmp"),
+                    access: FsAccess {
+                        read: true,
+                        write: false,
+                        execute: false,
+                        ioctl: false,
+                    },
+                },
+            ],
+            net_rules: vec![],
+            restrict_net_connect: false,
+        };
+
+        let precomputed = precompute(policy).expect("precompute should succeed");
+
+        assert_eq!(
+            precomputed.deferred_paths.len(),
+            1,
+            "exactly one path should be deferred"
+        );
+        let (c_path, _) = &precomputed.deferred_paths[0];
+        assert_eq!(
+            c_path.to_str().unwrap(),
+            "/proc/self",
+            "/proc/self should be in deferred_paths"
+        );
+
+        assert_eq!(
+            precomputed.pre_opened_fds.len(),
+            1,
+            "/tmp should be pre-opened; /proc/self must not be"
         );
     }
 }
