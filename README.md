@@ -1009,6 +1009,34 @@ This lifts TCC restrictions for all child processes while the cplt sandbox conti
    allow_read = ["~/Screenshots"]
    ```
 
+### Git workflow (commit & push)
+
+Git commit and push **work out of the box** over HTTPS — no extra flags needed.
+
+**Prerequisites:**
+
+1. **Use HTTPS remotes** (not SSH). Check with `git remote -v`:
+   ```bash
+   # If you see git@github.com:org/repo.git, switch to HTTPS:
+   git remote set-url origin https://github.com/org/repo.git
+   ```
+2. **Authenticate with `gh`** — cplt allows the agent to read `gh auth token`:
+   ```bash
+   gh auth login   # one-time setup outside the sandbox
+   ```
+3. **Configure git credential helper** (if not already set by `gh auth setup-git`):
+   ```bash
+   gh auth setup-git   # sets credential.helper to use gh
+   ```
+
+That's it. The agent can now `git add`, `git commit`, `git push`, create branches, and fetch — all inside the sandbox.
+
+**Optional: signed commits** — add `--allow-gpg-signing` (see [GPG signing](#gpg-commit-signing)).
+
+> **Why is SSH blocked?** The SSH agent socket gives access to *all* loaded keys, which could authenticate to any host. HTTPS with `gh auth token` is scoped to GitHub only. See [SSH agent blocking](#ssh-agent-blocking).
+
+> **Tip:** Protect your `main` branch with [branch protection rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-a-branch-protection-rule/about-branch-protection-rules) to prevent the agent from pushing directly to main or force-pushing. This is good practice regardless of cplt.
+
 ### Git restrictions
 
 Certain git operations are blocked to prevent persistence attacks that survive the sandbox session:
