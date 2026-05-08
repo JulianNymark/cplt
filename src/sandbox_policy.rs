@@ -160,9 +160,14 @@ pub const ENV_ALLOWLIST: &[&str] = &[
     "ZELLIJ_SESSION_NAME", // Zellij: session name
     // Terminal emulator identification — lets Copilot/Node.js detect color/feature
     // support without falling back to OSC color queries.
-    "VTE_VERSION",     // GNOME Terminal, Tilix, Terminator (VTE-based)
-    "KITTY_WINDOW_ID", // Kitty terminal
-    "WEZTERM_PANE",    // WezTerm
+    "VTE_VERSION",           // GNOME Terminal, Tilix, Terminator (VTE-based)
+    "KITTY_WINDOW_ID",       // Kitty terminal
+    "WEZTERM_PANE",          // WezTerm
+    "GHOSTTY_RESOURCES_DIR", // Ghostty terminal (shell integration resources)
+    // OSC 8 hyperlink support — allows terminals to render clickable links.
+    // Without this, tools like ink/supports-hyperlinks can't detect hyperlink
+    // capability when their bundled detection doesn't know the terminal.
+    "FORCE_HYPERLINK",
     // Path
     "PATH",
     // Copilot auth — accepted trade-off: Copilot needs a GitHub token to function.

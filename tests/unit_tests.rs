@@ -1614,6 +1614,10 @@ fn env_allowlist_includes_terminal_multiplexers() {
     assert!(ENV_ALLOWLIST.contains(&"VTE_VERSION"));
     assert!(ENV_ALLOWLIST.contains(&"KITTY_WINDOW_ID"));
     assert!(ENV_ALLOWLIST.contains(&"WEZTERM_PANE"));
+    assert!(ENV_ALLOWLIST.contains(&"GHOSTTY_RESOURCES_DIR"));
+
+    // OSC 8 hyperlink support
+    assert!(ENV_ALLOWLIST.contains(&"FORCE_HYPERLINK"));
 }
 
 // ============================================================
