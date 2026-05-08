@@ -1400,9 +1400,14 @@ fn profile_allows_all_localhost_when_flag_set() {
         !p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
         "Profile must NOT deny localhost when allow_localhost_any is set"
     );
+    // Without allow_jvm_attach, uses "localhost:*" (works for Node.js, Python, Go)
     assert!(
-        p.contains("(allow network-outbound (remote tcp \"*:*\"))"),
-        "Profile must allow all TCP outbound when allow_localhost_any is set (for Java IPv4-mapped addresses)"
+        p.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
+        "Profile must allow localhost outbound (non-JVM mode)"
+    );
+    assert!(
+        !p.contains("(allow network-outbound (remote tcp \"*:*\"))"),
+        "Profile must NOT allow all TCP without allow_jvm_attach"
     );
     // Should still have the general TCP deny and port allows
     assert!(
@@ -1412,6 +1417,46 @@ fn profile_allows_all_localhost_when_flag_set() {
     assert!(
         p.contains("(allow network-outbound (remote ip \"*:443\"))"),
         "Profile must still allow port 443"
+    );
+}
+
+#[test]
+fn profile_allows_all_tcp_outbound_when_jvm_and_localhost_any() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: true,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: true,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    // With both flags, uses "*:*" for Java's IPv4-mapped addresses
+    assert!(
+        p.contains("(allow network-outbound (remote tcp \"*:*\"))"),
+        "Profile must allow all TCP when both allow_localhost_any and allow_jvm_attach are set"
+    );
+    assert!(
+        !p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
+        "Profile must NOT deny localhost"
     );
 }
 

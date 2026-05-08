@@ -158,6 +158,8 @@ A curated blocklist of these domains is included in [`blocked-domains.txt`](bloc
 - A compromised agent CAN request GPG signatures (if `--allow-gpg-signing` is enabled) but CANNOT exfiltrate private keys
 - The proxy logs and filters all outbound connections by default, including Copilot CLI traffic (via `NODE_USE_ENV_PROXY=1`). The proxy also enforces port restrictions matching the sandbox policy. Use `--no-proxy` to disable.
 
+**`--allow-localhost-any` + `--allow-jvm-attach` weakens kernel-level network isolation.** Due to a macOS SBPL limitation, `"localhost"` filters do not match Java NIO's IPv4-mapped addresses (`::ffff:127.0.0.1`). Since SBPL only accepts `*` or `localhost` as the host part (literal IPs are rejected), the only way to cover Java's addressing is `(allow network-outbound (remote tcp "*:*"))`. This broadening is only applied when **both** `--allow-localhost-any` and `--allow-jvm-attach` are set (i.e., JVM developers who need Gradle/Kotlin daemon IPC). With just `--allow-localhost-any` alone (Next.js, Vite, etc.), the tighter `"localhost:*"` rule is used. The proxy remains as the compensating control — programs using `HTTP_PROXY`/`HTTPS_PROXY` (Node.js, curl, Go's net/http) are still domain-filtered. Raw TCP connections from programs that ignore proxy settings can bypass filtering in JVM mode. This trade-off is accepted because: (1) filesystem isolation still blocks credential access, (2) the proxy catches the primary exfiltration vector (HTTPS), (3) the user explicitly opted in with two flags, (4) the alternative (Gradle/Kotlin/Maven broken) makes the tool unusable for JVM developers.
+
 *Mitigation:* Use `--allowed-domains allowed-domains.txt` to restrict traffic to known Copilot endpoints only. Use `--blocked-domains blocked-domains.txt` to block known exfiltration infrastructure. Use `--proxy-log proxy.log` for post-session audit. All traffic, including Copilot's own Node.js connections, routes through the proxy.
 
 **`--allow-private-domain` weakens DNS rebinding protection for named domains.** When a domain is listed in `proxy.allow_private_domains` (or `--allow-private-domain`), the proxy skips the post-DNS private IP check for that domain. This is intentional for corporate intranet services (e.g. `intern.nav.no`) that legitimately resolve to RFC 1918 addresses. The accepted risk: if DNS for a listed domain is poisoned or hijacked, a compromised agent could reach arbitrary private hosts on your internal network — not just the intended service. All other proxy checks (port, allowlist, blocklist) still apply. Only list domains you control and whose DNS you trust.
@@ -279,8 +281,10 @@ The primary defense is Apple's mandatory access control framework, enforced in t
 (deny file-* ~/.ssh, ~/.aws, ...)       ← Sensitive dirs blocked
 (deny network-outbound (remote tcp))    ← Block all outbound TCP by default
 (allow network-outbound *:443)           ← Then allow HTTPS port only (use --allow-port for extras)
-(deny network-outbound localhost:*)     ← Block localhost SSRF
+(deny network-outbound localhost:*)     ← Block localhost SSRF (default)
 (allow network-outbound localhost:PORT) ← Carve-out for proxy (ephemeral port, assigned at runtime)
+;; With --allow-localhost-any: replace deny with (allow ... localhost:*)
+;; With --allow-localhost-any + --allow-jvm-attach: (allow ... "*:*") for Java IPv4-mapped
 ```
 
 > **Network note:** Outbound TCP is restricted to port 443 by default. SSH agent access (unix sockets) is blocked. JVM Attach API sockets (`/tmp/.java_pid*`) are available via `--allow-jvm-attach` (opt-in, regex-restricted to `.java_pid<PID>` only) — all other unix sockets in `/tmp` remain blocked. Localhost outbound is blocked to prevent SSRF. Use `--allow-port` for additional ports. SBPL does not support domain-based rules — filesystem isolation is the primary security control.
@@ -611,7 +615,7 @@ These invoke `sandbox-exec` with real Seatbelt profiles and verify **kernel-leve
 |---|---|---|
 | File access | 5 | Project read/write, copilot config, temp write, process execution |
 | Sensitive dir blocks | 4 | `~/.ssh`, `~/.aws`, `~/.docker`, `~/.kube` blocked |
-| Network | 6 | Outbound blocked, JVM Attach socket allowed, SSH agent blocked, `/tmp` sockets blocked, localhost TCP bind allowed, wildcard bind SBPL limitation documented |
+| Network | 6 | Outbound blocked, JVM Attach socket allowed, SSH agent blocked, `/tmp` sockets blocked, localhost TCP bind on all interfaces (SBPL "localhost" doesn't match Java mapped addresses), `--allow-localhost-any` + `--allow-jvm-attach` opens all outbound TCP |
 | Binary CLI | 4 | Version, help, root/home dir rejection |
 | Tool dir permissions | 15 | Each HOME_TOOL_DIR has correct exec/map-exec/write at kernel level |
 | GPG signing | 4 | Default blocks `~/.gnupg`, flag allows pubring read, private keys stay denied, writes stay denied |

@@ -112,6 +112,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
         &home,
         opts.extra_ports,
         opts.allow_localhost_any,
+        opts.allow_jvm_attach,
         opts.proxy_port,
         opts.localhost_ports,
     );
@@ -887,6 +888,7 @@ fn emit_network_rules(
     home: &str,
     extra_ports: &[u16],
     allow_localhost_any: bool,
+    allow_jvm_attach: bool,
     proxy_port: Option<u16>,
     localhost_ports: &[u16],
 ) {
@@ -918,20 +920,22 @@ fn emit_network_rules(
     // Block localhost outbound — prevents SSRF to local dev servers, databases, etc.
     // Must come AFTER port allows so it overrides them for localhost.
     if !allow_localhost_any {
-        // SBPL "localhost" doesn't match Java's IPv4-mapped addresses (::ffff:127.0.0.1)
-        // but that's fine for the deny case — the general `(deny network-outbound (remote tcp))`
-        // above already blocks all TCP. This deny is defense-in-depth for non-Java programs.
+        // Defense-in-depth: the general `(deny network-outbound (remote tcp))` above
+        // already blocks all TCP. This adds explicit localhost deny for clarity.
         writeln!(sb, "(deny network-outbound (remote ip \"localhost:*\"))").unwrap();
-    } else {
-        // User opted into full localhost connectivity. We must use "*:*" because
-        // Java NIO uses IPv6 sockets with IPv4-mapped addresses (::ffff:127.0.0.1)
-        // which SBPL's "localhost" filter does NOT match. Using "*:*" also allows
-        // outbound to non-localhost IPs, but:
-        //   - The proxy still enforces domain filtering for HTTPS
-        //   - Port 443 is already open to all IPs (needed for Copilot API)
-        //   - Direct TCP to external IPs on other ports is low-risk (unusual pattern)
-        //   - The user explicitly opted in with --allow-localhost-any
+    } else if allow_jvm_attach {
+        // JVM mode: Java NIO uses IPv6 sockets with IPv4-mapped addresses
+        // (::ffff:127.0.0.1) which SBPL "localhost" doesn't match. Since SBPL only
+        // accepts "*" or "localhost" as the host part, we must allow all TCP.
+        // This is scoped to JVM users (--allow-jvm-attach) — non-JVM users get
+        // the tighter "localhost:*" rule below.
+        //
+        // The proxy remains as compensating control for domain filtering.
         writeln!(sb, "(allow network-outbound (remote tcp \"*:*\"))").unwrap();
+    } else {
+        // Non-JVM mode: "localhost:*" works for Node.js, Python, Go, C programs
+        // that use standard AF_INET sockets.
+        writeln!(sb, "(allow network-outbound (remote ip \"localhost:*\"))").unwrap();
     }
 
     // Carve-outs for specific localhost ports (proxy, MCP servers, dev servers).

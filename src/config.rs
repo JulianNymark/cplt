@@ -684,7 +684,12 @@ impl Resolved {
                 ports.join(", ")
             );
         }
-        if self.allow_localhost_any {
+        if self.allow_localhost_any && self.allow_jvm_attach {
+            let red = "\x1b[0;31m";
+            eprintln!(
+                "{blue}[cplt]{nc}    Localhost:     {red}ALL TCP{nc}     {dim}⚠ all outbound TCP (JVM IPv4-mapped workaround){nc}"
+            );
+        } else if self.allow_localhost_any {
             eprintln!(
                 "{blue}[cplt]{nc}    Localhost:     {yellow}all ports{nc}   {dim}(--allow-localhost-any){nc}"
             );
