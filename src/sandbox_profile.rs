@@ -801,13 +801,18 @@ fn emit_gpg_signing_rules(
     writeln!(sb).unwrap();
 }
 
-/// Docker daemon socket paths to allow when `--allow-docker` is set.
+/// Docker/Podman daemon socket paths to allow when `--allow-docker` is set.
 /// On macOS, `/var/run` is a symlink to `/private/var/run`.
 const DOCKER_SOCKET_PATHS: &[&str] = &[
     "/private/var/run/docker.sock",
-    ".colima/default/docker.sock", // relative to $HOME
-    ".orbstack/run/docker.sock",   // relative to $HOME
+    ".colima/default/docker.sock", // Colima (default profile)
+    ".colima/docker.sock",         // Colima (root-level)
+    ".orbstack/run/docker.sock",   // OrbStack
     ".docker/run/docker.sock",     // Docker Desktop (newer)
+    ".local/share/containers/podman/machine/podman.sock", // Podman Machine
+    ".local/share/containers/podman/machine/qemu/podman.sock", // Podman Machine (QEMU)
+    ".finch/docker.sock",          // AWS Finch
+    "Library/Application Support/rancher-desktop/lima/docker.sock", // Rancher Desktop
 ];
 
 /// Allow Docker access when `--allow-docker` is set.
@@ -853,7 +858,7 @@ fn emit_docker_rules(sb: &mut String, home: &str, allow_docker: bool, extra_deny
         }
     }
 
-    writeln!(sb, ";; Docker access (--allow-docker)").unwrap();
+    writeln!(sb, ";; Docker/Podman access (--allow-docker)").unwrap();
 
     // Read-only access to ~/.docker for Docker CLI config and TLS certs.
     writeln!(sb, "(allow file-read* (subpath \"{home}/.docker\"))").unwrap();
@@ -868,7 +873,15 @@ fn emit_docker_rules(sb: &mut String, home: &str, allow_docker: bool, extra_deny
     // No write access to Docker config.
     writeln!(sb, "(deny file-write* (subpath \"{home}/.docker\"))").unwrap();
 
-    // Allow Docker daemon socket connections.
+    // Read-only access to ~/.config/containers for Podman CLI config
+    // (registries.conf, containers.conf, auth.json read by podman/buildah).
+    writeln!(
+        sb,
+        "(allow file-read* (subpath \"{home}/.config/containers\"))"
+    )
+    .unwrap();
+
+    // Allow Docker/Podman daemon socket connections.
     // Each socket needs file-read* (inode lookup) + network-outbound (connect).
     for sock in DOCKER_SOCKET_PATHS {
         let full = if sock.starts_with('/') {

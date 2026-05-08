@@ -4108,6 +4108,16 @@ fn profile_docker_enabled_allows_config_and_sockets() {
         p.contains(r#"(allow network-outbound (literal "/Users/test/.orbstack/run/docker.sock"))"#),
         "Profile must allow outbound to OrbStack Docker socket"
     );
+    // Should allow Podman Machine socket
+    assert!(
+        p.contains(r#"(allow network-outbound (literal "/Users/test/.local/share/containers/podman/machine/podman.sock"))"#),
+        "Profile must allow outbound to Podman Machine socket"
+    );
+    // Should allow read of ~/.config/containers (Podman config)
+    assert!(
+        p.contains(r#"(allow file-read* (subpath "/Users/test/.config/containers"))"#),
+        "Profile must allow reading ~/.config/containers for Podman config"
+    );
 }
 
 #[test]

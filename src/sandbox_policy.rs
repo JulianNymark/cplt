@@ -203,6 +203,10 @@ pub const ENV_ALLOWLIST: &[&str] = &[
     "M2_HOME",
     "MAVEN_OPTS",        // JVM flags for Maven (e.g. -Xmx, -Djava.io.tmpdir)
     "JAVA_TOOL_OPTIONS", // JVM-wide options picked up by all Java processes
+    // Docker/Podman/Testcontainers
+    "DOCKER_HOST",                  // Socket URL (e.g. unix:///var/run/docker.sock)
+    "CONTAINER_HOST",               // Podman equivalent of DOCKER_HOST
+    "TESTCONTAINERS_RYUK_DISABLED", // Testcontainers config
     // Rust
     "CARGO_HOME",
     "RUSTUP_HOME",
@@ -228,16 +232,17 @@ pub const ENV_ALLOWLIST: &[&str] = &[
 
 /// Environment variable prefixes safe to pass through.
 pub const ENV_PREFIX_ALLOWLIST: &[&str] = &[
-    "LC_",       // Locale
-    "COPILOT_",  // Copilot-specific config
-    "COREPACK_", // Node.js Corepack (package manager manager)
-    "JENV_",     // jenv (Java version manager)
-    "ASDF_",     // asdf version manager
-    "MISE_",     // mise tool manager
-    "NVM_",      // nvm
-    "PYENV_",    // pyenv (Python version manager)
-    "SDKMAN_",   // SDKMAN (Java version manager)
-    "YARN_",     // Yarn Berry config (hardening injection overrides YARN_ENABLE_SCRIPTS)
+    "LC_",             // Locale
+    "COPILOT_",        // Copilot-specific config
+    "COREPACK_",       // Node.js Corepack (package manager manager)
+    "JENV_",           // jenv (Java version manager)
+    "ASDF_",           // asdf version manager
+    "MISE_",           // mise tool manager
+    "NVM_",            // nvm
+    "PYENV_",          // pyenv (Python version manager)
+    "SDKMAN_",         // SDKMAN (Java version manager)
+    "TESTCONTAINERS_", // Testcontainers configuration
+    "YARN_",           // Yarn Berry config (hardening injection overrides YARN_ENABLE_SCRIPTS)
 ];
 
 /// Environment variables always stripped, even with --inherit-env.
