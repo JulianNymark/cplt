@@ -1401,8 +1401,8 @@ fn profile_allows_all_localhost_when_flag_set() {
         "Profile must NOT deny localhost when allow_localhost_any is set"
     );
     assert!(
-        p.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
-        "Profile must explicitly ALLOW all localhost when allow_localhost_any is set"
+        p.contains("(allow network-outbound (remote tcp \"*:*\"))"),
+        "Profile must allow all TCP outbound when allow_localhost_any is set (for Java IPv4-mapped addresses)"
     );
     // Should still have the general TCP deny and port allows
     assert!(
@@ -1791,16 +1791,15 @@ fn profile_allows_localhost_tcp_bind() {
         allow_cache_exec_any: false,
         allow_browser: false,
     });
-    // SBPL only accepts `*` or `localhost` as the host part of IP filters.
-    // Literal IPs like 127.0.0.1 cause "host must be * or localhost" errors.
-    // Known limitation: "localhost" also matches INADDR_ANY (0.0.0.0).
+    // We use "*:*" instead of "localhost:*" because Java NIO uses IPv6 sockets
+    // with IPv4-mapped addresses (::ffff:127.0.0.1) which "localhost" doesn't match.
     assert!(
-        p.contains(r#"(allow network-bind (local ip "localhost:*"))"#),
-        "Profile must allow localhost bind"
+        p.contains(r#"(allow network-bind (local ip "*:*"))"#),
+        "Profile must allow bind on all local addresses (for Java IPv4-mapped)"
     );
     assert!(
-        p.contains(r#"(allow network-inbound (local ip "localhost:*"))"#),
-        "Profile must allow localhost inbound"
+        p.contains(r#"(allow network-inbound (local ip "*:*"))"#),
+        "Profile must allow inbound on all local addresses (for Java IPv4-mapped)"
     );
 }
 
@@ -3813,6 +3812,57 @@ fn env_scratch_dir_no_jansi_tmpdir_env_var() {
     assert!(
         jansi.is_none(),
         "JANSI_TMPDIR env var should not be set (Jansi reads a Java system property, not an env var)"
+    );
+}
+
+// ============================================================
+// build_sandbox_env — GRADLE_MACOS_SANDBOX injection (macOS only)
+// ============================================================
+
+#[cfg(target_os = "macos")]
+#[test]
+fn env_injects_gradle_macos_sandbox_off() {
+    let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
+    let scratch = std::path::Path::new("/scratch/session123");
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
+
+    let gradle = env.vars.iter().find(|(k, _)| k == "GRADLE_MACOS_SANDBOX");
+    assert!(
+        gradle.is_some(),
+        "GRADLE_MACOS_SANDBOX should be injected on macOS"
+    );
+    assert_eq!(gradle.unwrap().1, "off");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn env_gradle_macos_sandbox_respects_pass_env() {
+    let parent = make_env(&[("HOME", "/Users/test"), ("GRADLE_MACOS_SANDBOX", "on")]);
+    let extra = vec!["GRADLE_MACOS_SANDBOX".to_string()];
+    let scratch = std::path::Path::new("/scratch/session123");
+    let env = build_sandbox_env(
+        &parent,
+        &extra,
+        false,
+        &[],
+        Some(scratch),
+        cplt::agent::Agent::Copilot,
+    );
+
+    let gradle = env.vars.iter().find(|(k, _)| k == "GRADLE_MACOS_SANDBOX");
+    // With --pass-env, user's value should be preserved
+    assert!(gradle.is_some());
+    assert_eq!(
+        gradle.unwrap().1,
+        "on",
+        "--pass-env should prevent injection of GRADLE_MACOS_SANDBOX=off"
     );
 }
 

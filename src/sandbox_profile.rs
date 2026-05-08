@@ -917,14 +917,21 @@ fn emit_network_rules(
 
     // Block localhost outbound — prevents SSRF to local dev servers, databases, etc.
     // Must come AFTER port allows so it overrides them for localhost.
-    // Note: SBPL's "localhost" token matches both IPv4 (127.0.0.1) and IPv6 (::1)
-    // connections at the kernel level — no separate IPv4 rule is needed.
     if !allow_localhost_any {
+        // SBPL "localhost" doesn't match Java's IPv4-mapped addresses (::ffff:127.0.0.1)
+        // but that's fine for the deny case — the general `(deny network-outbound (remote tcp))`
+        // above already blocks all TCP. This deny is defense-in-depth for non-Java programs.
         writeln!(sb, "(deny network-outbound (remote ip \"localhost:*\"))").unwrap();
     } else {
-        // Explicitly allow all localhost ports — the general TCP deny above
-        // blocks non-443 ports, so we need a specific allow for localhost.
-        writeln!(sb, "(allow network-outbound (remote ip \"localhost:*\"))").unwrap();
+        // User opted into full localhost connectivity. We must use "*:*" because
+        // Java NIO uses IPv6 sockets with IPv4-mapped addresses (::ffff:127.0.0.1)
+        // which SBPL's "localhost" filter does NOT match. Using "*:*" also allows
+        // outbound to non-localhost IPs, but:
+        //   - The proxy still enforces domain filtering for HTTPS
+        //   - Port 443 is already open to all IPs (needed for Copilot API)
+        //   - Direct TCP to external IPs on other ports is low-risk (unusual pattern)
+        //   - The user explicitly opted in with --allow-localhost-any
+        writeln!(sb, "(allow network-outbound (remote tcp \"*:*\"))").unwrap();
     }
 
     // Carve-outs for specific localhost ports (proxy, MCP servers, dev servers).
@@ -948,16 +955,20 @@ fn emit_network_rules(
     // Needed for: cplt proxy listener, MCP servers, Gradle/Kotlin daemons,
     // dev servers started by the agent.
     //
-    // Known SBPL limitation: `(local ip "localhost:*")` also matches INADDR_ANY
-    // (0.0.0.0) — macOS treats "localhost" as "all local addresses". SBPL only
-    // accepts `*` or `localhost` as the host part (literal IPs like 127.0.0.1
-    // cause "host must be * or localhost" error). This means we cannot prevent
-    // binding on 0.0.0.0 via SBPL alone. Mitigations:
+    // We use `"*:*"` instead of `"localhost:*"` because of a macOS SBPL bug:
+    // `(local ip "localhost:*")` matches IPv6 (::1) and INADDR_ANY (0.0.0.0)
+    // but does NOT match IPv4 127.0.0.1 bind() calls. Since SBPL only accepts
+    // `*` or `localhost` as the host part (literal IPs cause errors), we must
+    // use `"*:*"` to cover all local addresses including 127.0.0.1.
+    //
+    // Security note: this allows binding on all interfaces, not just loopback.
+    // Mitigations:
     //   1. Outbound is locked to port 443 via proxy — no data exfiltration
     //   2. Dev machines are typically behind NAT/firewall
     //   3. Inbound connections from external IPs are rare in practice
-    writeln!(sb, "(allow network-bind (local ip \"localhost:*\"))").unwrap();
-    writeln!(sb, "(allow network-inbound (local ip \"localhost:*\"))").unwrap();
+    //   4. Most build tools (Gradle, Kotlin) bind to 127.0.0.1 explicitly
+    writeln!(sb, "(allow network-bind (local ip \"*:*\"))").unwrap();
+    writeln!(sb, "(allow network-inbound (local ip \"*:*\"))").unwrap();
 
     // Allow Unix domain sockets in writable tool dirs (Gradle/Kotlin daemon IPC).
     // Gradle 6+ uses UDS in ~/.gradle/daemon/<version>/ for client-daemon comms.

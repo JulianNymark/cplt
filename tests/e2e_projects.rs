@@ -1337,6 +1337,12 @@ esac
     /// and loads them via dlopen (file-map-executable). Also needs --allow-localhost-any
     /// since Gradle daemon uses ephemeral localhost ports for IPC.
     /// UDS is covered by `project_gradle_daemon_unix_socket`.
+    ///
+    /// NOTE: This test uses `gradle --version --no-daemon` which does NOT exercise
+    /// the Gradle 9+ nested sandbox issue (GRADLE_MACOS_SANDBOX). The daemon mode
+    /// is what triggers Gradle's own sandbox-exec, which conflicts with cplt's.
+    /// See `project_gradle_macos_sandbox_disabled` for the env var injection test.
+    /// Full daemon-mode validation requires Java + Gradle 9+ in PATH.
     #[test]
     fn project_gradle_build_works_with_uds() {
         require_sandbox!();
@@ -1385,6 +1391,32 @@ fi
             stdout.contains(expected),
             "Expected {expected} in output.\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
+    }
+
+    /// Verify GRADLE_MACOS_SANDBOX=off is injected inside the sandbox.
+    /// Gradle 9+ runs its own sandbox-exec which conflicts with cplt's sandbox.
+    /// cplt disables it automatically.
+    #[test]
+    fn project_gradle_macos_sandbox_disabled() {
+        require_sandbox!();
+        let project = TempProject::scaffold_kotlin_ktor();
+
+        let script = r#"
+# Verify cplt injects GRADLE_MACOS_SANDBOX=off to prevent nested sandbox conflict
+if [ "$GRADLE_MACOS_SANDBOX" = "off" ]; then
+    echo "RESULT:gradle_sandbox_env:OK"
+else
+    echo "RESULT:gradle_sandbox_env:FAIL:got=${GRADLE_MACOS_SANDBOX:-unset}"
+fi
+"#;
+        let fake_dir = create_fake_copilot(&project, script);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
+
+        assert!(
+            success,
+            "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_result_ok(&stdout, "gradle_sandbox_env");
     }
 
     /// Kotlin/Ktor project file operations work normally in the sandbox.

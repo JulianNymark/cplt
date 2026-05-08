@@ -173,5 +173,16 @@ pub fn build_sandbox_env(
         }
     }
 
+    // Disable Gradle's own macOS sandbox (Gradle 9+). Gradle uses sandbox-exec
+    // internally, which conflicts with cplt's sandbox (nested sandboxes fail with
+    // "Operation not permitted"). cplt already provides kernel-level sandboxing,
+    // so Gradle's is redundant.
+    #[cfg(target_os = "macos")]
+    if !extra_pass_env.iter().any(|v| v == "GRADLE_MACOS_SANDBOX") {
+        env.vars.retain(|(k, _)| k != "GRADLE_MACOS_SANDBOX");
+        env.vars
+            .push(("GRADLE_MACOS_SANDBOX".to_string(), "off".to_string()));
+    }
+
     env
 }
