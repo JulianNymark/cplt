@@ -150,6 +150,8 @@ pub struct Resolved {
     pub allow_browser: bool,
     pub scratch_dir: bool,
     pub quiet: bool,
+    /// Env vars to strip from the sandbox environment (from repo config [deny] section).
+    pub deny_env: Vec<String>,
 }
 
 /// CLI flag values to merge with the config file.
@@ -520,6 +522,7 @@ impl Config {
             allow_browser,
             scratch_dir,
             quiet,
+            deny_env: Vec::new(),
         })
     }
 }
@@ -770,6 +773,12 @@ impl Resolved {
         eprintln!(
             "{blue}[cplt]{nc}    Stripped:      {dim}AWS_*, NPM_TOKEN, DATABASE_URL, SSH_AUTH_SOCK, ...{nc}"
         );
+        if !self.deny_env.is_empty() {
+            eprintln!(
+                "{blue}[cplt]{nc}    Repo deny:     {dim}{}{nc}",
+                self.deny_env.join(", ")
+            );
+        }
         eprintln!();
 
         eprintln!(
@@ -787,6 +796,126 @@ impl Resolved {
         );
         eprintln!("{blue}[cplt]{nc} ──────────────────────────────────────────────────────");
     }
+
+    /// Apply per-repo config (.cplt.toml) to the resolved configuration.
+    ///
+    /// - `[deny]` section is applied automatically (tightens the sandbox).
+    /// - `[propose]` section only applies for keys that are approved in the trust store.
+    ///
+    /// Approved proposals are additive — they can set boolean flags to `true` but
+    /// never override an explicit `true` back to `false`. Path/port proposals extend
+    /// the existing lists.
+    ///
+    /// Returns a list of unapproved proposal keys (for display to the user).
+    pub fn apply_repo_config(
+        &mut self,
+        repo_config: &crate::repo_config::RepoConfig,
+        approved_keys: &[&str],
+    ) -> Vec<String> {
+        // ── Deny section: applied automatically ──────────────────────────
+        for path_str in &repo_config.deny.paths {
+            let path = expand_tilde(path_str);
+            if !self.deny_paths.contains(&path) {
+                self.deny_paths.push(path);
+            }
+        }
+        // deny.env is stored separately — the caller must use it when building
+        // the sandbox environment (strip these vars). We store them on the resolved
+        // struct for that purpose.
+        self.deny_env.extend(repo_config.deny.env.iter().cloned());
+        self.deny_env.sort_unstable();
+        self.deny_env.dedup();
+
+        // ── Propose section: only approved keys ──────────────────
+        let is_approved = |key: &str| approved_keys.contains(&key);
+        let all_proposed = crate::repo_config::proposed_keys(&repo_config.propose);
+
+        // Boolean proposals (additive: false→true only)
+        if repo_config.propose.allow_localhost_any == Some(true)
+            && is_approved("allow_localhost_any")
+        {
+            self.allow_localhost_any = true;
+        }
+        if repo_config.propose.allow_jvm_attach == Some(true) && is_approved("allow_jvm_attach") {
+            self.allow_jvm_attach = true;
+        }
+        if repo_config.propose.allow_docker == Some(true) && is_approved("allow_docker") {
+            self.allow_docker = true;
+        }
+        if repo_config.propose.allow_tmp_exec == Some(true) && is_approved("allow_tmp_exec") {
+            self.allow_tmp_exec = true;
+        }
+        if repo_config.propose.allow_gpg_signing == Some(true) && is_approved("allow_gpg_signing") {
+            self.allow_gpg_signing = true;
+        }
+        if repo_config.propose.allow_lifecycle_scripts == Some(true)
+            && is_approved("allow_lifecycle_scripts")
+        {
+            self.allow_lifecycle_scripts = true;
+        }
+        if repo_config.propose.allow_browser == Some(true) && is_approved("allow_browser") {
+            self.allow_browser = true;
+        }
+        if repo_config.propose.allow_env_files == Some(true) && is_approved("allow_env_files") {
+            self.allow_env_files = true;
+        }
+
+        // Path proposals
+        if is_approved("allow.read") {
+            for path_str in &repo_config.propose.allow.read {
+                let path = expand_tilde(path_str);
+                if !self.allow_read.contains(&path) {
+                    self.allow_read.push(path);
+                }
+            }
+        }
+        if is_approved("allow.write") {
+            for path_str in &repo_config.propose.allow.write {
+                let path = expand_tilde(path_str);
+                if !self.allow_write.contains(&path) {
+                    self.allow_write.push(path);
+                }
+            }
+        }
+
+        // Port proposals
+        if is_approved("allow.ports") {
+            for &port in &repo_config.propose.allow.ports {
+                if !self.allow_ports.contains(&port) {
+                    self.allow_ports.push(port);
+                }
+            }
+            self.allow_ports.sort_unstable();
+            self.allow_ports.dedup();
+        }
+        if is_approved("allow.localhost") {
+            for &port in &repo_config.propose.allow.localhost {
+                if !self.allow_localhost.contains(&port) {
+                    self.allow_localhost.push(port);
+                }
+            }
+            self.allow_localhost.sort_unstable();
+            self.allow_localhost.dedup();
+        }
+
+        // Proxy proposals
+        if is_approved("proxy.allow_private_domains") {
+            for domain in &repo_config.propose.proxy.allow_private_domains {
+                if !self.allow_private_domains.contains(domain) {
+                    self.allow_private_domains.push(domain.clone());
+                }
+            }
+            self.allow_private_domains.sort_unstable();
+            self.allow_private_domains.dedup();
+        }
+
+        // Return unapproved keys for display
+        all_proposed
+            .into_iter()
+            .filter(|key| !is_approved(key))
+            .map(|s| s.to_string())
+            .collect()
+    }
 }
 
 /// Return the config file path.
@@ -798,6 +927,17 @@ pub fn config_path() -> Option<PathBuf> {
     std::env::var("HOME")
         .ok()
         .map(|h| PathBuf::from(h).join(CONFIG_DIR).join(CONFIG_FILE))
+}
+
+/// Return the cplt config directory path (`~/.config/cplt/`).
+pub fn config_dir() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("CPLT_CONFIG") {
+        // If custom config path is set, use its parent directory
+        return expand_tilde(&custom).parent().map(|p| p.to_path_buf());
+    }
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(CONFIG_DIR))
 }
 
 /// Generate a default config file with comments explaining each option.
@@ -1353,6 +1493,14 @@ const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         default_display: "[]",
         description: "Extra paths to deny access to (overrides project-dir allows for sensitive subdirs).",
     },
+    ConfigKeyInfo {
+        section: "deny",
+        key: "env",
+        value_type: ConfigValueType::StrArray,
+        dangerous: false,
+        default_display: "[]",
+        description: "Environment variables to strip from the sandbox (repo-local only: tightens env filtering).",
+    },
     // [sandbox]
     ConfigKeyInfo {
         section: "sandbox",
@@ -1530,8 +1678,8 @@ pub fn explain_key(key_info: &ConfigKeyInfo, loaded: Option<&LoadedConfig>) {
     let (current_value, from_file) = get_config_value(key_info, loaded);
     let type_str = type_label(key_info.value_type);
 
-    eprintln!("{bold}{}.{}{nc}", key_info.section, key_info.key);
-    eprintln!("  {}", key_info.description);
+    println!("{bold}{}.{}{nc}", key_info.section, key_info.key);
+    println!("  {}", key_info.description);
 
     // Type and value on one line: "  bool  false" or "  bool  true  (default: false)"
     if from_file {
@@ -1541,17 +1689,17 @@ pub fn explain_key(key_info: &ConfigKeyInfo, loaded: Option<&LoadedConfig>) {
         } else {
             bold
         };
-        eprintln!(
+        println!(
             "  {dim}{type_str}{nc}  {value_color}{current_value}{nc}  {dim}(default: {default_display}){nc}"
         );
     } else {
-        eprintln!("  {dim}{type_str}  {current_value}{nc}");
+        println!("  {dim}{type_str}  {current_value}{nc}");
     }
 
     if key_info.dangerous {
-        eprintln!("  {yellow}Requires --force to enable{nc}");
+        println!("  {yellow}Requires --force to enable{nc}");
     }
-    eprintln!(
+    println!(
         "  {blue}Set:{nc}  cplt config set {}.{} <value>",
         key_info.section, key_info.key
     );
@@ -1570,9 +1718,9 @@ pub fn explain_all(loaded: Option<&LoadedConfig>) {
     for key in CONFIG_KEYS {
         if key.section != current_section {
             if !current_section.is_empty() {
-                eprintln!();
+                println!();
             }
-            eprintln!("{blue}[{bold}{}{nc}{blue}]{nc}", key.section);
+            println!("{blue}[{bold}{}{nc}{blue}]{nc}", key.section);
             current_section = key.section;
         }
         let danger = if key.dangerous {
@@ -1594,7 +1742,7 @@ pub fn explain_all(loaded: Option<&LoadedConfig>) {
         } else {
             current_value
         };
-        eprintln!(
+        println!(
             "  {bold}{:<25}{nc} {dim}{:<20}{nc} {value_color}{:<14}{nc} {}{danger}",
             format!("{}.{}", key.section, key.key),
             format!("({})", type_label(key.value_type)),
@@ -1928,6 +2076,233 @@ impl ConfigSetOp {
     }
 }
 
+// ── Repo config set support ──────────────────────────────────────────
+
+/// Mapping from global config key to repo config location.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RepoKeyTarget {
+    /// Goes under [propose] as a top-level boolean.
+    ProposeBool,
+    /// Goes under [propose.allow] as an array.
+    ProposeAllow(&'static str),
+    /// Goes under [propose.proxy] as an array.
+    ProposeProxy(&'static str),
+    /// Goes under [deny] directly.
+    Deny(&'static str),
+}
+
+/// Map a global config key to its repo config location.
+/// Returns None if the key is not valid in repo config.
+pub fn repo_key_target(key_info: &ConfigKeyInfo) -> Option<RepoKeyTarget> {
+    match (key_info.section, key_info.key) {
+        // Propose booleans
+        ("sandbox", "allow_localhost_any") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_jvm_attach") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_docker") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_tmp_exec") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_gpg_signing") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_lifecycle_scripts") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_browser") => Some(RepoKeyTarget::ProposeBool),
+        ("sandbox", "allow_env_files") => Some(RepoKeyTarget::ProposeBool),
+        // Propose arrays
+        ("allow", "read") => Some(RepoKeyTarget::ProposeAllow("read")),
+        ("allow", "write") => Some(RepoKeyTarget::ProposeAllow("write")),
+        ("allow", "ports") => Some(RepoKeyTarget::ProposeAllow("ports")),
+        ("allow", "localhost") => Some(RepoKeyTarget::ProposeAllow("localhost")),
+        // Propose proxy
+        ("proxy", "allow_private_domains") => {
+            Some(RepoKeyTarget::ProposeProxy("allow_private_domains"))
+        }
+        // Deny section
+        ("deny", "paths") => Some(RepoKeyTarget::Deny("paths")),
+        ("deny", "env") => Some(RepoKeyTarget::Deny("env")),
+        // Everything else is not valid in repo config
+        _ => None,
+    }
+}
+
+/// Keys that are valid in repo config but rejected — provides clear error messages.
+pub fn repo_key_rejection_reason(key_info: &ConfigKeyInfo) -> &'static str {
+    match (key_info.section, key_info.key) {
+        ("sandbox", "quiet") => "controls local CLI output, not project sandbox policy",
+        ("sandbox", "validate") => "controls local validation behavior, not project policy",
+        ("sandbox", "scratch_dir") => "controls local temp handling, not project policy",
+        ("sandbox", "inherit_env") => {
+            "too dangerous for repo config — would affect all team members"
+        }
+        ("sandbox", "pass_env") => "environment variables are machine-specific, not project policy",
+        ("sandbox", "allow_cache_exec") => "cache paths are machine-specific, not project policy",
+        ("sandbox", "allow_cache_exec_any") => {
+            "too dangerous for repo config — would affect all team members"
+        }
+        ("proxy", "enabled") => "proxy settings are machine-specific, not project policy",
+        ("proxy", "port") => "proxy port is machine-specific, not project policy",
+        ("proxy", "log_file") => "log paths are machine-specific, not project policy",
+        ("proxy", "log_level") => "log level is a personal preference, not project policy",
+        ("proxy", "blocked_domains") => {
+            "domain lists are machine-specific paths, not project policy"
+        }
+        ("proxy", "allowed_domains") => {
+            "domain lists are machine-specific paths, not project policy"
+        }
+        _ => "not supported in repo config",
+    }
+}
+
+/// Set a value in a repo config (.cplt.toml) document.
+pub fn set_repo_value_in_doc(
+    doc: &mut toml_edit::DocumentMut,
+    key_info: &ConfigKeyInfo,
+    target: RepoKeyTarget,
+    value: &str,
+    unset: bool,
+) -> Result<(), String> {
+    use toml_edit::{Array, Item, Table, Value};
+
+    match target {
+        RepoKeyTarget::ProposeBool => {
+            let section = doc
+                .entry("propose")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("invalid [propose] section")?;
+
+            if unset {
+                section.remove(key_info.key);
+            } else {
+                let b: bool = value
+                    .parse()
+                    .map_err(|_| format!("expected 'true' or 'false', got '{value}'"))?;
+                if !b {
+                    return Err(format!(
+                        "{}.{} = false has no effect in repo config.\n  \
+                         Repo config can only request enabling permissions.\n  \
+                         Use --unset to remove it.",
+                        key_info.section, key_info.key
+                    ));
+                }
+                section[key_info.key] = toml_edit::value(b);
+            }
+        }
+        RepoKeyTarget::ProposeAllow(array_key) => {
+            let propose = doc
+                .entry("propose")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("invalid [propose] section")?;
+            let allow = propose
+                .entry("allow")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("invalid [propose.allow] section")?;
+
+            if unset {
+                if value.is_empty() {
+                    // --unset without value: remove the entire array
+                    allow.remove(array_key);
+                } else if let Some(arr) = allow.get_mut(array_key).and_then(|v| v.as_array_mut()) {
+                    arr.retain(|v| {
+                        v.as_str() != Some(value)
+                            && v.as_integer().map(|i| i.to_string()).as_deref() != Some(value)
+                    });
+                    if arr.is_empty() {
+                        allow.remove(array_key);
+                    }
+                } else {
+                    allow.remove(array_key);
+                }
+            } else {
+                let arr = allow
+                    .entry(array_key)
+                    .or_insert(Item::Value(Value::Array(Array::new())))
+                    .as_array_mut()
+                    .ok_or("expected array")?;
+
+                // Parse as u16 for port arrays, string otherwise
+                if key_info.value_type == ConfigValueType::U16Array {
+                    let port: u16 = value
+                        .parse()
+                        .map_err(|_| format!("expected port number (1-65535), got '{value}'"))?;
+                    if !arr.iter().any(|v| v.as_integer() == Some(port as i64)) {
+                        arr.push(port as i64);
+                    }
+                } else {
+                    if !arr.iter().any(|v| v.as_str() == Some(value)) {
+                        arr.push(value);
+                    }
+                }
+            }
+        }
+        RepoKeyTarget::ProposeProxy(array_key) => {
+            let propose = doc
+                .entry("propose")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("invalid [propose] section")?;
+            let proxy = propose
+                .entry("proxy")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("invalid [propose.proxy] section")?;
+
+            if unset {
+                if value.is_empty() {
+                    // --unset without value: remove the entire array
+                    proxy.remove(array_key);
+                } else if let Some(arr) = proxy.get_mut(array_key).and_then(|v| v.as_array_mut()) {
+                    arr.retain(|v| v.as_str() != Some(value));
+                    if arr.is_empty() {
+                        proxy.remove(array_key);
+                    }
+                } else {
+                    proxy.remove(array_key);
+                }
+            } else {
+                let arr = proxy
+                    .entry(array_key)
+                    .or_insert(Item::Value(Value::Array(Array::new())))
+                    .as_array_mut()
+                    .ok_or("expected array")?;
+                if !arr.iter().any(|v| v.as_str() == Some(value)) {
+                    arr.push(value);
+                }
+            }
+        }
+        RepoKeyTarget::Deny(array_key) => {
+            let section = doc
+                .entry("deny")
+                .or_insert(Item::Table(Table::new()))
+                .as_table_mut()
+                .ok_or("invalid [deny] section")?;
+
+            if unset {
+                if value.is_empty() {
+                    // --unset without value: remove the entire array
+                    section.remove(array_key);
+                } else if let Some(arr) = section.get_mut(array_key).and_then(|v| v.as_array_mut())
+                {
+                    arr.retain(|v| v.as_str() != Some(value));
+                    if arr.is_empty() {
+                        section.remove(array_key);
+                    }
+                } else {
+                    section.remove(array_key);
+                }
+            } else {
+                let arr = section
+                    .entry(array_key)
+                    .or_insert(Item::Value(Value::Array(Array::new())))
+                    .as_array_mut()
+                    .ok_or("expected array")?;
+                if !arr.iter().any(|v| v.as_str() == Some(value)) {
+                    arr.push(value);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Config display (effective config) ────────────────────────────────
 
 /// Display the effective configuration from a config file merged with defaults.
@@ -1946,113 +2321,113 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
     let src =
         |has_file_value: bool| -> &'static str { if has_file_value { "" } else { " (default)" } };
 
-    eprintln!("{blue}[cplt]{nc} ── Effective Configuration ──────────────────────");
-    eprintln!();
+    println!("{blue}[cplt]{nc} ── Effective Configuration ──────────────────────");
+    println!();
 
     // Config file path
     if let Some(l) = loaded {
-        eprintln!("{blue}[cplt]{nc}  {dim}File:{nc}  {}", l.path.display());
+        println!("{blue}[cplt]{nc}  {dim}File:{nc}  {}", l.path.display());
     } else if let Some(p) = config_path() {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}  {dim}File:{nc}  {dim}(not found: {}){nc}",
             p.display()
         );
     } else {
-        eprintln!("{blue}[cplt]{nc}  {dim}File:{nc}  {dim}(no config path — $HOME not set){nc}");
+        println!("{blue}[cplt]{nc}  {dim}File:{nc}  {dim}(no config path — $HOME not set){nc}");
     }
-    eprintln!();
+    println!();
 
     // [proxy]
-    eprintln!("{blue}[cplt]{nc}  {dim}[proxy]{nc}");
+    println!("{blue}[cplt]{nc}  {dim}[proxy]{nc}");
     let proxy_enabled = c.proxy.enabled.unwrap_or(true);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    enabled          = {}{}{nc}{}",
         if proxy_enabled { green } else { yellow },
         proxy_enabled,
         src(c.proxy.enabled.is_some())
     );
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    port             = {}{}",
         c.proxy.port.unwrap_or(0),
         src(c.proxy.port.is_some())
     );
     if let Some(ref bd) = c.proxy.blocked_domains {
-        eprintln!("{blue}[cplt]{nc}    blocked_domains  = \"{bd}\"");
+        println!("{blue}[cplt]{nc}    blocked_domains  = \"{bd}\"");
     }
     if let Some(ref ad) = c.proxy.allowed_domains {
-        eprintln!("{blue}[cplt]{nc}    allowed_domains  = \"{ad}\"");
+        println!("{blue}[cplt]{nc}    allowed_domains  = \"{ad}\"");
     }
     if let Some(ref lf) = c.proxy.log_file {
-        eprintln!("{blue}[cplt]{nc}    log_file         = \"{lf}\"");
+        println!("{blue}[cplt]{nc}    log_file         = \"{lf}\"");
     }
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    log_level        = \"{}\"{}",
         c.proxy.log_level.as_deref().unwrap_or("none"),
         src(c.proxy.log_level.is_some())
     );
-    eprintln!();
+    println!();
 
     // [allow]
-    eprintln!("{blue}[cplt]{nc}  {dim}[allow]{nc}");
+    println!("{blue}[cplt]{nc}  {dim}[allow]{nc}");
     if c.allow.read.is_empty() {
-        eprintln!("{blue}[cplt]{nc}    read             = {dim}[]{nc}");
+        println!("{blue}[cplt]{nc}    read             = {dim}[]{nc}");
     } else {
-        eprintln!("{blue}[cplt]{nc}    read             = {:?}", c.allow.read);
+        println!("{blue}[cplt]{nc}    read             = {:?}", c.allow.read);
     }
     if c.allow.write.is_empty() {
-        eprintln!("{blue}[cplt]{nc}    write            = {dim}[]{nc}");
+        println!("{blue}[cplt]{nc}    write            = {dim}[]{nc}");
     } else {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    write            = {yellow}{:?}{nc}",
             c.allow.write
         );
     }
     if c.allow.ports.is_empty() {
-        eprintln!("{blue}[cplt]{nc}    ports            = {dim}[]{nc}");
+        println!("{blue}[cplt]{nc}    ports            = {dim}[]{nc}");
     } else {
-        eprintln!("{blue}[cplt]{nc}    ports            = {:?}", c.allow.ports);
+        println!("{blue}[cplt]{nc}    ports            = {:?}", c.allow.ports);
     }
     if c.allow.localhost.is_empty() {
-        eprintln!("{blue}[cplt]{nc}    localhost         = {dim}[]{nc}");
+        println!("{blue}[cplt]{nc}    localhost         = {dim}[]{nc}");
     } else {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    localhost         = {:?}",
             c.allow.localhost
         );
     }
-    eprintln!();
+    println!();
 
     // [deny]
-    eprintln!("{blue}[cplt]{nc}  {dim}[deny]{nc}");
+    println!("{blue}[cplt]{nc}  {dim}[deny]{nc}");
     if c.deny.paths.is_empty() {
-        eprintln!("{blue}[cplt]{nc}    paths            = {dim}[]{nc}");
+        println!("{blue}[cplt]{nc}    paths            = {dim}[]{nc}");
     } else {
-        eprintln!("{blue}[cplt]{nc}    paths            = {:?}", c.deny.paths);
+        println!("{blue}[cplt]{nc}    paths            = {:?}", c.deny.paths);
     }
-    eprintln!();
+    println!();
 
     // [sandbox]
-    eprintln!("{blue}[cplt]{nc}  {dim}[sandbox]{nc}");
+    println!("{blue}[cplt]{nc}  {dim}[sandbox]{nc}");
     let validate = c.sandbox.validate.unwrap_or(true);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    validate              = {}{}",
         validate,
         src(c.sandbox.validate.is_some())
     );
     let allow_env_files = c.sandbox.allow_env_files.unwrap_or(false);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    allow_env_files       = {}{}",
         allow_env_files,
         src(c.sandbox.allow_env_files.is_some())
     );
     let allow_localhost_any = c.sandbox.allow_localhost_any.unwrap_or(false);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    allow_localhost_any    = {}{}",
         allow_localhost_any,
         src(c.sandbox.allow_localhost_any.is_some())
     );
     if !c.sandbox.pass_env.is_empty() {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    pass_env              = {:?}",
             c.sandbox.pass_env
         );
@@ -2060,15 +2435,15 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
     let inherit_env = c.sandbox.inherit_env.unwrap_or(false);
     if inherit_env {
         let red = "\x1b[0;31m";
-        eprintln!("{blue}[cplt]{nc}    inherit_env           = {red}true{nc} ⚠ DANGEROUS");
+        println!("{blue}[cplt]{nc}    inherit_env           = {red}true{nc} ⚠ DANGEROUS");
     } else {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    inherit_env           = false{}",
             src(c.sandbox.inherit_env.is_some())
         );
     }
     let allow_lifecycle = c.sandbox.allow_lifecycle_scripts.unwrap_or(false);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    allow_lifecycle_scripts = {}{}",
         allow_lifecycle,
         src(c.sandbox.allow_lifecycle_scripts.is_some())
@@ -2076,9 +2451,9 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
     let allow_gpg = c.sandbox.allow_gpg_signing.unwrap_or(false);
     if allow_gpg {
         let red = "\x1b[0;31m";
-        eprintln!("{blue}[cplt]{nc}    allow_gpg_signing     = {red}true{nc} ⚠ DANGEROUS");
+        println!("{blue}[cplt]{nc}    allow_gpg_signing     = {red}true{nc} ⚠ DANGEROUS");
     } else {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    allow_gpg_signing     = false{}",
             src(c.sandbox.allow_gpg_signing.is_some())
         );
@@ -2086,9 +2461,9 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
     let allow_docker = c.sandbox.allow_docker.unwrap_or(false);
     if allow_docker {
         let red = "\x1b[0;31m";
-        eprintln!("{blue}[cplt]{nc}    allow_docker          = {red}true{nc} ⚠ DANGEROUS");
+        println!("{blue}[cplt]{nc}    allow_docker          = {red}true{nc} ⚠ DANGEROUS");
     } else {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    allow_docker          = false{}",
             src(c.sandbox.allow_docker.is_some())
         );
@@ -2096,33 +2471,33 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
     let allow_tmp = c.sandbox.allow_tmp_exec.unwrap_or(false);
     if allow_tmp {
         let red = "\x1b[0;31m";
-        eprintln!("{blue}[cplt]{nc}    allow_tmp_exec        = {red}true{nc} ⚠ DANGEROUS");
+        println!("{blue}[cplt]{nc}    allow_tmp_exec        = {red}true{nc} ⚠ DANGEROUS");
     } else {
-        eprintln!(
+        println!(
             "{blue}[cplt]{nc}    allow_tmp_exec        = false{}",
             src(c.sandbox.allow_tmp_exec.is_some())
         );
     }
     let allow_browser = c.sandbox.allow_browser.unwrap_or(false);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    allow_browser         = {}{}",
         allow_browser,
         src(c.sandbox.allow_browser.is_some())
     );
     let scratch = c.sandbox.scratch_dir.unwrap_or(true);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    scratch_dir           = {}{}",
         scratch,
         src(c.sandbox.scratch_dir.is_some())
     );
     let quiet = c.sandbox.quiet.unwrap_or(false);
-    eprintln!(
+    println!(
         "{blue}[cplt]{nc}    quiet                 = {}{}",
         quiet,
         src(c.sandbox.quiet.is_some())
     );
 
-    eprintln!("{blue}[cplt]{nc} ──────────────────────────────────────────────────────");
+    println!("{blue}[cplt]{nc} ──────────────────────────────────────────────────────");
 }
 
 #[cfg(test)]
@@ -2984,5 +3359,132 @@ quiet = false
 
         let quiet = lookup_key("sandbox.quiet").unwrap();
         assert!(!quiet.dangerous);
+    }
+
+    #[test]
+    fn apply_repo_config_deny_always_applied() {
+        let config = Config::default();
+        let mut resolved = config.merge(CliFlags::default()).unwrap();
+
+        let repo_config = crate::repo_config::RepoConfig {
+            deny: crate::repo_config::DenySection {
+                paths: vec!["~/secrets".to_string()],
+                env: vec!["MY_SECRET".to_string(), "VAULT_TOKEN".to_string()],
+            },
+            ..Default::default()
+        };
+
+        // Apply with NO approved keys — deny should still work
+        let unapproved = resolved.apply_repo_config(&repo_config, &[]);
+        assert!(unapproved.is_empty()); // no proposals, so nothing unapproved
+        assert!(
+            resolved
+                .deny_paths
+                .iter()
+                .any(|p| p.to_string_lossy().contains("secrets"))
+        );
+        assert!(resolved.deny_env.contains(&"MY_SECRET".to_string()));
+        assert!(resolved.deny_env.contains(&"VAULT_TOKEN".to_string()));
+    }
+
+    #[test]
+    fn apply_repo_config_proposals_need_approval() {
+        let config = Config::default();
+        let mut resolved = config.merge(CliFlags::default()).unwrap();
+
+        let repo_config = crate::repo_config::RepoConfig {
+            propose: crate::repo_config::ProposeSection {
+                allow_jvm_attach: Some(true),
+                allow_docker: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // No keys approved
+        let unapproved = resolved.apply_repo_config(&repo_config, &[]);
+        assert!(!resolved.allow_jvm_attach);
+        assert!(!resolved.allow_docker);
+        assert_eq!(unapproved.len(), 2);
+        assert!(unapproved.contains(&"allow_jvm_attach".to_string()));
+        assert!(unapproved.contains(&"allow_docker".to_string()));
+    }
+
+    #[test]
+    fn apply_repo_config_approved_proposals_take_effect() {
+        let config = Config::default();
+        let mut resolved = config.merge(CliFlags::default()).unwrap();
+
+        let repo_config = crate::repo_config::RepoConfig {
+            propose: crate::repo_config::ProposeSection {
+                allow_jvm_attach: Some(true),
+                allow_docker: Some(true),
+                allow_localhost_any: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // Only approve jvm_attach and localhost_any
+        let unapproved =
+            resolved.apply_repo_config(&repo_config, &["allow_jvm_attach", "allow_localhost_any"]);
+        assert!(resolved.allow_jvm_attach);
+        assert!(resolved.allow_localhost_any);
+        assert!(!resolved.allow_docker); // not approved
+        assert_eq!(unapproved, vec!["allow_docker"]);
+    }
+
+    #[test]
+    fn apply_repo_config_path_proposals() {
+        let config = Config::default();
+        let mut resolved = config.merge(CliFlags::default()).unwrap();
+
+        let repo_config = crate::repo_config::RepoConfig {
+            propose: crate::repo_config::ProposeSection {
+                allow: crate::repo_config::ProposeAllowSection {
+                    read: vec!["~/.gradle/gradle.properties".to_string()],
+                    ports: vec![8080, 5432],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // Approve read and ports
+        let unapproved = resolved.apply_repo_config(&repo_config, &["allow.read", "allow.ports"]);
+        assert!(unapproved.is_empty());
+        assert!(
+            resolved
+                .allow_read
+                .iter()
+                .any(|p| p.to_string_lossy().contains("gradle.properties"))
+        );
+        assert!(resolved.allow_ports.contains(&8080));
+        assert!(resolved.allow_ports.contains(&5432));
+    }
+
+    #[test]
+    fn apply_repo_config_proxy_proposals() {
+        let config = Config::default();
+        let mut resolved = config.merge(CliFlags::default()).unwrap();
+
+        let repo_config = crate::repo_config::RepoConfig {
+            propose: crate::repo_config::ProposeSection {
+                proxy: crate::repo_config::ProposeProxySection {
+                    allow_private_domains: vec!["intern.nav.no".to_string()],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let unapproved = resolved.apply_repo_config(&repo_config, &["proxy.allow_private_domains"]);
+        assert!(unapproved.is_empty());
+        assert!(
+            resolved
+                .allow_private_domains
+                .contains(&"intern.nav.no".to_string())
+        );
     }
 }

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use cplt::{agent, config, discover, proxy, sandbox, scratch, update};
+use cplt::{agent, config, discover, proxy, repo_config, sandbox, scratch, trust, update};
 #[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
@@ -64,6 +64,12 @@ EXAMPLES:
 
   cplt update
     Update cplt to the latest release from GitHub
+
+  cplt trust
+    Show per-repo config permissions and their approval status
+
+  cplt trust accept allow_jvm_attach allow_docker
+    Approve specific permissions from .cplt.toml
 
   eval \"$(cplt --shell-setup)\"
     Add to your shell rc so 'copilot' runs the sandboxed version
@@ -312,6 +318,12 @@ struct Cli {
     #[arg(long, short = 'y')]
     yes: bool,
 
+    /// Auto-approve all permissions from .cplt.toml for this run only.
+    /// For CI/scripts where interactive approval isn't possible.
+    /// Does not persist trust — approvals apply only to the current invocation.
+    #[arg(long)]
+    accept_repo_config: bool,
+
     /// Suppress the startup configuration summary and non-essential messages.
     /// Errors and warnings are always shown. Use when you've reviewed the
     /// sandbox settings and don't need to see them every time.
@@ -385,6 +397,15 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+
+    /// Manage per-repo trust for .cplt.toml permissions.
+    ///
+    /// Shows, approves, or revokes trust for sandbox permissions
+    /// requested in the current repository's .cplt.toml file.
+    Trust {
+        #[command(subcommand)]
+        action: Option<TrustAction>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -446,6 +467,16 @@ enum ConfigAction {
         /// (sandbox.inherit_env, sandbox.allow_tmp_exec)
         #[arg(long)]
         force: bool,
+
+        /// Write to the repo-local .cplt.toml (proposed/deny settings).
+        /// Relaxations go under [propose], tightenings under [deny].
+        #[arg(long, conflicts_with = "global")]
+        repo: bool,
+
+        /// Write to the global config (~/.config/cplt/config.toml).
+        /// This is the default behavior.
+        #[arg(long, conflicts_with = "repo")]
+        global: bool,
     },
 
     /// Explain what config keys do.
@@ -459,11 +490,56 @@ enum ConfigAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TrustAction {
+    /// Show trust status for the current repository.
+    ///
+    /// Displays what .cplt.toml requests and which permissions are approved.
+    Show,
+
+    /// Approve specific permissions from .cplt.toml.
+    ///
+    /// Example: cplt trust accept allow_jvm_attach allow_docker
+    Accept {
+        /// Permission keys to approve (e.g. allow_jvm_attach, allow_docker).
+        /// Use --all to approve everything.
+        #[arg(required_unless_present = "all")]
+        keys: Vec<String>,
+
+        /// Approve all permissions.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Revoke trust for specific permissions.
+    ///
+    /// Example: cplt trust revoke allow_docker
+    Revoke {
+        /// Keys to revoke (e.g. allow_docker).
+        /// Use --all to revoke all trust for this repo.
+        #[arg(required_unless_present = "all")]
+        keys: Vec<String>,
+
+        /// Revoke all trust for this repo.
+        #[arg(long)]
+        all: bool,
+    },
+}
+
 const GREEN: &str = "\x1b[0;32m";
 const YELLOW: &str = "\x1b[0;33m";
 const RED: &str = "\x1b[0;31m";
 const BLUE: &str = "\x1b[0;34m";
 const NC: &str = "\x1b[0m";
+
+// ── Display labels (single source of truth for consistent CLI output) ──
+const SOURCE_GIT_HEAD: &str = "git HEAD (tamper-proof)";
+const SOURCE_WORKING_TREE: &str = "working tree (⚠ not committed)";
+const LABEL_DENY_APPLIED: &str = "(applied)";
+const LABEL_ALLOW_APPROVED: &str = "(approved)";
+const LABEL_ALLOW_PENDING: &str = "(pending approval)";
+const STATUS_APPROVED: &str = "✓ approved";
+const STATUS_PENDING: &str = "○ pending";
 
 fn info(msg: &str) {
     eprintln!("{BLUE}[cplt]{NC} {msg}");
@@ -479,6 +555,13 @@ fn warn(msg: &str) {
 
 fn error(msg: &str) {
     eprintln!("{RED}[cplt]{NC} {msg}");
+}
+
+fn source_label(source: repo_config::RepoConfigSource) -> &'static str {
+    match source {
+        repo_config::RepoConfigSource::GitHead => SOURCE_GIT_HEAD,
+        repo_config::RepoConfigSource::WorkingTree => SOURCE_WORKING_TREE,
+    }
 }
 
 fn detect_project_root() -> Option<PathBuf> {
@@ -572,6 +655,7 @@ fn main() -> ExitCode {
         return match command {
             Command::Config { action } => run_config_command(action),
             Command::Update { check, force } => run_update(check, force),
+            Command::Trust { action } => run_trust_command(action),
         };
     }
 
@@ -735,6 +819,72 @@ fn main() -> ExitCode {
             project_dir.display()
         ));
         return ExitCode::FAILURE;
+    }
+
+    // ── Load and apply per-repo config (.cplt.toml) ──────────────
+    let mut unapproved_proposals: Vec<String> = Vec::new();
+    match repo_config::load_repo_config(&project_dir) {
+        Ok(Some(loaded)) => {
+            if !resolved.quiet {
+                let source_note = match loaded.source {
+                    repo_config::RepoConfigSource::GitHead => "",
+                    repo_config::RepoConfigSource::WorkingTree => {
+                        warn(&format!(".cplt.toml source: {SOURCE_WORKING_TREE}",));
+                        " (working tree)"
+                    }
+                };
+                info(&format!("Repo config: .cplt.toml{source_note}"));
+            }
+
+            // Determine approved keys
+            let approved_keys: Vec<String> = if cli.accept_repo_config {
+                // --accept-repo-config: approve everything
+                repo_config::proposed_keys(&loaded.config.propose)
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            } else {
+                // Check trust store — validate content hash
+                match trust::load_trust(&project_dir) {
+                    Some(t) => {
+                        let current_hash = trust::proposal_content_hash(&loaded.config.propose);
+                        if !t.accepted.content_hash.is_empty()
+                            && t.accepted.content_hash != current_hash
+                        {
+                            // Proposals changed since approval — invalidate
+                            if !resolved.quiet {
+                                warn(
+                                    ".cplt.toml permissions changed since last approval — re-approve with `cplt trust accept`",
+                                );
+                            }
+                            Vec::new()
+                        } else {
+                            t.accepted.keys
+                        }
+                    }
+                    None => Vec::new(),
+                }
+            };
+
+            let approved_refs: Vec<&str> = approved_keys.iter().map(|s| s.as_str()).collect();
+            unapproved_proposals = resolved.apply_repo_config(&loaded.config, &approved_refs);
+        }
+        Ok(None) => {} // No .cplt.toml — nothing to do
+        Err(e) => {
+            warn(&format!("Failed to load .cplt.toml: {e}"));
+        }
+    }
+
+    // Show unapproved permissions warning (non-fatal — deny-default keeps us safe)
+    if !unapproved_proposals.is_empty() && !resolved.quiet {
+        warn(&format!(
+            ".cplt.toml has {} unapproved permission(s):",
+            unapproved_proposals.len()
+        ));
+        for key in &unapproved_proposals {
+            eprintln!("  {YELLOW}○{NC} {key}");
+        }
+        eprintln!("  Run: {GREEN}cplt trust accept --all{NC}  (or select specific keys)");
     }
 
     if !resolved.quiet {
@@ -1127,6 +1277,7 @@ fn main() -> ExitCode {
         &resolved.pass_env,
         resolved.inherit_env,
         &disabled_categories,
+        &resolved.deny_env,
     );
 
     // Cleanup
@@ -1213,10 +1364,10 @@ fn run_doctor() -> ExitCode {
             .unwrap_or_else(|_| PathBuf::from("."))
     };
 
-    info(&format!("cplt:     {}", LONG_VERSION));
-    info(&format!("Project:  {}", project_dir.display()));
-    info(&format!("Home:     {}", home_dir.display()));
-    eprintln!();
+    println!("{BLUE}[cplt]{NC} cplt:     {}", LONG_VERSION);
+    println!("{BLUE}[cplt]{NC} Project:  {}", project_dir.display());
+    println!("{BLUE}[cplt]{NC} Home:     {}", home_dir.display());
+    println!();
 
     let discovery = discover::discover_all(&home_dir, &project_dir);
     let ok = discovery.print_report();
@@ -1276,7 +1427,9 @@ fn run_config_command(action: ConfigAction) -> ExitCode {
             append,
             unset,
             force,
-        } => run_config_set(&key, value.as_deref(), append, unset, force),
+            repo,
+            global: _,
+        } => run_config_set(&key, value.as_deref(), append, unset, force, repo),
         ConfigAction::Explain { key } => run_config_explain(key.as_deref()),
     }
 }
@@ -1338,7 +1491,140 @@ fn run_config_show() -> ExitCode {
     };
 
     config::display_config(loaded.as_ref());
+
+    // Show repo config if present
+    let project_dir = detect_project_root().or_else(|| std::env::current_dir().ok());
+    if let Some(ref dir) = project_dir {
+        match repo_config::load_repo_config(dir) {
+            Ok(Some(loaded_repo)) => {
+                display_repo_config(&loaded_repo, dir);
+            }
+            Err(e) => {
+                eprintln!();
+                eprintln!("{YELLOW}[cplt] Repo config error: {e}{NC}");
+            }
+            Ok(None) => {} // No .cplt.toml — nothing to show
+        }
+    }
+
     ExitCode::SUCCESS
+}
+
+fn display_repo_config(loaded: &repo_config::LoadedRepoConfig, project_dir: &std::path::Path) {
+    let dim = "\x1b[2m";
+    let green = "\x1b[0;32m";
+    let yellow = "\x1b[0;33m";
+
+    println!();
+    println!("{BLUE}[cplt]{NC} ── Repo Config (.cplt.toml) ────────────────────────");
+    println!(
+        "{BLUE}[cplt]{NC}  {dim}Source:{NC} {}",
+        source_label(loaded.source)
+    );
+    println!(
+        "{BLUE}[cplt]{NC}  {dim}Path:{NC}   {}/.cplt.toml",
+        project_dir.display()
+    );
+    println!();
+
+    let rc = &loaded.config;
+
+    // [deny]
+    if !rc.deny.paths.is_empty() || !rc.deny.env.is_empty() {
+        println!("{BLUE}[cplt]{NC}  {dim}[deny]{NC} {green}{LABEL_DENY_APPLIED}{NC}");
+        for p in &rc.deny.paths {
+            println!("{BLUE}[cplt]{NC}    paths   = {p}");
+        }
+        for v in &rc.deny.env {
+            println!("{BLUE}[cplt]{NC}    env     = {v}");
+        }
+        println!();
+    }
+
+    // [propose]
+    let proposed = repo_config::proposed_keys(&rc.propose);
+    if !proposed.is_empty() {
+        let trust_entry = crate::trust::load_trust(project_dir);
+
+        // Determine overall approval status for the header
+        let all_approved = proposed.iter().all(|key| {
+            trust_entry
+                .as_ref()
+                .map(|t| crate::trust::is_key_approved(t, key))
+                .unwrap_or(false)
+        });
+        let header_status = if all_approved {
+            format!("{green}{LABEL_ALLOW_APPROVED}{NC}")
+        } else {
+            format!("{yellow}{LABEL_ALLOW_PENDING}{NC}")
+        };
+        println!("{BLUE}[cplt]{NC}  {dim}[allow]{NC} {header_status}");
+
+        // Booleans
+        let bools: &[(&str, Option<bool>)] = &[
+            ("allow_localhost_any", rc.propose.allow_localhost_any),
+            ("allow_jvm_attach", rc.propose.allow_jvm_attach),
+            ("allow_docker", rc.propose.allow_docker),
+            ("allow_tmp_exec", rc.propose.allow_tmp_exec),
+            ("allow_gpg_signing", rc.propose.allow_gpg_signing),
+            (
+                "allow_lifecycle_scripts",
+                rc.propose.allow_lifecycle_scripts,
+            ),
+            ("allow_env_files", rc.propose.allow_env_files),
+            ("allow_browser", rc.propose.allow_browser),
+        ];
+        for (name, val) in bools {
+            if let Some(v) = val {
+                let approved = trust_entry
+                    .as_ref()
+                    .map(|t| crate::trust::is_key_approved(t, name))
+                    .unwrap_or(false);
+                let status = if approved {
+                    format!("{green}{STATUS_APPROVED}{NC}")
+                } else {
+                    format!("{yellow}{STATUS_PENDING}{NC}")
+                };
+                println!("{BLUE}[cplt]{NC}    {name:<30} = {v}  {status}");
+            }
+        }
+
+        // Arrays
+        if !rc.propose.allow.read.is_empty() {
+            println!("{BLUE}[cplt]{NC}    {dim}allow.read:{NC}");
+            for p in &rc.propose.allow.read {
+                println!("{BLUE}[cplt]{NC}      {p}");
+            }
+        }
+        if !rc.propose.allow.write.is_empty() {
+            println!("{BLUE}[cplt]{NC}    {dim}allow.write:{NC}");
+            for p in &rc.propose.allow.write {
+                println!("{BLUE}[cplt]{NC}      {p}");
+            }
+        }
+        if !rc.propose.allow.ports.is_empty() {
+            println!(
+                "{BLUE}[cplt]{NC}    allow.ports            = {:?}",
+                rc.propose.allow.ports
+            );
+        }
+        if !rc.propose.allow.localhost.is_empty() {
+            println!(
+                "{BLUE}[cplt]{NC}    allow.localhost         = {:?}",
+                rc.propose.allow.localhost
+            );
+        }
+        if !rc.propose.proxy.allow_private_domains.is_empty() {
+            println!(
+                "{BLUE}[cplt]{NC}    proxy.allow_private_domains = {:?}",
+                rc.propose.proxy.allow_private_domains
+            );
+        }
+    } else {
+        println!("{BLUE}[cplt]{NC}  {dim}No additional permissions requested.{NC}");
+    }
+
+    println!("{BLUE}[cplt]{NC} ──────────────────────────────────────────────────────");
 }
 
 fn run_config_path() -> ExitCode {
@@ -1385,9 +1671,10 @@ fn run_config_set(
     append: bool,
     unset: bool,
     force: bool,
+    repo: bool,
 ) -> ExitCode {
-    let op = match config::ConfigSetOp::new(key) {
-        Ok(op) => op,
+    let key_info = match config::lookup_key(key) {
+        Ok(info) => info,
         Err(e) => {
             error(&e);
             return ExitCode::FAILURE;
@@ -1395,7 +1682,7 @@ fn run_config_set(
     };
 
     // Validate flag combinations
-    if unset && value.is_some() && !op.key_info.value_type.is_array() {
+    if unset && value.is_some() && !key_info.value_type.is_array() {
         error("--unset does not take a value (except for array keys)");
         return ExitCode::FAILURE;
     }
@@ -1409,6 +1696,29 @@ fn run_config_set(
         ));
         return ExitCode::FAILURE;
     }
+
+    // ── Repo mode ───────────────────────────────────────────────────
+    if repo {
+        return run_config_set_repo(key, key_info, value, unset, force);
+    }
+
+    // ── Global mode (default) ───────────────────────────────────────
+
+    // deny.env is repo-local only (not in global config file schema)
+    if key_info.section == "deny" && key_info.key == "env" {
+        error(
+            "deny.env is only supported in repo-local config (.cplt.toml).\n  Use: cplt config set --repo deny.env <VALUE>",
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let op = match config::ConfigSetOp::new(key) {
+        Ok(op) => op,
+        Err(e) => {
+            error(&e);
+            return ExitCode::FAILURE;
+        }
+    };
 
     // Dangerous key safeguard
     if op.key_info.dangerous
@@ -1439,17 +1749,13 @@ fn run_config_set(
         if let Some(val) = value
             && op.key_info.value_type.is_array()
         {
-            // Array key + value: remove just that element
             config::remove_array_element_in_doc(&mut doc, op.key_info, val)
                 .map(|removed| element_removed = removed)
         } else {
-            // Scalar key, or array key without value: remove entire key
             config::unset_value_in_doc(&mut doc, op.key_info);
             Ok(())
         }
     } else if append || op.key_info.value_type.is_array() {
-        // Array keys always append — `set` adds to the array, not replaces it.
-        // Use `--unset` first to clear, then `set` to start fresh.
         config::append_value_in_doc(&mut doc, op.key_info, value.unwrap())
     } else {
         config::set_value_in_doc(&mut doc, op.key_info, value.unwrap())
@@ -1496,6 +1802,141 @@ fn run_config_set(
         ok(&format!("{key} = {}", value.unwrap()));
     }
 
+    // Hint about repo config if .cplt.toml exists
+    let project_dir = detect_project_root().or_else(|| std::env::current_dir().ok());
+    if let Some(ref dir) = project_dir
+        && dir.join(".cplt.toml").exists()
+    {
+        let dim = "\x1b[2m";
+        eprintln!(
+            "{BLUE}[cplt]{NC} {dim}Tip: this repo has .cplt.toml. Use --repo to set project-specific settings.{NC}"
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn run_config_set_repo(
+    key: &str,
+    key_info: &'static config::ConfigKeyInfo,
+    value: Option<&str>,
+    unset: bool,
+    force: bool,
+) -> ExitCode {
+    // Determine repo config path (git root preferred, fallback to cwd)
+    let project_dir = detect_project_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let repo_config_path = project_dir.join(".cplt.toml");
+
+    // Check if key is valid in repo config
+    let target = match config::repo_key_target(key_info) {
+        Some(t) => t,
+        None => {
+            let reason = config::repo_key_rejection_reason(key_info);
+            error(&format!(
+                "{key} is not valid in repo config.\n  \
+                 Reason: {reason}.\n  \
+                 Use: cplt config set {key} {}",
+                value.unwrap_or("<VALUE>")
+            ));
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Dangerous key safeguard (still applies for repo permissions)
+    if key_info.dangerous
+        && !unset
+        && let Some(val) = value
+        && val == "true"
+        && !force
+    {
+        error(&format!(
+            "{key} is dangerous — it requests weakened security for anyone approving this repo config.\n  \
+             Add --force to confirm: cplt config set --repo {key} true --force"
+        ));
+        return ExitCode::FAILURE;
+    }
+
+    // Load or create repo config document
+    let mut doc = if repo_config_path.exists() {
+        let raw = match std::fs::read_to_string(&repo_config_path) {
+            Ok(r) => r,
+            Err(e) => {
+                error(&format!("cannot read {}: {e}", repo_config_path.display()));
+                return ExitCode::FAILURE;
+            }
+        };
+        match raw.parse::<toml_edit::DocumentMut>() {
+            Ok(d) => d,
+            Err(e) => {
+                error(&format!(
+                    "invalid TOML in {}: {e}",
+                    repo_config_path.display()
+                ));
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        toml_edit::DocumentMut::new()
+    };
+
+    // Apply modification
+    let val = if unset {
+        value.unwrap_or("")
+    } else {
+        value.unwrap()
+    };
+    if let Err(e) = config::set_repo_value_in_doc(&mut doc, key_info, target, val, unset) {
+        error(&e);
+        return ExitCode::FAILURE;
+    }
+
+    // Write back
+    let output = doc.to_string();
+    if let Err(e) = std::fs::write(&repo_config_path, &output) {
+        error(&format!("cannot write {}: {e}", repo_config_path.display()));
+        return ExitCode::FAILURE;
+    }
+
+    // Validate the result parses and passes safety checks
+    if let Err(e) = repo_config::parse_and_validate(&output) {
+        eprintln!(
+            "{YELLOW}[cplt] Warning: written .cplt.toml has validation issues: {e}{NC}\n  The file was saved but may not load correctly."
+        );
+    }
+
+    // User feedback
+    let dim = "\x1b[2m";
+    if unset {
+        ok(&format!("{key} removed from .cplt.toml"));
+    } else {
+        let section_name = match target {
+            config::RepoKeyTarget::ProposeBool
+            | config::RepoKeyTarget::ProposeAllow(_)
+            | config::RepoKeyTarget::ProposeProxy(_) => "propose",
+            config::RepoKeyTarget::Deny(_) => "deny",
+        };
+        ok(&format!("{key} = {val} → .cplt.toml [{section_name}]"));
+    }
+    eprintln!(
+        "{BLUE}[cplt]{NC} {dim}Updated: {}{NC}",
+        repo_config_path.display()
+    );
+
+    // Remind about trust approval for propose keys
+    if matches!(
+        target,
+        config::RepoKeyTarget::ProposeBool
+            | config::RepoKeyTarget::ProposeAllow(_)
+            | config::RepoKeyTarget::ProposeProxy(_)
+    ) && !unset
+    {
+        eprintln!(
+            "{BLUE}[cplt]{NC} {dim}Proposed changes require approval: cplt trust accept --all{NC}"
+        );
+        eprintln!("{BLUE}[cplt]{NC} {dim}Remember to commit .cplt.toml{NC}");
+    }
+
     ExitCode::SUCCESS
 }
 
@@ -1527,11 +1968,263 @@ fn run_config_explain(key: Option<&str>) -> ExitCode {
     }
 }
 
+fn run_trust_command(action: Option<TrustAction>) -> ExitCode {
+    // Determine project directory (git root preferred, fallback to cwd)
+    let project_dir = detect_project_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Check if inside sandbox — trust commands are blocked there
+    if std::env::var("__CPLT_TRUST_LOCKED").is_ok() {
+        error("Cannot modify trust from inside the sandbox.");
+        eprintln!("  Run `cplt trust` outside the sandbox (before launching the agent).");
+        return ExitCode::FAILURE;
+    }
+
+    // Load repo config
+    let loaded = match repo_config::load_repo_config(&project_dir) {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            info("No .cplt.toml found in this repository.");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            error(&format!("Failed to load .cplt.toml: {e}"));
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let action = action.unwrap_or(TrustAction::Show);
+
+    match action {
+        TrustAction::Show => trust_show(&project_dir, &loaded),
+        TrustAction::Accept { keys, all } => trust_accept(&project_dir, &loaded, &keys, all),
+        TrustAction::Revoke { keys, all } => trust_revoke(&project_dir, &loaded, &keys, all),
+    }
+}
+
+fn trust_show(project_dir: &std::path::Path, loaded: &repo_config::LoadedRepoConfig) -> ExitCode {
+    let proposed = repo_config::proposed_keys(&loaded.config.propose);
+    let trust_entry = trust::load_trust(project_dir);
+
+    println!("{BLUE}[cplt]{NC} ── Repo Config Trust ──────────────────────────────");
+    println!("{BLUE}[cplt]{NC}  Source: {}", source_label(loaded.source));
+    println!();
+
+    // Deny section
+    if !loaded.config.deny.paths.is_empty() || !loaded.config.deny.env.is_empty() {
+        println!("{BLUE}[cplt]{NC}  {GREEN}[deny]{NC} {LABEL_DENY_APPLIED}");
+        for p in &loaded.config.deny.paths {
+            println!("{BLUE}[cplt]{NC}    path: {p}");
+        }
+        for v in &loaded.config.deny.env {
+            println!("{BLUE}[cplt]{NC}    env:  {v}");
+        }
+        println!();
+    }
+
+    // Check if proposals have changed since approval (content hash mismatch)
+    let hash_mismatch = trust_entry.as_ref().is_some_and(|t| {
+        !t.accepted.content_hash.is_empty() && {
+            let current_hash = trust::proposal_content_hash(&loaded.config.propose);
+            t.accepted.content_hash != current_hash
+        }
+    });
+
+    // Proposals
+    let all_approved = !hash_mismatch
+        && !proposed.is_empty()
+        && proposed.iter().all(|&key| {
+            trust_entry
+                .as_ref()
+                .map(|t| trust::is_key_approved(t, key))
+                .unwrap_or(false)
+        });
+    if proposed.is_empty() {
+        println!("{BLUE}[cplt]{NC}  No additional permissions requested.");
+    } else {
+        let section_label = if all_approved {
+            LABEL_ALLOW_APPROVED
+        } else {
+            LABEL_ALLOW_PENDING
+        };
+        println!("{BLUE}[cplt]{NC}  {YELLOW}[allow]{NC} {section_label}");
+        for &key in &proposed {
+            let approved = !hash_mismatch
+                && trust_entry
+                    .as_ref()
+                    .map(|t| trust::is_key_approved(t, key))
+                    .unwrap_or(false);
+            let status = if approved {
+                format!("{GREEN}{STATUS_APPROVED}{NC}")
+            } else {
+                format!("{YELLOW}{STATUS_PENDING}{NC}")
+            };
+            println!("{BLUE}[cplt]{NC}    {key:<35} {status}");
+        }
+    }
+
+    if let Some(ref entry) = trust_entry
+        && !entry.accepted.approved_at.is_empty()
+    {
+        println!();
+        println!(
+            "{BLUE}[cplt]{NC}  Last approved: {}",
+            entry.accepted.approved_at
+        );
+
+        if hash_mismatch {
+            println!("{BLUE}[cplt]{NC}  {RED}⚠ Permissions have changed since last approval!{NC}");
+            println!("{BLUE}[cplt]{NC}  {RED}  Run `cplt trust accept --all` to re-approve.{NC}");
+        }
+    }
+
+    println!("{BLUE}[cplt]{NC} ──────────────────────────────────────────────────────");
+    ExitCode::SUCCESS
+}
+
+fn trust_accept(
+    project_dir: &std::path::Path,
+    loaded: &repo_config::LoadedRepoConfig,
+    keys: &[String],
+    all: bool,
+) -> ExitCode {
+    let proposed = repo_config::proposed_keys(&loaded.config.propose);
+
+    if proposed.is_empty() {
+        info("No permissions requested in .cplt.toml — nothing to approve.");
+        return ExitCode::SUCCESS;
+    }
+
+    // Determine which keys to accept
+    let keys_to_accept: Vec<String> = if all {
+        proposed.iter().map(|s| s.to_string()).collect()
+    } else {
+        // Validate that requested keys are actually proposed
+        for key in keys {
+            if !proposed.contains(&key.as_str()) {
+                error(&format!(
+                    "Key {key:?} is not requested in .cplt.toml. Available: {}",
+                    proposed
+                        .iter()
+                        .map(|s| format!("{s:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                return ExitCode::FAILURE;
+            }
+        }
+        keys.to_vec()
+    };
+
+    // Load or create trust entry
+    let mut entry = trust::load_trust(project_dir).unwrap_or_default();
+
+    // Set identity
+    entry.repo.path = project_dir.to_string_lossy().into_owned();
+    if entry.repo.remote.is_empty()
+        && let Ok(output) = std::process::Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(project_dir)
+            .output()
+        && output.status.success()
+        && let Ok(url) = String::from_utf8(output.stdout)
+    {
+        entry.repo.remote = trust::normalize_remote_url(url.trim());
+    }
+
+    // Add new keys (don't duplicate)
+    for key in &keys_to_accept {
+        if !entry.accepted.keys.contains(key) {
+            entry.accepted.keys.push(key.clone());
+        }
+    }
+    entry.accepted.keys.sort_unstable();
+    entry.accepted.approved_at = trust::now_iso8601();
+    // Pin content hash so changes to proposal values invalidate approval
+    entry.accepted.content_hash = trust::proposal_content_hash(&loaded.config.propose);
+
+    // Save
+    if let Err(e) = trust::save_trust(project_dir, &entry) {
+        error(&format!("Failed to save trust: {e}"));
+        return ExitCode::FAILURE;
+    }
+
+    println!(
+        "{GREEN}✓{NC} Approved {} permission(s) for this repository:",
+        keys_to_accept.len()
+    );
+    for key in &keys_to_accept {
+        println!("  • {key}");
+    }
+    ExitCode::SUCCESS
+}
+
+fn trust_revoke(
+    project_dir: &std::path::Path,
+    loaded: &repo_config::LoadedRepoConfig,
+    keys: &[String],
+    all: bool,
+) -> ExitCode {
+    if all {
+        if let Err(e) = trust::revoke_trust(project_dir) {
+            error(&format!("Failed to revoke trust: {e}"));
+            return ExitCode::FAILURE;
+        }
+        println!("{GREEN}✓{NC} Revoked all trust for this repository.");
+        return ExitCode::SUCCESS;
+    }
+
+    let proposed = repo_config::proposed_keys(&loaded.config.propose);
+    let mut entry = match trust::load_trust(project_dir) {
+        Some(e) => e,
+        None => {
+            info("No trust entry exists for this repository.");
+            return ExitCode::SUCCESS;
+        }
+    };
+
+    // Validate keys
+    for key in keys {
+        if !proposed.contains(&key.as_str()) && !entry.accepted.keys.contains(key) {
+            warn(&format!(
+                "Key {key:?} is not in permissions or trust store."
+            ));
+        }
+    }
+
+    // Remove keys
+    let before_len = entry.accepted.keys.len();
+    entry.accepted.keys.retain(|k| !keys.contains(k));
+    let removed = before_len - entry.accepted.keys.len();
+
+    if removed == 0 {
+        info("No matching keys found to revoke.");
+        return ExitCode::SUCCESS;
+    }
+
+    if entry.accepted.keys.is_empty() {
+        // No keys left — remove the file entirely
+        if let Err(e) = trust::revoke_trust(project_dir) {
+            error(&format!("Failed to remove trust file: {e}"));
+            return ExitCode::FAILURE;
+        }
+    } else {
+        entry.accepted.approved_at = trust::now_iso8601();
+        if let Err(e) = trust::save_trust(project_dir, &entry) {
+            error(&format!("Failed to save trust: {e}"));
+            return ExitCode::FAILURE;
+        }
+    }
+
+    println!("{GREEN}✓{NC} Revoked {removed} key(s).");
+    ExitCode::SUCCESS
+}
+
 fn run_update(check_only: bool, force: bool) -> ExitCode {
     // Check for Homebrew-managed install
     if update::is_homebrew_managed() {
         info("cplt is managed by Homebrew.");
-        eprintln!("  Run: {GREEN}brew upgrade navikt/tap/cplt{NC}");
+        println!("  Run: {GREEN}brew upgrade navikt/tap/cplt{NC}");
         return ExitCode::SUCCESS;
     }
 
