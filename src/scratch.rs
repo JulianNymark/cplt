@@ -16,6 +16,7 @@
 //! Each session gets a UUID subdirectory for isolation.
 
 use crate::sandbox::validate_sbpl_path;
+use crate::ui;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -110,9 +111,8 @@ impl ScratchDir {
             return;
         }
 
-        let entries = match std::fs::read_dir(&base) {
-            Ok(e) => e,
-            Err(_) => return,
+        let Ok(entries) = std::fs::read_dir(&base) else {
+            return;
         };
 
         let now = SystemTime::now();
@@ -126,33 +126,29 @@ impl ScratchDir {
             }
 
             // Only delete entries that look like our session IDs (hex UUID)
-            let name = match entry.file_name().into_string() {
-                Ok(n) => n,
-                Err(_) => continue,
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
             };
             if !is_session_id(&name) {
                 continue;
             }
 
             // Check age via directory modification time
-            let metadata = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Ok(metadata) = entry.metadata() else {
+                continue;
             };
-            let modified = match metadata.modified() {
-                Ok(t) => t,
-                Err(_) => continue,
+            let Ok(modified) = metadata.modified() else {
+                continue;
             };
 
             if let Ok(age) = now.duration_since(modified)
                 && age > STALE_AGE
+                && let Err(e) = std::fs::remove_dir_all(&path)
             {
-                let _ = std::fs::remove_dir_all(&path).map_err(|e| {
-                    eprintln!(
-                        "\x1b[0;33m[cplt]\x1b[0m Warning: cannot remove stale scratch dir {}: {e}",
-                        path.display()
-                    );
-                });
+                ui::warn(&format!(
+                    "Warning: cannot remove stale scratch dir {}: {e}",
+                    path.display()
+                ));
             }
         }
     }
@@ -160,13 +156,13 @@ impl ScratchDir {
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        if self.path.exists() {
-            let _ = std::fs::remove_dir_all(&self.path).map_err(|e| {
-                eprintln!(
-                    "\x1b[0;33m[cplt]\x1b[0m Warning: cannot cleanup scratch dir {}: {e}",
-                    self.path.display()
-                );
-            });
+        if self.path.exists()
+            && let Err(e) = std::fs::remove_dir_all(&self.path)
+        {
+            ui::warn(&format!(
+                "Warning: cannot cleanup scratch dir {}: {e}",
+                self.path.display()
+            ));
         }
     }
 }
