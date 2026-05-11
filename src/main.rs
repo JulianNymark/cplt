@@ -180,10 +180,10 @@ struct Cli {
     #[arg(long)]
     allow_localhost_any: bool,
 
-    /// Allow the agent to read .env files, private keys (.pem, .key), and
-    /// other sensitive files in the project directory. These are blocked
-    /// by default because they often contain secrets that a rogue agent
-    /// could exfiltrate via HTTPS.
+    /// Allow the agent to read, write, and delete .env files, private keys
+    /// (.pem, .key), and other sensitive files in the project directory.
+    /// These are blocked by default because they often contain secrets that
+    /// a rogue agent could exfiltrate or destroy.
     #[arg(long)]
     allow_env_files: bool,
 

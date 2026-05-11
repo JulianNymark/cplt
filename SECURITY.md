@@ -70,7 +70,7 @@ cplt assumes the sandboxed agent is **untrusted** — executing arbitrary code s
 | Protection | macOS (Seatbelt) | Linux (Landlock + seccomp) |
 |---|---|---|
 | Credential files (~/.ssh, ~/.aws) | ✅ Kernel deny | ✅ Not in ruleset (deny-by-default) |
-| Project .env file reads | ✅ Kernel deny | ⚠️ Proxy blocks exfiltration |
+| Project .env file read/write/delete | ✅ Kernel deny | ⚠️ Proxy blocks exfiltration |
 | .git/hooks write in project | ✅ Kernel deny | ⚠️ Env hardening (GIT_CONFIG_NOSYSTEM) |
 | .git/config write in project | ✅ Kernel deny | ⚠️ Env hardening + proxy |
 | Network: outbound port filtering | ✅ Kernel (all versions) | ✅ Kernel (6.7+) / ⚠️ Proxy only (<6.7) |

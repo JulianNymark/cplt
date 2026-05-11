@@ -58,7 +58,7 @@ cplt --agent shell
 | Resource                                                                         | Status                                   | Notes                                                                                   |
 | -------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------- |
 | Read/write project directory                                                     | ✅ Allowed                                |                                                                                         |
-| Read `.env*`, `.pem`, `.key` in project                                          | 🔒 Kernel-blocked                         | Prevents secret exfiltration; `--allow-env-files` to override                           |
+| Read/write/delete `.env*`, `.pem`, `.key` in project                             | 🔒 Kernel-blocked                         | Prevents secret exfiltration and destruction; `--allow-env-files` to override           |
 | Write `.git/hooks`, `.git/config`, `.gitmodules`                                 | 🔒 Kernel-blocked                         | Prevents persistence via git hooks, hooksPath redirect, submodule hijacking             |
 | Execute from `/tmp`, `/var/folders`                                              | 🔒 Kernel-blocked                         | Prevents write-then-exec; scratch dir redirects TMPDIR to safe location (on by default) |
 | Execute from `~/Library/Caches`                                                  | 🔒 Kernel-blocked by default              | Prevents binary-drop staging; Copilot native modules exempted via carve-out; `--allow-cache-exec <SUBDIR>` to add targeted exemptions (e.g. `ms-playwright`) |
@@ -1441,7 +1441,7 @@ read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
 
 - **Kernel 5.13+ required** — Landlock LSM must be enabled
 - **TCP port filtering requires kernel 6.7+** — older kernels get filesystem-only enforcement
-- **Landlock cannot deny subpaths within allowed paths** — `.env` reads and `.git/hooks` writes inside the project dir are not kernel-enforced
+- **Landlock cannot deny subpaths within allowed paths** — `.env` read/write/delete and `.git/hooks` writes inside the project dir are not kernel-enforced
 - **`--deny-path` has no effect** — Landlock is allowlist-only
 
 📖 **Full details:** [docs/security.md](docs/security.md#limitations)

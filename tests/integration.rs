@@ -659,6 +659,37 @@ mod macos_tests {
     }
 
     #[test]
+    fn real_profile_blocks_env_file_delete() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let tmp = project.join(format!(".cplt-envdel-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join(".env"), "SECRET=hunter2\n").unwrap();
+        let tmp = fs::canonicalize(&tmp).unwrap();
+        let home = home_dir();
+
+        let opts = default_opts(&tmp, &home);
+        let profile = write_real_profile(&opts);
+
+        let env_path = tmp.join(".env");
+        let cmd = format!("rm '{}' 2>&1; echo EXIT:$?", env_path.display());
+        let (output, _) = run_sandboxed(&profile, &cmd);
+
+        // File should still exist — deletion was blocked
+        let still_exists = tmp.join(".env").exists();
+        fs::remove_dir_all(&tmp).ok();
+        fs::remove_file(&profile).ok();
+        assert!(
+            output.contains("Operation not permitted") || output.contains("EXIT:1"),
+            ".env delete should be blocked by default, got: {output}"
+        );
+        assert!(
+            still_exists,
+            ".env file should still exist after blocked rm"
+        );
+    }
+
+    #[test]
     fn real_profile_allows_env_file_when_opted_in() {
         require_sandbox!();
         let project = fs::canonicalize(".").unwrap();

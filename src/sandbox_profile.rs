@@ -205,16 +205,20 @@ fn emit_project_access(sb: &mut String, project: &str, allow_env_files: bool) {
     sbpl!(sb, "(deny file-write* (literal \"{project}/.cplt.toml\"))");
     sbpl!(sb);
 
-    // Sensitive project files — deny read of .env*, .pem, .key etc.
-    // These often contain secrets that could be exfiltrated via HTTPS.
+    // Sensitive project files — deny read AND write of .env*, .pem, .key etc.
+    // Read deny: prevents exfiltration of secrets via HTTPS.
+    // Write deny: prevents deletion/overwrite of secrets (rm, truncate).
     // Placed after the project allow so deny wins (more specific filter).
-    // Copilot can still write these files (creating .env from .env.example).
     if !allow_env_files {
-        sbpl!(sb, ";; Sensitive project files — deny read (.env*, keys)");
+        sbpl!(
+            sb,
+            ";; Sensitive project files — deny read+write (.env*, keys)"
+        );
         for pattern in SENSITIVE_PROJECT_PATTERNS {
             // SBPL regex matches against the full path, so we anchor to
             // any directory separator to avoid matching path components.
             sbpl!(sb, "(deny file-read* (regex #\"/{pattern}\"))");
+            sbpl!(sb, "(deny file-write* (regex #\"/{pattern}\"))");
         }
         sbpl!(sb);
     }

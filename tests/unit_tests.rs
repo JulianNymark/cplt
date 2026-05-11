@@ -1273,19 +1273,35 @@ fn profile_denies_env_files_by_default() {
     });
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.env$"))"#),
-        "should deny .env files: {p}"
+        "should deny read .env files: {p}"
+    );
+    assert!(
+        p.contains(r#"(deny file-write* (regex #"/\.env$"))"#),
+        "should deny write .env files: {p}"
     );
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.env\..*"))"#),
-        "should deny .env.* files: {p}"
+        "should deny read .env.* files: {p}"
+    );
+    assert!(
+        p.contains(r#"(deny file-write* (regex #"/\.env\..*"))"#),
+        "should deny write .env.* files: {p}"
     );
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.pem$"))"#),
-        "should deny .pem files: {p}"
+        "should deny read .pem files: {p}"
+    );
+    assert!(
+        p.contains(r#"(deny file-write* (regex #"/\.pem$"))"#),
+        "should deny write .pem files: {p}"
     );
     assert!(
         p.contains(r#"(deny file-read* (regex #"/\.key$"))"#),
-        "should deny .key files: {p}"
+        "should deny read .key files: {p}"
+    );
+    assert!(
+        p.contains(r#"(deny file-write* (regex #"/\.key$"))"#),
+        "should deny write .key files: {p}"
     );
 }
 
@@ -1356,10 +1372,18 @@ fn profile_env_deny_comes_after_project_allow() {
     let project_allow = p
         .find("(allow file-read* (subpath \"/projects/app\"))")
         .unwrap();
+    let project_write_allow = p
+        .find("(allow file-write* (subpath \"/projects/app\"))")
+        .unwrap();
     let env_deny = p.find(r#"(deny file-read* (regex #"/\.env$"))"#).unwrap();
+    let env_write_deny = p.find(r#"(deny file-write* (regex #"/\.env$"))"#).unwrap();
     assert!(
         env_deny > project_allow,
-        "env deny must come AFTER project allow for SBPL last-match-wins"
+        "env read deny must come AFTER project read allow for SBPL last-match-wins"
+    );
+    assert!(
+        env_write_deny > project_write_allow,
+        "env write deny must come AFTER project write allow for SBPL last-match-wins"
     );
 }
 
