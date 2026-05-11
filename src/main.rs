@@ -68,6 +68,12 @@ EXAMPLES:
   cplt update
     Update cplt to the latest release from GitHub
 
+  cplt init
+    Detect project tooling and generate a .cplt.toml config
+
+  cplt init --write
+    Write the generated .cplt.toml to disk
+
   cplt trust
     Show per-repo config permissions and their approval status
 
@@ -309,10 +315,10 @@ struct Cli {
     #[arg(long)]
     shell_install: bool,
 
-    /// Run environment diagnostics and report what the sandbox will do.
-    /// Checks auth mechanisms, Copilot CLI install, tool availability,
-    /// and sandbox-critical paths. Exits 0 if all critical checks pass.
-    #[arg(long)]
+    /// [DEPRECATED: use `cplt doctor`] Run environment diagnostics and report
+    /// what the sandbox will do. Checks auth mechanisms, Copilot CLI install,
+    /// tool availability, and sandbox-critical paths. Exits 0 if all critical checks pass.
+    #[arg(long, hide = true)]
     doctor: bool,
 
     /// Skip the interactive confirmation prompt and proceed immediately.
@@ -409,6 +415,38 @@ enum Command {
         #[command(subcommand)]
         action: Option<TrustAction>,
     },
+
+    /// Detect project tooling and generate a .cplt.toml config.
+    ///
+    /// Scans the project directory for build files, frameworks, and patterns,
+    /// then generates sandbox permissions tailored to your stack.
+    ///
+    /// By default, prints a preview to stdout.
+    /// Use --write to persist the generated .cplt.toml.
+    Init {
+        /// Write the generated config to .cplt.toml (default: preview to stdout).
+        #[arg(long)]
+        write: bool,
+
+        /// Overwrite existing file (requires --write).
+        #[arg(long, requires = "write")]
+        force: bool,
+
+        /// Suppress ecosystem details, only show generated TOML.
+        #[arg(long, short)]
+        quiet: bool,
+
+        /// Scan machine-level tools and generate personal config
+        /// (~/.config/cplt/config.toml) instead of per-repo .cplt.toml.
+        #[arg(long)]
+        global: bool,
+    },
+
+    /// Run environment diagnostics.
+    ///
+    /// Checks auth mechanisms, agent install, tool availability,
+    /// and sandbox-critical paths. Exits 0 if all critical checks pass.
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -1040,6 +1078,19 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Command::Config { action } => run_config_command(action),
             Command::Update { check, force } => run_update(check, force),
             Command::Trust { action } => run_trust_command(action),
+            Command::Init {
+                write,
+                force,
+                quiet,
+                global,
+            } => {
+                if global {
+                    run_init_global_command(write, force, quiet)
+                } else {
+                    run_init_command(write, force, quiet)
+                }
+            }
+            Command::Doctor => run_doctor(),
         });
     }
 
@@ -1050,7 +1101,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
 
     // Handle --doctor: run diagnostics and exit (works on all platforms)
+    // DEPRECATED: use `cplt doctor` subcommand instead
     if cli.doctor {
+        ui::warn("--doctor is deprecated, use `cplt doctor` instead");
         return Ok(run_doctor());
     }
 
@@ -1385,6 +1438,36 @@ fn run_doctor() -> ExitCode {
 
     let discovery = discover::discover_all(&home_dir, &project_dir);
     let ok = discovery.print_report();
+
+    // Show project ecosystem detection summary
+    let report = cplt::detect::detect_project(&project_dir);
+    if !report.detections.is_empty() {
+        println!();
+        println!(
+            "{}{}[doctor]{} {}Project ecosystems{}",
+            ui::stdout_color(ui::BOLD),
+            ui::stdout_color(ui::BLUE),
+            ui::stdout_color(ui::RESET),
+            ui::stdout_color(ui::BOLD),
+            ui::stdout_color(ui::RESET)
+        );
+        for d in &report.detections {
+            println!(
+                "  {}✓{} {}",
+                ui::stdout_color(ui::GREEN),
+                ui::stdout_color(ui::RESET),
+                d.name
+            );
+        }
+        let has_repo_config = project_dir.join(".cplt.toml").exists();
+        if !has_repo_config {
+            println!(
+                "  {}→{} Run `cplt init` to generate .cplt.toml",
+                ui::stdout_color(ui::BLUE),
+                ui::stdout_color(ui::RESET),
+            );
+        }
+    }
 
     if ok {
         ExitCode::SUCCESS
@@ -1995,6 +2078,157 @@ fn run_config_explain(key: Option<&str>) -> ExitCode {
     } else {
         config::explain_all(loaded.as_ref());
         ExitCode::SUCCESS
+    }
+}
+
+fn run_init_command(write: bool, force: bool, quiet: bool) -> ExitCode {
+    let project_dir = detect_project_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let opts = cplt::init::InitOptions {
+        write,
+        force,
+        quiet,
+    };
+
+    // Detect once, use for both display and generation
+    let report = cplt::detect::detect_project(&project_dir);
+
+    if report.detections.is_empty() {
+        if !quiet {
+            eprintln!("No project tooling detected in {}", project_dir.display());
+            eprintln!("Nothing to generate.");
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    // Show ecosystem report unless quiet
+    if !quiet {
+        print!("{}", cplt::init::format_report(&report));
+    }
+
+    let result = cplt::init::run_init(&project_dir, &report, &opts);
+
+    match result {
+        cplt::init::InitResult::Generated {
+            toml: _,
+            path,
+            written: true,
+        } => {
+            if !quiet {
+                eprintln!("Wrote {}", path.display());
+                eprintln!();
+                eprintln!("Next: review the file and run `cplt trust` to approve permissions.");
+            }
+            ExitCode::SUCCESS
+        }
+        cplt::init::InitResult::Generated {
+            toml,
+            written: false,
+            ..
+        } => {
+            if !quiet {
+                println!("Generated .cplt.toml:");
+                println!("─────────────────────────────────────────");
+            }
+            print!("{toml}");
+            if !quiet {
+                println!("─────────────────────────────────────────");
+                println!();
+                println!("Run `cplt init --write` to save this to .cplt.toml");
+            }
+            ExitCode::SUCCESS
+        }
+        cplt::init::InitResult::AlreadyExists(path) => {
+            eprintln!(
+                "error: {} already exists (use --force to overwrite)",
+                path.display()
+            );
+            ExitCode::FAILURE
+        }
+        cplt::init::InitResult::WriteFailed(path, err) => {
+            eprintln!("error: failed to write {}: {err}", path.display());
+            ExitCode::FAILURE
+        }
+        cplt::init::InitResult::NothingDetected => ExitCode::SUCCESS,
+    }
+}
+
+fn run_init_global_command(write: bool, force: bool, quiet: bool) -> ExitCode {
+    let Ok(home) = std::env::var("HOME") else {
+        eprintln!("error: $HOME not set");
+        return ExitCode::FAILURE;
+    };
+    let home_dir = PathBuf::from(home);
+
+    let config_path =
+        cplt::config::config_path().unwrap_or_else(|| home_dir.join(".config/cplt/config.toml"));
+
+    let report = cplt::detect::detect_global(&home_dir);
+
+    if report.detections.is_empty() {
+        if !quiet {
+            eprintln!("No machine-level configuration detected.");
+            eprintln!("Your setup works with cplt defaults — no personal config needed.");
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    // Show report unless quiet
+    if !quiet {
+        print!("{}", cplt::init::format_global_report(&report));
+    }
+
+    let opts = cplt::init::InitOptions {
+        write,
+        force,
+        quiet,
+    };
+
+    let result = cplt::init::run_init_global(&config_path, &report, &opts);
+
+    match result {
+        cplt::init::GlobalInitResult::Generated {
+            toml: _,
+            written: true,
+            path,
+        } => {
+            if !quiet {
+                eprintln!("Wrote {}", path.display());
+                eprintln!();
+                eprintln!("Review: cplt config show");
+            }
+            ExitCode::SUCCESS
+        }
+        cplt::init::GlobalInitResult::Generated {
+            toml,
+            written: false,
+            path,
+            ..
+        } => {
+            if !quiet {
+                println!("Generated {}:", path.display());
+                println!("─────────────────────────────────────────");
+            }
+            print!("{toml}");
+            if !quiet {
+                println!("─────────────────────────────────────────");
+                println!();
+                println!("Run `cplt init --global --write` to save this config");
+            }
+            ExitCode::SUCCESS
+        }
+        cplt::init::GlobalInitResult::AlreadyExists(path) => {
+            eprintln!(
+                "error: {} already exists (use --force to overwrite)",
+                path.display()
+            );
+            ExitCode::FAILURE
+        }
+        cplt::init::GlobalInitResult::WriteFailed(path, err) => {
+            eprintln!("error: failed to write {}: {err}", path.display());
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -525,6 +525,80 @@ mod e2e_tests {
         );
     }
 
+    #[test]
+    fn e2e_doctor_subcommand_works() {
+        require_copilot!();
+        let output = Command::new(binary_path())
+            .args(["doctor"])
+            .current_dir(project_dir())
+            .output()
+            .expect("binary should run");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "cplt doctor should exit 0.\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("[doctor]"),
+            "should have doctor output.\nstdout: {stdout}"
+        );
+        // No deprecation warning for subcommand form
+        assert!(
+            !stderr.contains("deprecated"),
+            "subcommand should not warn.\nstderr: {stderr}"
+        );
+    }
+
+    #[test]
+    fn e2e_doctor_flag_shows_deprecation() {
+        require_copilot!();
+        let output = Command::new(binary_path())
+            .args(["--doctor"])
+            .current_dir(project_dir())
+            .output()
+            .expect("binary should run");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "--doctor should still work.\nstderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("deprecated") && stderr.contains("cplt doctor"),
+            "--doctor should show deprecation warning.\nstderr: {stderr}"
+        );
+    }
+
+    #[test]
+    fn e2e_doctor_shows_project_ecosystems() {
+        // Create a project with a Cargo.toml so ecosystems are detected
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["doctor"])
+            .current_dir(dir.path())
+            .output()
+            .expect("binary should run");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Doctor may exit non-zero if no agent/auth is found (CI), but it
+        // should still print ecosystem detection results regardless.
+        assert!(
+            stdout.contains("Project ecosystems") && stdout.contains("Rust"),
+            "should detect Rust ecosystem.\nstdout: {stdout}"
+        );
+    }
+
     // ============================================================
     // CLI flag profile tests — new scenarios
     // ============================================================
@@ -3124,5 +3198,263 @@ mod e2e_tests {
 
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&fake_dir);
+    }
+
+    // ── cplt init e2e tests ────────────────────────────────────────
+
+    #[test]
+    fn e2e_init_detects_node_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"test","scripts":{"dev":"next dev --port 3001"},"dependencies":{"next":"^14"}}"#,
+        )
+        .unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Node.js"),
+            "should detect Node.js: {stdout}"
+        );
+        assert!(
+            stdout.contains("allow_localhost_any"),
+            "should suggest localhost_any for next: {stdout}"
+        );
+        assert!(stdout.contains("3001"), "should detect port 3001: {stdout}");
+    }
+
+    #[test]
+    fn e2e_init_detects_multi_ecosystem() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"x\"").unwrap();
+        std::fs::write(dir.path().join("Dockerfile"), "FROM rust:1.80").unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("Rust"), "should detect Rust: {stdout}");
+        assert!(stdout.contains("Docker"), "should detect Docker: {stdout}");
+        assert!(
+            stdout.contains("allow_docker"),
+            "should suggest allow_docker: {stdout}"
+        );
+    }
+
+    #[test]
+    fn e2e_init_empty_project_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("No project tooling detected"),
+            "should say nothing detected on stderr: {stderr}"
+        );
+        // stdout should be empty (pipe-friendly)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.is_empty(), "stdout should be empty: {stdout}");
+    }
+
+    #[test]
+    fn e2e_init_write_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Dockerfile"), "FROM node:20").unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init", "--write"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let config_path = dir.path().join(".cplt.toml");
+        assert!(config_path.exists(), ".cplt.toml should be created");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            content.contains("allow_docker"),
+            "should contain allow_docker: {content}"
+        );
+    }
+
+    #[test]
+    fn e2e_init_write_refuses_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Dockerfile"), "FROM node:20").unwrap();
+        std::fs::write(dir.path().join(".cplt.toml"), "# existing").unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init", "--write"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("already exists"),
+            "should mention file exists: {stderr}"
+        );
+    }
+
+    #[test]
+    fn e2e_init_write_force_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Dockerfile"), "FROM node:20").unwrap();
+        std::fs::write(dir.path().join(".cplt.toml"), "# old content").unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init", "--write", "--force"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let content = std::fs::read_to_string(dir.path().join(".cplt.toml")).unwrap();
+        assert!(
+            content.contains("allow_docker"),
+            "should overwrite with new content: {content}"
+        );
+    }
+
+    #[test]
+    fn e2e_init_quiet_outputs_only_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Dockerfile"), "FROM node:20").unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Should NOT have the "Detected ecosystems:" header
+        assert!(
+            !stdout.contains("Detected ecosystems"),
+            "quiet mode should suppress report: {stdout}"
+        );
+        // Should have TOML content
+        assert!(
+            stdout.contains("allow_docker"),
+            "should output TOML: {stdout}"
+        );
+    }
+
+    #[test]
+    fn e2e_init_detects_env_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env.example"),
+            "DATABASE_URL=x\nSECRET_KEY=y\nDEBUG=true\n",
+        )
+        .unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("SECRET_KEY"),
+            "should detect SECRET_KEY: {stdout}"
+        );
+        assert!(
+            stdout.contains("[deny]"),
+            "should have deny section: {stdout}"
+        );
+    }
+
+    #[test]
+    fn e2e_init_global_outputs_config() {
+        let home = tempfile::tempdir().unwrap();
+        // Create gradle wrapper dir so detection triggers
+        std::fs::create_dir_all(home.path().join(".gradle/wrapper/dists/gradle-8.5")).unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init", "--global"])
+            .env("HOME", home.path())
+            .env("CPLT_CONFIG", home.path().join("config.toml"))
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success(), "exit: {:?}", output.status);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("allow_cache_exec"),
+            "should suggest cache_exec: {stdout}"
+        );
+        assert!(stdout.contains("gradle"), "should detect gradle: {stdout}");
+    }
+
+    #[test]
+    fn e2e_init_global_write() {
+        let home = tempfile::tempdir().unwrap();
+        // Create gradle wrapper to trigger detection
+        std::fs::create_dir_all(home.path().join(".gradle/wrapper/dists/gradle-8.5")).unwrap();
+        let config_path = home.path().join("cplt/config.toml");
+
+        let output = Command::new(binary_path())
+            .args(["init", "--global", "--write"])
+            .env("HOME", home.path())
+            .env("CPLT_CONFIG", &config_path)
+            .output()
+            .expect("should run");
+
+        assert!(
+            output.status.success(),
+            "exit: {:?}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(config_path.exists(), "config file should be created");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("[sandbox]"));
+        assert!(content.contains("allow_cache_exec"));
+    }
+
+    #[test]
+    fn e2e_init_global_empty_home() {
+        let home = tempfile::tempdir().unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["init", "--global"])
+            .env("HOME", home.path())
+            .env("CPLT_CONFIG", home.path().join("config.toml"))
+            .output()
+            .expect("should run");
+
+        assert!(output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("No machine-level"),
+            "should report nothing detected: {stderr}"
+        );
+        // stdout should be empty
+        assert!(
+            output.stdout.is_empty(),
+            "stdout should be empty when nothing detected"
+        );
     }
 }

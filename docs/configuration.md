@@ -178,6 +178,59 @@ Trust decisions are stored in `~/.config/cplt/trust/` (protected from the sandbo
 cplt --accept-repo-config -- -p "run tests"
 ```
 
+### Auto-generate with `cplt init`
+
+Instead of writing `.cplt.toml` by hand, detect your project's ecosystem:
+
+```bash
+cplt init                   # Preview detected permissions
+cplt init --write           # Write .cplt.toml to disk
+cplt init --write --force   # Overwrite existing file
+cplt init --quiet           # Output only TOML (pipe-friendly)
+```
+
+#### Personal config with `cplt init --global`
+
+Scan your machine for installed tools and generate `~/.config/cplt/config.toml`:
+
+```bash
+cplt init --global          # Preview personal config suggestions
+cplt init --global --write  # Write to ~/.config/cplt/config.toml
+```
+
+Detects:
+| Tool | Probes | Suggests |
+|------|--------|----------|
+| Gradle wrapper | `~/.gradle/wrapper/dists/` | `allow_cache_exec = ["gradle"]` |
+| Playwright browsers | `~/Library/Caches/ms-playwright/` | `allow_cache_exec = ["ms-playwright"]` |
+| GPG signing | `~/.gnupg/` + git config | `allow_gpg_signing = true` |
+| Gradle registry | `~/.gradle/gradle.properties` | `allow.read` for credentials file |
+| Alternative agents | `opencode`/`aider` in PATH | `agent = "..."` |
+
+**Supported ecosystems:**
+
+| Ecosystem | Detected via | Suggests |
+|-----------|-------------|----------|
+| JVM (Gradle/Maven) | `build.gradle*`, `pom.xml` | `allow_jvm_attach`, read gradle properties |
+| Node.js | `package.json` | localhost ports, `allow_localhost_any` (for Next.js/Vite) |
+| Docker | `Dockerfile`, `compose.yml` | `allow_docker` ⚠️, exposed ports |
+| Python | `pyproject.toml`, `requirements.txt` | localhost ports (for Django/FastAPI) |
+| Rust | `Cargo.toml` | (works with defaults) |
+| Go | `go.mod` | (works with defaults) |
+| Playwright | `@playwright/test` in package.json | `allow_cache_exec` (personal config hint) |
+| Environment secrets | `.env.example` | `deny.env` for sensitive variables |
+| Spring Boot | `application.yml` + Spring in Gradle | localhost 8080, PostgreSQL port |
+| Ktor | `application.conf` + Ktor in Gradle | localhost 8080 |
+| TestContainers | `testcontainers` in Gradle deps | `allow_docker` ⚠️, `allow_localhost_any` |
+| Next.js | `next.config.ts/js` | localhost 3000, `allow_localhost_any` |
+| Vite | `vite.config.ts/js` | localhost 5173, `allow_localhost_any` |
+| Flyway | `db/migration(s)` directories | PostgreSQL port 5432 |
+| Cypress | `cypress.config.ts` + `cypress/` dir | `allow_browser`, `allow_localhost_any` |
+
+**Machine-specific suggestions** (like `allow_cache_exec` or home-relative read paths) are emitted as comments pointing you to add them to your personal `~/.config/cplt/config.toml`.
+
+**Dangerous permissions** (⚠️ in the table) include risk warnings in the generated TOML. `allow_lifecycle_scripts` is never auto-suggested — it's only shown as a diagnostic if lifecycle scripts are detected, since it allows arbitrary code execution on `npm install`.
+
 ### Precedence
 
 1. CLI flags (highest)
