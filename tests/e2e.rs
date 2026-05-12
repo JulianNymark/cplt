@@ -600,6 +600,84 @@ mod e2e_tests {
     }
 
     // ============================================================
+    // Color environment variable tests
+    // ============================================================
+
+    #[test]
+    fn e2e_no_color_suppresses_ansi() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["doctor"])
+            .current_dir(dir.path())
+            .env("NO_COLOR", "1")
+            .env_remove("FORCE_COLOR")
+            .output()
+            .expect("binary should run");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("\x1b["),
+            "NO_COLOR should suppress ANSI codes in stdout.\nstdout: {stdout}"
+        );
+    }
+
+    #[test]
+    fn e2e_term_dumb_suppresses_ansi() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["doctor"])
+            .current_dir(dir.path())
+            .env("TERM", "dumb")
+            .env_remove("NO_COLOR")
+            .env_remove("FORCE_COLOR")
+            .output()
+            .expect("binary should run");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("\x1b["),
+            "TERM=dumb should suppress ANSI codes in stdout.\nstdout: {stdout}"
+        );
+    }
+
+    #[test]
+    fn e2e_force_color_overrides_no_color() {
+        // Create a project dir so doctor has something to detect
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let output = Command::new(binary_path())
+            .args(["doctor"])
+            .current_dir(dir.path())
+            .env("NO_COLOR", "1")
+            .env("FORCE_COLOR", "1")
+            .output()
+            .expect("binary should run");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("\x1b["),
+            "FORCE_COLOR should override NO_COLOR and emit ANSI.\nstdout: {stdout}"
+        );
+    }
+
+    // ============================================================
     // CLI flag profile tests — new scenarios
     // ============================================================
 
