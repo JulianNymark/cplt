@@ -401,7 +401,9 @@ pub struct HomeToolDir {
 /// NOTE: Only tool/binary dirs, never source code dirs.
 /// ~/go/src is intentionally excluded — it contains other repos.
 pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
-    // Executables: bin/ dirs with shims, compilers, runtimes
+    // ── Version managers & runtimes: exec only, no write ──────────────────
+    // Pre-installed toolchains managed outside the sandbox (mise, nvm, rustup, etc.).
+    // Agent needs to run their binaries but should not modify installations.
     HomeToolDir {
         path: ".local",
         process_exec: true,
@@ -433,10 +435,28 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         write: false,
     },
     HomeToolDir {
-        path: ".cargo",
+        path: ".cargo/bin",
         process_exec: true,
         map_exec: true,
+        // Installed tools (cargo-fmt, cargo-clippy, etc.) managed by rustup.
+        // Read-only: prevents a rogue agent from trojaning binaries that persist
+        // across sandbox sessions.
         write: false,
+    },
+    HomeToolDir {
+        path: ".cargo/registry",
+        process_exec: false,
+        map_exec: true,
+        // Crate registry cache — cargo build downloads and extracts crates here.
+        // map-exec needed for proc-macro dylibs and -sys crate native libs.
+        write: true,
+    },
+    HomeToolDir {
+        path: ".cargo/git",
+        process_exec: false,
+        map_exec: true,
+        // Git dependency checkouts — cargo build clones git deps here.
+        write: true,
     },
     HomeToolDir {
         path: ".rustup",
@@ -474,7 +494,11 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         map_exec: true,
         write: false,
     },
-    // Dependency stores: JARs, compiled packages — may contain JNI/cgo native libs
+    // ── Dependency stores: write + map-exec, no direct exec ────────────────
+    // Downloaded packages (JARs, native libs, compiled modules) that build tools
+    // write during dependency resolution. Write is required; map-exec is needed
+    // for JNI/cgo native libraries. No process-exec (deps aren't standalone bins).
+    // Sensitive files within these dirs are blocked via DENIED_HOME_SUBPATHS.
     HomeToolDir {
         path: ".gradle",
         process_exec: false,

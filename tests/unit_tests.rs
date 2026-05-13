@@ -1548,7 +1548,14 @@ fn home_tool_dirs_has_all_runtime_entries() {
 
     // Executables: full exec
     for expected in &[
-        ".local", ".mise", ".nvm", ".pyenv", ".cargo", ".rustup", ".sdkman", "go/bin",
+        ".local",
+        ".mise",
+        ".nvm",
+        ".pyenv",
+        ".cargo/bin",
+        ".rustup",
+        ".sdkman",
+        "go/bin",
     ] {
         assert!(
             paths.contains(expected),
@@ -1557,7 +1564,14 @@ fn home_tool_dirs_has_all_runtime_entries() {
     }
 
     // Dependency stores: map_exec only
-    for expected in &[".gradle", ".m2", ".konan", "go/pkg"] {
+    for expected in &[
+        ".gradle",
+        ".m2",
+        ".konan",
+        "go/pkg",
+        ".cargo/registry",
+        ".cargo/git",
+    ] {
         assert!(
             paths.contains(expected),
             "HOME_TOOL_DIRS missing {expected}"
@@ -2317,12 +2331,29 @@ fn profile_denies_non_dev_cache_dirs() {
 fn profile_cargo_has_exec() {
     let p = default_profile();
     assert!(
-        p.contains("(allow process-exec (subpath \"/Users/test/.cargo\"))"),
-        ".cargo should have process-exec for cargo, rustc, etc."
+        p.contains("(allow process-exec (subpath \"/Users/test/.cargo/bin\"))"),
+        ".cargo/bin should have process-exec for cargo, rustc, etc."
     );
     assert!(
-        p.contains("(allow file-map-executable (subpath \"/Users/test/.cargo\"))"),
-        ".cargo should have file-map-executable for native libs"
+        p.contains("(allow file-map-executable (subpath \"/Users/test/.cargo/bin\"))"),
+        ".cargo/bin should have file-map-executable"
+    );
+    assert!(
+        p.contains("(allow file-map-executable (subpath \"/Users/test/.cargo/registry\"))"),
+        ".cargo/registry should have file-map-executable for proc-macro dylibs"
+    );
+    assert!(
+        p.contains("(allow file-write* (subpath \"/Users/test/.cargo/registry\"))"),
+        ".cargo/registry should be writable for cargo build"
+    );
+    assert!(
+        p.contains("(allow file-write* (subpath \"/Users/test/.cargo/git\"))"),
+        ".cargo/git should be writable for git deps"
+    );
+    // .cargo/bin must NOT be writable (persistence attack prevention)
+    assert!(
+        !p.contains("(allow file-write* (subpath \"/Users/test/.cargo/bin\"))"),
+        ".cargo/bin must not be writable — prevents trojan persistence"
     );
 }
 

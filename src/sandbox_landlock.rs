@@ -1398,17 +1398,22 @@ mod tests {
     fn discovery_filtering_limits_home_tool_dirs() {
         let project = PathBuf::from("/home/user/project");
         let home = PathBuf::from("/home/user");
-        let existing = vec![".cargo".to_string(), ".nvm".to_string()];
+        let existing = vec![
+            ".cargo/bin".to_string(),
+            ".cargo/registry".to_string(),
+            ".cargo/git".to_string(),
+            ".nvm".to_string(),
+        ];
         let mut config = test_config(&project, &home);
         config.existing_home_tool_dirs = Some(&existing);
         let policy = generate_policy(&config);
 
-        // .cargo and .nvm should be present
+        // .cargo/bin and .nvm should be present
         assert!(
             policy
                 .fs_rules
                 .iter()
-                .any(|r| r.path == home.join(".cargo"))
+                .any(|r| r.path == home.join(".cargo/bin"))
         );
         assert!(policy.fs_rules.iter().any(|r| r.path == home.join(".nvm")));
 
