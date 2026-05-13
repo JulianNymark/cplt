@@ -116,7 +116,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
 
     emit_header(&mut sb, &project);
     emit_process_rules(&mut sb);
-    emit_project_access(&mut sb, &project, opts.allow_env_files);
+    emit_project_access(&mut sb, &project);
     emit_home_access(&mut sb, &home, opts.agent, opts.agent_dirs);
     emit_git_hooks(&mut sb, opts.git_hooks_path);
     emit_system_access(&mut sb, &home, opts.allow_browser, allow_chromium_runtime);
@@ -153,6 +153,10 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
         opts.proxy_port,
         opts.localhost_ports,
     );
+    // Sensitive project file denies MUST come after all user-configured allows.
+    // SBPL uses last-match-wins, so a user allow like `allow.read = ["~/Repos"]`
+    // would override the .env deny if emitted before it.
+    emit_sensitive_project_denies(&mut sb, opts.allow_env_files);
 
     sb
 }
@@ -197,7 +201,7 @@ fn emit_process_rules(sb: &mut String) {
     sbpl!(sb);
 }
 
-fn emit_project_access(sb: &mut String, project: &str, allow_env_files: bool) {
+fn emit_project_access(sb: &mut String, project: &str) {
     // Project directory — full access
     // file-map-executable needed for native Node addons in node_modules
     // (e.g. @next/swc-*, sharp, better-sqlite3 loaded via dlopen)
@@ -225,11 +229,16 @@ fn emit_project_access(sb: &mut String, project: &str, allow_env_files: bool) {
     sbpl!(sb, ";; Repo config — deny write to prevent tampering");
     sbpl!(sb, "(deny file-write* (literal \"{project}/.cplt.toml\"))");
     sbpl!(sb);
+}
 
+fn emit_sensitive_project_denies(sb: &mut String, allow_env_files: bool) {
     // Sensitive project files — deny read AND write of .env*, .pem, .key etc.
     // Read deny: prevents exfiltration of secrets via HTTPS.
     // Write deny: prevents deletion/overwrite of secrets (rm, truncate).
-    // Placed after the project allow so deny wins (more specific filter).
+    // Emitted AFTER all user-configured allows so these denies win via
+    // last-match-wins. A user allow like `allow.read = ["~/Repos"]` must
+    // not override the .env deny just because the project dir happens to
+    // be under ~/Repos.
     if !allow_env_files {
         sbpl!(
             sb,
