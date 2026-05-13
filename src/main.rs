@@ -3,6 +3,7 @@
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use cplt::{agent, config, discover, proxy, repo_config, sandbox, scratch, trust, update};
+use std::collections::BTreeSet;
 #[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
@@ -1477,8 +1478,8 @@ fn run_doctor() -> ExitCode {
     let ok = discovery.print_report();
 
     // Show project ecosystem detection summary
-    let report = cplt::detect::detect_project(&project_dir);
-    if !report.detections.is_empty() {
+    let report = cplt::detect::detect_project_recursive(&project_dir);
+    if !report.detections.is_empty() || !report.workspace_members.is_empty() {
         println!();
         println!(
             "{}{}[doctor]{} {}Project ecosystems{}",
@@ -1496,6 +1497,45 @@ fn run_doctor() -> ExitCode {
                 d.name
             );
         }
+
+        // Show workspace member ecosystems
+        if !report.workspace_members.is_empty() {
+            // Collect unique sources for the header
+            let sources: BTreeSet<String> = report
+                .workspace_members
+                .iter()
+                .map(|m| m.source.to_string())
+                .collect();
+            let source_label = sources.into_iter().collect::<Vec<_>>().join(", ");
+
+            println!();
+            println!(
+                "  {}Workspace members ({}){}",
+                ui::stdout_color(ui::BOLD),
+                source_label,
+                ui::stdout_color(ui::RESET),
+            );
+            for member in &report.workspace_members {
+                let ecosystems: Vec<&str> = member.detections.iter().map(|d| d.name).collect();
+                if ecosystems.is_empty() {
+                    println!(
+                        "    {}•{} {}",
+                        ui::stdout_color(ui::DIM),
+                        ui::stdout_color(ui::RESET),
+                        member.relative_path
+                    );
+                } else {
+                    println!(
+                        "    {}✓{} {} — {}",
+                        ui::stdout_color(ui::GREEN),
+                        ui::stdout_color(ui::RESET),
+                        member.relative_path,
+                        ecosystems.join(", ")
+                    );
+                }
+            }
+        }
+
         let has_repo_config = project_dir.join(".cplt.toml").exists();
         if !has_repo_config {
             println!(
@@ -2128,10 +2168,10 @@ fn run_init_command(write: bool, force: bool, quiet: bool) -> ExitCode {
         quiet,
     };
 
-    // Detect once, use for both display and generation
-    let report = cplt::detect::detect_project(&project_dir);
+    // Detect once, use for both display and generation (monorepo-aware)
+    let report = cplt::detect::detect_project_recursive(&project_dir);
 
-    if report.detections.is_empty() {
+    if report.detections.is_empty() && report.workspace_members.is_empty() {
         if !quiet {
             eprintln!("No project tooling detected in {}", project_dir.display());
             eprintln!("Nothing to generate.");
@@ -2155,7 +2195,9 @@ fn run_init_command(write: bool, force: bool, quiet: bool) -> ExitCode {
             if !quiet {
                 eprintln!("Wrote {}", path.display());
                 eprintln!();
-                eprintln!("Next: review the file and run `cplt trust` to approve permissions.");
+                eprintln!(
+                    "Next: review the file and run `cplt trust accept --all` to approve permissions."
+                );
             }
             ExitCode::SUCCESS
         }
@@ -2368,6 +2410,9 @@ fn trust_show(project_dir: &std::path::Path, loaded: &repo_config::LoadedRepoCon
         }
     }
 
+    // Show actionable hint for unapproved permissions
+    let has_pending = !proposed.is_empty() && !all_approved;
+
     if let Some(ref entry) = trust_entry
         && !entry.accepted.approved_at.is_empty()
     {
@@ -2381,6 +2426,28 @@ fn trust_show(project_dir: &std::path::Path, loaded: &repo_config::LoadedRepoCon
             println!("{blue}[cplt]{nc}  {red}⚠ Permissions have changed since last approval!{nc}");
             println!("{blue}[cplt]{nc}  {red}  Run `cplt trust accept --all` to re-approve.{nc}");
         }
+    } else if has_pending {
+        println!();
+        println!("{blue}[cplt]{nc}  {yellow}To approve all pending permissions:{nc}");
+        println!("{blue}[cplt]{nc}    cplt trust accept --all");
+        println!();
+        println!("{blue}[cplt]{nc}  {yellow}Or approve specific keys:{nc}");
+        let pending_keys: Vec<&&str> = proposed
+            .iter()
+            .filter(|&&key| {
+                !trust_entry
+                    .as_ref()
+                    .is_some_and(|t| trust::is_key_approved(t, key))
+            })
+            .collect();
+        println!(
+            "{blue}[cplt]{nc}    cplt trust accept {}",
+            pending_keys
+                .iter()
+                .map(|k| **k)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
     }
 
     println!("{blue}[cplt]{nc} ──────────────────────────────────────────────────────");
