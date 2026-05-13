@@ -4750,3 +4750,271 @@ fn set_repo_value_unset_removes_array_element() {
     assert!(!output.contains("~/.gradle"), "removed: {output}");
     assert!(output.contains("~/.m2"), "kept: {output}");
 }
+
+// ============================================================
+// Chromium runtime rules (allow_cache_exec = ["ms-playwright"] or subpath)
+// ============================================================
+
+#[test]
+fn chromium_runtime_rules_emitted_for_ms_playwright() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &["ms-playwright".to_string()],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains("(allow syscall*)"),
+        "syscall* required for Chromium Mach traps"
+    );
+    assert!(
+        p.contains("(allow system-socket)"),
+        "system-socket required for Chromium IPC"
+    );
+    assert!(
+        p.contains("(allow iokit-open-user-client)"),
+        "iokit-open-user-client required for GPU probing"
+    );
+    assert!(
+        p.contains(r#"(allow mach-register (global-name-regex #"^org\.chromium\."))"#),
+        "mach-register scoped to org.chromium.* required for Crashpad and inter-process IPC"
+    );
+    assert!(
+        p.contains("SingletonSocket"),
+        "ProcessSingleton unix socket rules must be present"
+    );
+}
+
+#[test]
+fn chromium_runtime_rules_emitted_for_ms_playwright_subpath() {
+    // A user who pins a versioned subdirectory in allow_cache_exec should also
+    // get the Chromium runtime rules — without them, Chrome segfaults even though
+    // process-exec is allowed for the binary.
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &["ms-playwright/chromium-1217".to_string()],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains("(allow syscall*)"),
+        "syscall* must be present for subpath entry"
+    );
+    assert!(
+        p.contains("SingletonSocket"),
+        "SingletonSocket rules must be present for subpath entry"
+    );
+}
+
+#[test]
+fn chromium_runtime_rules_absent_by_default() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        !p.contains("(allow syscall*)"),
+        "syscall* must not be emitted by default"
+    );
+    assert!(
+        !p.contains("SingletonSocket"),
+        "SingletonSocket rules must not be emitted by default"
+    );
+}
+
+#[test]
+fn chromium_runtime_rules_absent_for_unrelated_cache_exec() {
+    // An unrelated allow_cache_exec entry must not trigger Chromium runtime rules.
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &["some-other-tool".to_string()],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        !p.contains("(allow syscall*)"),
+        "syscall* must not be emitted for unrelated allow_cache_exec entry"
+    );
+    assert!(
+        !p.contains("SingletonSocket"),
+        "SingletonSocket rules must not be emitted for unrelated allow_cache_exec entry"
+    );
+}
+
+#[test]
+fn chromium_runtime_rules_absent_for_cache_exec_any_alone() {
+    // allow_cache_exec_any grants broad process-exec but must NOT trigger the
+    // Chromium-specific IPC/syscall rules without an explicit "ms-playwright" entry.
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: true,
+        allow_browser: false,
+    });
+    assert!(
+        !p.contains("(allow syscall*)"),
+        "syscall* must not be emitted when only allow_cache_exec_any is set"
+    );
+    assert!(
+        !p.contains("SingletonSocket"),
+        "SingletonSocket rules must not be emitted when only allow_cache_exec_any is set"
+    );
+}
+
+#[test]
+fn chromium_runtime_rules_absent_for_near_miss_names() {
+    // Near-miss entries that look similar to "ms-playwright" but differ in the
+    // first path component must NOT trigger Chromium runtime rules. This guards
+    // against future refactors that might loosen the check (e.g., contains() or
+    // starts_with without the trailing slash).
+    for name in &[
+        "ms-playwright-evil",
+        "ms-playwrightx",
+        "MS-PLAYWRIGHT",
+        "not-ms-playwright",
+        "xms-playwright",
+    ] {
+        let p = generate_profile(&ProfileOptions {
+            project_dir: std::path::Path::new("/projects/app"),
+            home_dir: std::path::Path::new("/Users/test"),
+            extra_read: &[],
+            extra_write: &[],
+            extra_deny: &[],
+            existing_home_tool_dirs: None,
+            extra_ports: &[],
+            localhost_ports: &[],
+            proxy_port: None,
+            allow_env_files: false,
+            allow_localhost_any: false,
+            scratch_dir: None,
+            allow_tmp_exec: false,
+            copilot_install_dir: None,
+            java_home: None,
+            git_hooks_path: None,
+            allow_gpg_signing: false,
+            allow_jvm_attach: false,
+            allow_docker: false,
+            electron_app_dir: None,
+            agent: cplt::agent::Agent::Copilot,
+            agent_dirs: &[],
+            allow_cache_exec: &[name.to_string()],
+            allow_cache_exec_any: false,
+            allow_browser: false,
+        });
+        assert!(
+            !p.contains("(allow syscall*)"),
+            "syscall* must not be emitted for near-miss entry {name:?}"
+        );
+        assert!(
+            !p.contains("SingletonSocket"),
+            "SingletonSocket must not be emitted for near-miss entry {name:?}"
+        );
+    }
+}
