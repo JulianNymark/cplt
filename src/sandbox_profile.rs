@@ -156,7 +156,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     // Sensitive project file denies MUST come after all user-configured allows.
     // SBPL uses last-match-wins, so a user allow like `allow.read = ["~/Repos"]`
     // would override the .env deny if emitted before it.
-    emit_sensitive_project_denies(&mut sb, opts.allow_env_files);
+    emit_sensitive_project_denies(&mut sb, &project, opts.allow_env_files);
 
     sb
 }
@@ -210,13 +210,19 @@ fn emit_project_access(sb: &mut String, project: &str) {
     sbpl!(sb, "(allow file-write* (subpath \"{project}\"))");
     sbpl!(sb, "(allow file-map-executable (subpath \"{project}\"))");
     sbpl!(sb);
+}
+
+fn emit_sensitive_project_denies(sb: &mut String, project: &str, allow_env_files: bool) {
+    // All security-critical project denies are emitted LAST in the profile.
+    // SBPL uses last-match-wins, so these must come after all user-configured
+    // allows (e.g. `allow.write = ["~/Repos"]`) to guarantee they cannot be
+    // overridden by broad parent-path allows.
 
     // Git persistence prevention — deny writes to files that execute outside the sandbox.
     // .git/hooks/ — post-checkout, pre-push etc. run outside sandbox on next git operation
     // .git/config — core.hooksPath can redirect hooks to /tmp, bypassing the hooks deny;
     //               url.*.insteadOf can hijack git remotes; include.path loads arbitrary config
     // .gitmodules — submodule URLs are a supply chain vector (git submodule update clones them)
-    // These denies are more specific than the project allow, so they win (SBPL specificity).
     sbpl!(sb, ";; Git persistence prevention");
     sbpl!(sb, "(deny file-write* (subpath \"{project}/.git/hooks\"))");
     sbpl!(sb, "(deny file-write* (literal \"{project}/.git/config\"))");
@@ -229,16 +235,10 @@ fn emit_project_access(sb: &mut String, project: &str) {
     sbpl!(sb, ";; Repo config — deny write to prevent tampering");
     sbpl!(sb, "(deny file-write* (literal \"{project}/.cplt.toml\"))");
     sbpl!(sb);
-}
 
-fn emit_sensitive_project_denies(sb: &mut String, allow_env_files: bool) {
     // Sensitive project files — deny read AND write of .env*, .pem, .key etc.
     // Read deny: prevents exfiltration of secrets via HTTPS.
     // Write deny: prevents deletion/overwrite of secrets (rm, truncate).
-    // Emitted AFTER all user-configured allows so these denies win via
-    // last-match-wins. A user allow like `allow.read = ["~/Repos"]` must
-    // not override the .env deny just because the project dir happens to
-    // be under ~/Repos.
     if !allow_env_files {
         sbpl!(
             sb,
