@@ -1291,7 +1291,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // macOS Copilot packaging detail. Skipped for other agents.
     #[cfg(target_os = "macos")]
     if active_agent.needs_sea_extraction() {
-        ensure_copilot_extracted(&agent_bin, &home_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+        ensure_copilot_extracted(&agent_bin, &home_dir, &project_dir)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
     }
 
     // Preflight: verify the sandbox mechanism works on this system
@@ -2884,35 +2885,50 @@ fn start_denial_stream() -> Option<std::process::Child> {
 /// Returns Ok(()) if extraction is confirmed or not needed, Err(message) if it
 /// failed and entering the sandbox would cause EPERM on copilot/pkg writes.
 #[cfg(target_os = "macos")]
-fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), String> {
+fn ensure_copilot_extracted(
+    copilot_bin: &Path,
+    home: &Path,
+    project_dir: &Path,
+) -> Result<(), String> {
+    // Security guard: this preflight executes `copilot --version` outside the
+    // sandbox. If PATH resolves to a project-local wrapper script, that script
+    // would run unsandboxed with full user privileges before trust lock applies.
+    let bin = copilot_bin
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve copilot binary path: {e}"))?;
+    let project = project_dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve project directory path: {e}"))?;
+    if bin.starts_with(&project) {
+        return Ok(());
+    }
+
     let arch = match std::env::consts::ARCH {
         "aarch64" => "arm64",
         "x86_64" => "x64",
         _ => return Ok(()),
     };
 
-    // Skip extraction for non-Mach-O binaries (e.g. shell script wrappers).
-    // SEA extraction only applies to the compiled Copilot Mach-O binary.
-    if !is_macho_binary(copilot_bin) {
-        return Ok(());
-    }
-
-    let Some(binary_id) = binary_identity(copilot_bin) else {
-        return Ok(());
-    };
-
     let pkg_base = home
         .join("Library/Caches/copilot/pkg")
         .join(format!("darwin-{arch}"));
+
+    // Compute binary identity for the fast-path cache.
+    // Works for any file type: Mach-O binary (Homebrew), node/shell wrapper (npm).
+    // The identity is based on canonicalized path + inode + size + mtime — changes
+    // whenever the copilot binary is updated/reinstalled.
+    let binary_id = binary_identity(copilot_bin);
 
     // Fast path: check cplt-managed marker that records both the binary
     // identity and the actual extraction directory from the last successful run.
     let cache_dir = home.join("Library/Caches/cplt");
     let cache_file = cache_dir.join("copilot-extracted");
-    if let Ok(cached) = std::fs::read_to_string(&cache_file) {
+    if let Some(ref bid) = binary_id
+        && let Ok(cached) = std::fs::read_to_string(&cache_file)
+    {
         let mut lines = cached.lines();
         if let (Some(cached_id), Some(cached_dir)) = (lines.next(), lines.next())
-            && cached_id == binary_id
+            && cached_id == bid.as_str()
         {
             // Binary unchanged — verify the extracted dir still exists on disk
             let extracted_marker = pkg_base.join(cached_dir).join(".extraction-complete");
@@ -2961,6 +2977,7 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
     // Timeout: 60s (larger SEA payloads in newer versions need more time)
     let mut extracted_dir_name: Option<String> = None;
     let mut saw_extracting = false;
+    let mut child_exit_ok = false;
     for i in 0..120 {
         if let Some(name) = find_new_extracted_dir(&pkg_base, &dirs_before) {
             extracted_dir_name = Some(name);
@@ -2971,6 +2988,7 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
             saw_extracting = true;
         }
         if let Ok(Some(status)) = child.try_wait() {
+            child_exit_ok = status.success();
             // Process exited — check one more time
             extracted_dir_name = find_new_extracted_dir(&pkg_base, &dirs_before);
             if extracted_dir_name.is_some() {
@@ -3007,6 +3025,13 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
         extracted_dir_name = find_any_complete_dir(&pkg_base);
     }
 
+    // If no extraction dir exists anywhere, this copilot doesn't use SEA
+    // extraction (e.g., dev builds, non-SEA wrappers, test fakes).
+    // Only skip if copilot exited cleanly — a crash isn't proof of "no SEA".
+    if extracted_dir_name.is_none() && child_exit_ok && extraction_dirs(&pkg_base).is_empty() {
+        return Ok(());
+    }
+
     // Last resort: if no complete dir exists, try `-p exit` which forces full
     // startup (and thus extraction) in case --version uses a lazy code path.
     if extracted_dir_name.is_none() {
@@ -3018,9 +3043,11 @@ fn ensure_copilot_extracted(copilot_bin: &Path, home: &Path) -> Result<(), Strin
     }
 
     if let Some(ref dir_name) = extracted_dir_name {
-        // Persist success: binary identity + extracted dir name
-        let _ = std::fs::create_dir_all(&cache_dir);
-        let _ = std::fs::write(&cache_file, format!("{binary_id}\n{dir_name}"));
+        // Persist success: binary identity + extracted dir name.
+        if let Some(ref bid) = binary_id {
+            let _ = std::fs::create_dir_all(&cache_dir);
+            let _ = std::fs::write(&cache_file, format!("{bid}\n{dir_name}"));
+        }
         if !dirs_before.contains(dir_name) {
             ui::ok("Copilot runtime extracted");
         }
@@ -3072,6 +3099,7 @@ fn try_extraction_fallback(
 
 /// Compute a stable identity for a binary based on filesystem metadata.
 /// Uses canonicalized path + inode + size + full mtime (seconds + nanoseconds).
+/// Works for any file type: Mach-O binaries, shell scripts, symlinks (resolved).
 #[cfg(target_os = "macos")]
 fn binary_identity(path: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
@@ -3087,29 +3115,6 @@ fn binary_identity(path: &Path) -> Option<String> {
     ))
 }
 
-/// Check if a file is a Mach-O binary by reading its magic bytes.
-/// Detects: thin Mach-O (32/64-bit, both endiannesses) and fat/universal binaries.
-/// Returns false for scripts, text files, or unreadable files.
-#[cfg(target_os = "macos")]
-fn is_macho_binary(path: &Path) -> bool {
-    use std::io::Read;
-    let Ok(mut f) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut magic = [0u8; 4];
-    if f.read_exact(&mut magic).is_err() {
-        return false;
-    }
-    matches!(
-        magic,
-        [0xFE, 0xED, 0xFA, 0xCE] // MH_MAGIC (32-bit)
-            | [0xFE, 0xED, 0xFA, 0xCF] // MH_MAGIC_64
-            | [0xCE, 0xFA, 0xED, 0xFE] // MH_CIGAM (32-bit, reversed)
-            | [0xCF, 0xFA, 0xED, 0xFE] // MH_CIGAM_64 (reversed)
-            | [0xCA, 0xFE, 0xBA, 0xBE] // FAT_MAGIC (universal)
-            | [0xBE, 0xBA, 0xFE, 0xCA] // FAT_CIGAM (universal, reversed)
-    )
-}
 /// List non-hidden directory names under `pkg_base` (extraction version dirs).
 #[cfg(target_os = "macos")]
 fn extraction_dirs(pkg_base: &Path) -> std::collections::HashSet<String> {
