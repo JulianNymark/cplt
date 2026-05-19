@@ -85,6 +85,9 @@ pub struct LandlockPolicy {
     /// network rules are port-based only — they cannot distinguish localhost
     /// from remote hosts. The proxy still provides domain-level filtering.
     pub restrict_net_connect: bool,
+    /// Home directory — used to pre-create writable cache directories that
+    /// Landlock needs to open(O_PATH) before the sandbox is applied.
+    pub home_dir: PathBuf,
 }
 
 /// Pre-computed data for sandbox application in the child process.
@@ -167,6 +170,7 @@ const LINUX_SYSTEM_READ_PATHS: &[&str] = &[
     "/etc/environment",
     "/etc/default",
     "/etc/security", // PAM config (read-only)
+    "/usr/include",  // C/C++ system headers — needed by cc/gcc for native crate builds
 ];
 
 /// Tool directories with read + execute access.
@@ -528,6 +532,7 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
         fs_rules,
         net_rules,
         restrict_net_connect,
+        home_dir: home.to_path_buf(),
     }
 }
 
@@ -726,6 +731,25 @@ pub fn precompute(policy: LandlockPolicy) -> Result<PrecomputedSandbox, String> 
                  and no proxy configured — outbound network is UNRESTRICTED. \
                  Use --with-proxy or upgrade to kernel 6.7+ for network isolation."
             ));
+        }
+    }
+
+    // Pre-create writable HOME_TOOL_DIRS cache directories that may not exist yet.
+    // Landlock requires open(O_PATH) to succeed, so non-existent paths are
+    // silently skipped. Writable cache dirs (e.g. ~/.cargo/registry) are
+    // expected to be created on first use by build tools — we ensure they
+    // exist so the Landlock rule can be applied and the sandboxed process
+    // can actually write there.
+    //
+    // Scope: only HOME_TOOL_DIRS with write=true (build caches). We do NOT
+    // pre-create user --allow-write paths, socket paths, or arbitrary writable
+    // rules — those require the user to set up the filesystem themselves.
+    for dir in policy::home_tool_dirs() {
+        if dir.write {
+            let path = policy.home_dir.join(dir.path);
+            if !path.exists() {
+                let _ = std::fs::create_dir_all(&path);
+            }
         }
     }
 
@@ -1769,6 +1793,7 @@ mod tests {
             ],
             net_rules: vec![],
             restrict_net_connect: false,
+            home_dir: PathBuf::from("/tmp/test-home"),
         };
 
         let precomputed = precompute(policy).expect("precompute should succeed");
