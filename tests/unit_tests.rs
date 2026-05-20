@@ -4027,6 +4027,14 @@ fn env_scratch_dir_sets_tmpdir_vars() {
 
     let temp = env.vars.iter().find(|(k, _)| k == "TEMP");
     assert!(temp.is_some(), "TEMP should be set");
+
+    let gocache = env.vars.iter().find(|(k, _)| k == "GOCACHE");
+    assert!(gocache.is_some(), "GOCACHE should be set");
+    assert_eq!(
+        gocache.unwrap().1,
+        scratch.to_string_lossy(),
+        "GOCACHE should point to scratch dir for exec permissions"
+    );
 }
 
 #[test]

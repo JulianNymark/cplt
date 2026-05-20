@@ -265,6 +265,7 @@ pub(super) const SCRATCH_DIR_ENV_VARS: &[&str] = &[
     "TMPDIR",   // Standard Unix temp dir
     "TMP",      // Used by some tools (Node.js, Python)
     "TEMP",     // Used by some tools (cross-platform)
+    "GOCACHE",  // Go build cache (compiled test binaries need exec)
     "GOTMPDIR", // Go test binary compilation target
 ];
 

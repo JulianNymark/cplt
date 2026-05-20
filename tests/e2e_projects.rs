@@ -1274,6 +1274,62 @@ fi
         assert_result_ok(&stdout, "go_test");
     }
 
+    /// GOCACHE is redirected to scratch dir so cached test binaries can execute.
+    /// Without this, the second `go test` run fails because Go tries to execute
+    /// a cached binary from ~/Library/Caches/go-build (no exec permission).
+    #[test]
+    fn project_go_test_gocache_redirected() {
+        require_sandbox!();
+        if !go_available() {
+            eprintln!("SKIPPED: go not available");
+            return;
+        }
+
+        let project = TempProject::scaffold_go();
+        project.write_file(
+            "main_test.go",
+            "package main\n\nimport \"testing\"\n\nfunc TestCache(t *testing.T) {\n\tt.Log(\"cached run\")\n}\n",
+        );
+
+        let script = r#"
+export GOTOOLCHAIN=local
+
+# Verify GOCACHE is redirected to scratch (not default ~/Library/Caches/go-build)
+CACHE="${GOCACHE:-unset}"
+case "$CACHE" in
+    unset|*/Library/Caches/*|*/.cache/go-build)
+        echo "RESULT:gocache_redirected:FAIL:GOCACHE=$CACHE"
+        ;;
+    *)
+        echo "RESULT:gocache_redirected:OK"
+        ;;
+esac
+
+# Run go test twice — second run uses cached binary from GOCACHE
+if go test -count=1 . 2>&1; then
+    echo "RESULT:go_test_first:OK"
+else
+    echo "RESULT:go_test_first:FAIL"
+fi
+
+if go test -count=1 . 2>&1; then
+    echo "RESULT:go_test_cached:OK"
+else
+    echo "RESULT:go_test_cached:FAIL"
+fi
+"#;
+        let fake_dir = create_fake_copilot(&project, script);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &["--scratch-dir"]);
+
+        assert!(
+            success,
+            "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_result_ok(&stdout, "gocache_redirected");
+        assert_result_ok(&stdout, "go_test_first");
+        assert_result_ok(&stdout, "go_test_cached");
+    }
+
     /// Without --scratch-dir, go test is blocked because the compiled test
     /// binary lands in a temp dir where process-exec is denied.
     #[test]
