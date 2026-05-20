@@ -284,6 +284,39 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
         });
     }
 
+    // ── Application directories (filtered by discovery) ──
+    for dir in policy::app_dirs() {
+        let process_exec = dir.process_exec_paths(home);
+        let map_exec = dir.map_exec_paths(home);
+        let write = dir.write_paths(home);
+        let read = dir.read_paths(home);
+        // all_paths() returns deduplicated union of all categories
+        for path in dir.all_paths(home) {
+            let include = match &config.existing_app_dirs {
+                Some(existing) => existing
+                    .iter()
+                    .any(|e| e == path.to_string_lossy().as_ref()),
+                None => true,
+            };
+            if include {
+                let execute = process_exec.contains(&path) || map_exec.contains(&path);
+                let writable = write.contains(&path);
+                // read permission mirrors SBPL: only paths in read_paths() get file-read*.
+                // A write-only path (not in read_paths) does not get read access.
+                let readable = read.contains(&path);
+                fs_rules.push(FsRule {
+                    path,
+                    access: FsAccess {
+                        read: readable,
+                        write: writable,
+                        execute,
+                        ioctl: false,
+                    },
+                });
+            }
+        }
+    }
+
     // ── Home tool directories (filtered by discovery) ──
     for dir in policy::home_tool_dirs() {
         if should_include_tool_dir(dir, config) {
@@ -707,6 +740,11 @@ fn probe_abi_candidate(abi: ABI) -> Result<(), String> {
 /// be resolved in the parent because they would yield the parent's pid.
 /// These are stored in `deferred_paths` and opened with a single `open()`
 /// call in the child after fork.
+///
+/// Platform difference: Landlock operates on File Descriptors, so a path
+/// that does not exist will not be added to the final Landlock sandbox.
+/// This is contrary to the way it is done on macOS, where paths with write
+/// access will always be included.
 ///
 /// Called once in `prepare()`. The returned `PrecomputedSandbox` is
 /// cloned into the `pre_exec` closure.
@@ -1138,6 +1176,7 @@ mod tests {
             extra_write: &[],
             extra_deny: &[],
             existing_home_tool_dirs: None,
+            existing_app_dirs: None,
             extra_ports: &[],
             localhost_ports: &[],
             proxy_port: None,
@@ -1765,6 +1804,196 @@ mod tests {
             !state_rule.access.execute,
             "state data dir should NOT be executable"
         );
+    }
+
+    #[test]
+    fn app_dirs_included_when_existing_is_none() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let config = test_config(&project, &home);
+        let policy = generate_policy(&config);
+
+        // Resolve at least one mise app dir path; skip if no home dir
+        let mise_paths: Vec<PathBuf> = policy::app_dirs()[0].all_paths(&home);
+        if mise_paths.is_empty() {
+            return;
+        }
+
+        let found = mise_paths
+            .iter()
+            .any(|p| policy.fs_rules.iter().any(|r| &r.path == p));
+        assert!(
+            found,
+            "With existing_app_dirs=None, at least one mise app dir path should appear in policy"
+        );
+    }
+
+    #[test]
+    fn app_dirs_excluded_when_no_match() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let mut config = test_config(&project, &home);
+        let nonexistent = vec!["/nonexistent".to_string()];
+        config.existing_app_dirs = Some(&nonexistent);
+        let policy = generate_policy(&config);
+
+        // Some mise paths may appear from LINUX_HOME_CONFIG_FILES (read-only).
+        // The important property is that writable app-dir paths are excluded.
+        let write_paths = policy::app_dirs()[0].write_paths(&home);
+        for p in &write_paths {
+            assert!(
+                !policy
+                    .fs_rules
+                    .iter()
+                    .any(|r| &r.path == p && r.access.write),
+                "With non-matching existing_app_dirs, mise write path {} should NOT appear in policy with write access",
+                p.display()
+            );
+        }
+        // Also verify process_exec paths are not granted execute
+        let exec_paths = policy::app_dirs()[0].process_exec_paths(&home);
+        for p in &exec_paths {
+            assert!(
+                !policy
+                    .fs_rules
+                    .iter()
+                    .any(|r| &r.path == p && r.access.execute),
+                "With non-matching existing_app_dirs, mise exec path {} should NOT appear in policy with execute",
+                p.display()
+            );
+        }
+    }
+
+    #[test]
+    fn app_dir_fsaccess_flags_match_permissions() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let config = test_config(&project, &home);
+        let policy = generate_policy(&config);
+
+        let mise = &policy::app_dirs()[0];
+        let all_paths = mise.all_paths(&home);
+        if all_paths.is_empty() {
+            return;
+        }
+
+        let write_paths = mise.write_paths(&home);
+        let process_exec_paths = mise.process_exec_paths(&home);
+        let map_exec_paths = mise.map_exec_paths(&home);
+        let read_paths = mise.read_paths(&home);
+
+        for path in &all_paths {
+            let rule = policy.fs_rules.iter().find(|r| &r.path == path);
+            let Some(rule) = rule else {
+                panic!(
+                    "missing FsRule for expected app-dir path {}",
+                    path.display()
+                );
+            };
+
+            if write_paths.contains(path) {
+                assert!(
+                    rule.access.write,
+                    "path {} is in write_paths but FsRule.write is false",
+                    path.display()
+                );
+            }
+
+            if process_exec_paths.contains(path) || map_exec_paths.contains(path) {
+                assert!(
+                    rule.access.execute,
+                    "path {} is in exec paths but FsRule.execute is false",
+                    path.display()
+                );
+            }
+
+            if read_paths.contains(path) {
+                assert!(
+                    rule.access.read,
+                    "path {} is in read_paths but FsRule.read is false",
+                    path.display()
+                );
+            } else {
+                assert!(
+                    !rule.access.read,
+                    "path {} is NOT in read_paths but FsRule.read is true",
+                    path.display()
+                );
+            }
+
+            if read_paths.contains(path)
+                && !write_paths.contains(path)
+                && !process_exec_paths.contains(path)
+                && !map_exec_paths.contains(path)
+            {
+                assert!(
+                    !rule.access.write,
+                    "path {} is read-only but FsRule.write is true",
+                    path.display()
+                );
+                assert!(
+                    !rule.access.execute,
+                    "path {} is read-only but FsRule.execute is true",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn app_dir_effective_permissions_include_parent_rules() {
+        let project = PathBuf::from("/home/user/project");
+        let home = PathBuf::from("/home/user");
+        let config = test_config(&project, &home);
+        let policy = generate_policy(&config);
+
+        for app_dir in policy::app_dirs() {
+            let all_paths = app_dir.all_paths(&home);
+            if all_paths.is_empty() {
+                continue;
+            }
+
+            let write_paths = app_dir.write_paths(&home);
+            let process_exec_paths = app_dir.process_exec_paths(&home);
+            let map_exec_paths = app_dir.map_exec_paths(&home);
+
+            for path in &all_paths {
+                // Compute effective access by OR-ing all rules whose path is an ancestor of
+                // or equal to the target path (Landlock rules apply to path and its subtree).
+                let mut effective_read = false;
+                let mut effective_write = false;
+                let mut effective_execute = false;
+                for rule in &policy.fs_rules {
+                    if path.starts_with(&rule.path) {
+                        effective_read |= rule.access.read;
+                        effective_write |= rule.access.write;
+                        effective_execute |= rule.access.execute;
+                    }
+                }
+
+                assert!(
+                    effective_read,
+                    "app-dir path {} should have effective read access",
+                    path.display()
+                );
+
+                if write_paths.contains(path) {
+                    assert!(
+                        effective_write,
+                        "app-dir path {} declares write but effective write is false",
+                        path.display()
+                    );
+                }
+
+                if process_exec_paths.contains(path) || map_exec_paths.contains(path) {
+                    assert!(
+                        effective_execute,
+                        "app-dir path {} declares exec but effective execute is false",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

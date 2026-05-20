@@ -460,6 +460,7 @@ fn profile_contains_deny_default() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -492,6 +493,7 @@ fn profile_allows_tty_ioctl() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -533,6 +535,7 @@ fn landlock_policy_device_files_have_ioctl() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -592,6 +595,7 @@ fn profile_grants_project_access() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -629,6 +633,7 @@ fn profile_grants_copilot_config_access() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -661,6 +666,7 @@ fn profile_denies_sensitive_dirs() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -718,6 +724,7 @@ fn profile_denies_sensitive_files() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -763,6 +770,7 @@ fn profile_denies_credential_files_in_tool_dirs() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -831,6 +839,7 @@ fn profile_allows_credential_files_when_user_opts_in() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -898,6 +907,7 @@ fn profile_restricts_outbound_tcp() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -957,6 +967,7 @@ fn profile_extra_ports_adds_allows() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[8080, 3000],
         localhost_ports: &[],
         proxy_port: None,
@@ -1000,6 +1011,7 @@ fn profile_allow_browser_enables_lsopen() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1035,6 +1047,7 @@ fn profile_proxy_port_allows_localhost() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: Some(18080),
@@ -1074,6 +1087,7 @@ fn profile_allow_localhost_opens_specific_ports() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[3000, 8080],
         proxy_port: None,
@@ -1128,6 +1142,7 @@ fn profile_deny_rules_come_after_allow_rules() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1169,6 +1184,7 @@ fn profile_allows_gh_config_read_only() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1212,6 +1228,7 @@ fn profile_allows_file_map_executable_for_copilot() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1251,6 +1268,7 @@ fn profile_denies_env_files_by_default() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1314,6 +1332,7 @@ fn profile_allows_env_files_when_flag_set() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1349,6 +1368,7 @@ fn profile_env_deny_comes_after_project_allow() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1396,6 +1416,7 @@ fn profile_env_deny_comes_after_user_allows() {
         extra_write: &[std::path::PathBuf::from("/projects")],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1482,6 +1503,7 @@ fn profile_allows_all_localhost_when_flag_set() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1535,6 +1557,7 @@ fn profile_allows_all_tcp_outbound_when_jvm_and_localhost_any() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1579,6 +1602,7 @@ fn profile_denies_write_to_copilot_pkg() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1630,8 +1654,9 @@ fn home_tool_dirs_has_all_runtime_entries() {
 
     // Executables: full exec
     for expected in &[
-        ".local",
+        ".local/bin",
         ".mise",
+        ".asdf",
         ".nvm",
         ".pyenv",
         ".cargo/bin",
@@ -1798,6 +1823,7 @@ fn profile_denies_exec_from_tmp() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1857,6 +1883,7 @@ fn profile_allows_jvm_attach_when_flag_set() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1936,6 +1963,7 @@ fn profile_allows_localhost_tcp_bind() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -1982,6 +2010,7 @@ fn allow_localhost_any_affects_both_backends() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -2018,6 +2047,7 @@ fn allow_localhost_any_affects_both_backends() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -2066,6 +2096,7 @@ fn config_options_parity_across_backends() {
         extra_write: &extra_write,
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &ports,
         localhost_ports: &lh_ports,
         proxy_port: Some(9090),
@@ -2147,6 +2178,7 @@ fn config_options_parity_across_backends() {
         extra_write: &extra_write,
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &ports,
         localhost_ports: &lh_ports,
         proxy_port: Some(9090),
@@ -2223,6 +2255,7 @@ fn profile_denies_git_persistence_vectors() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -2280,6 +2313,7 @@ fn profile_denies_write_to_cplt_toml() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -2319,6 +2353,7 @@ fn default_profile() -> String {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -2895,6 +2930,7 @@ fn profile_scratch_dir_adds_all_permissions() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -2959,6 +2995,7 @@ fn profile_allow_tmp_exec_removes_denies() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3118,6 +3155,7 @@ fn profile_allows_copilot_install_dir() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3166,6 +3204,7 @@ fn profile_allows_vscode_copilot_path() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3217,6 +3256,7 @@ fn profile_allows_electron_app_bundle() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3371,6 +3411,7 @@ fn profile_allows_git_hooks_path() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3515,6 +3556,7 @@ fn profile_gpg_signing_allows_public_keyring() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3558,6 +3600,7 @@ fn profile_gpg_signing_allows_agent_socket() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3598,6 +3641,7 @@ fn profile_gpg_signing_denies_private_keys() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3637,6 +3681,7 @@ fn profile_gpg_signing_rules_come_after_deny() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3686,6 +3731,7 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3723,6 +3769,7 @@ fn profile_gpg_signing_deny_path_wins() {
         extra_write: &[],
         extra_deny: &deny,
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3763,6 +3810,7 @@ fn profile_gpg_signing_denies_legacy_secring() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -3798,6 +3846,7 @@ fn profile_gpg_signing_allows_socket_file_read() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4194,6 +4243,7 @@ fn profile_docker_disabled_by_default() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4235,6 +4285,7 @@ fn profile_docker_enabled_allows_config_and_sockets() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4308,6 +4359,7 @@ fn profile_docker_skipped_when_deny_path_overlaps() {
         extra_write: &[],
         extra_deny: &[std::path::PathBuf::from("/Users/test/.docker")],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4348,6 +4400,7 @@ fn profile_allow_cache_exec_subdir_adds_carveout() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4394,6 +4447,7 @@ fn profile_allow_cache_exec_any_allows_all_caches() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4434,6 +4488,7 @@ fn profile_default_denies_cache_exec() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4470,6 +4525,7 @@ fn profile_allow_cache_exec_multiple_subdirs() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4589,6 +4645,7 @@ fn profile_cache_exec_carveout_comes_after_exec_deny() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4877,6 +4934,7 @@ fn chromium_runtime_rules_emitted_for_ms_playwright() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4931,6 +4989,7 @@ fn chromium_runtime_rules_emitted_for_ms_playwright_subpath() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -4974,6 +5033,7 @@ fn chromium_runtime_rules_absent_by_default() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -5014,6 +5074,7 @@ fn chromium_runtime_rules_absent_for_unrelated_cache_exec() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -5055,6 +5116,7 @@ fn chromium_runtime_rules_absent_for_cache_exec_any_alone() {
         extra_write: &[],
         extra_deny: &[],
         existing_home_tool_dirs: None,
+        existing_app_dirs: None,
         extra_ports: &[],
         localhost_ports: &[],
         proxy_port: None,
@@ -5105,6 +5167,7 @@ fn chromium_runtime_rules_absent_for_near_miss_names() {
             extra_write: &[],
             extra_deny: &[],
             existing_home_tool_dirs: None,
+            existing_app_dirs: None,
             extra_ports: &[],
             localhost_ports: &[],
             proxy_port: None,
@@ -5134,4 +5197,199 @@ fn chromium_runtime_rules_absent_for_near_miss_names() {
             "SingletonSocket must not be emitted for near-miss entry {name:?}"
         );
     }
+}
+
+// ============================================================
+// existing_app_dirs filtering — SBPL profile
+// ============================================================
+
+#[test]
+fn existing_app_dirs_none_includes_all() {
+    // Resolve a known mise app dir path at test time
+    let data_path =
+        cplt::sandbox::AppDirKind::Data.resolve("", "", "mise", std::path::Path::new("/home/test"));
+    let Some(data_path) = data_path else {
+        // No home dir in this environment — skip
+        return;
+    };
+    let data_str = data_path.to_string_lossy().to_string();
+
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/home/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains(&data_str),
+        "With existing_app_dirs=None, mise data dir path should appear in profile"
+    );
+}
+
+#[test]
+fn existing_app_dirs_matching_includes_dir() {
+    let data_path =
+        cplt::sandbox::AppDirKind::Data.resolve("", "", "mise", std::path::Path::new("/home/test"));
+    let Some(data_path) = data_path else {
+        return;
+    };
+    let data_str = data_path.to_string_lossy().to_string();
+
+    let existing = vec![data_str.clone()];
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/home/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: Some(&existing),
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains(&data_str),
+        "With existing_app_dirs containing a matching path, mise data dir should appear in profile"
+    );
+}
+
+#[test]
+fn existing_app_dirs_nonmatching_excludes_dir() {
+    // Resolve any mise path to confirm what we'd expect to see
+    let data_path =
+        cplt::sandbox::AppDirKind::Data.resolve("", "", "mise", std::path::Path::new("/home/test"));
+    let Some(data_path) = data_path else {
+        return;
+    };
+    let data_str = data_path.to_string_lossy().to_string();
+
+    let existing = vec!["/nonexistent".to_string()];
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/home/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: Some(&existing),
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        !p.contains(&data_str),
+        "With existing_app_dirs containing only non-matching paths, mise data dir should NOT appear in profile"
+    );
+}
+
+#[test]
+fn existing_app_dirs_per_path_filtering() {
+    // Resolve two distinct mise paths from different categories
+    let data_path =
+        cplt::sandbox::AppDirKind::Data.resolve("", "", "mise", std::path::Path::new("/home/test"));
+    let config_path = cplt::sandbox::AppDirKind::Config.resolve(
+        "",
+        "",
+        "mise",
+        std::path::Path::new("/home/test"),
+    );
+    let (Some(data_path), Some(config_path)) = (data_path, config_path) else {
+        return;
+    };
+    let data_str = data_path.to_string_lossy().to_string();
+    let config_str = config_path.to_string_lossy().to_string();
+
+    // Only the data dir is "existing" — config dir is absent
+    let existing = vec![data_str.clone()];
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/tmp/proj"),
+        home_dir: std::path::Path::new("/home/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: Some(&existing),
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains(&data_str),
+        "mise data dir (present in existing_app_dirs) should appear in profile"
+    );
+    assert!(
+        !p.contains(&config_str),
+        "mise config dir (absent from existing_app_dirs) should NOT appear in profile — per-path filtering must work"
+    );
 }

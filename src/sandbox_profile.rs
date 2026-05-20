@@ -22,7 +22,7 @@ macro_rules! sbpl {
 use super::policy::{
     DENIED_CACHE_PREFIXES, DENIED_DOTFILES, DENIED_FILES, DENIED_HOME_SUBPATHS,
     GPG_SIGNING_ALLOW_FILES, HOME_TOOL_DIRS, HomeToolDir, SENSITIVE_PROJECT_PATTERNS,
-    SYSTEM_READ_FILES, TOOL_READ_DIRS,
+    SYSTEM_READ_FILES, TOOL_READ_DIRS, app_dirs, validate_sbpl_path,
 };
 
 /// Options for generating an SBPL sandbox profile.
@@ -37,6 +37,9 @@ pub struct ProfileOptions<'a> {
     /// If `Some`, only include these home tool dirs (tighter profile via discovery).
     /// If `None`, all known home tool dirs are included.
     pub existing_home_tool_dirs: Option<&'a [String]>,
+    /// If `Some`, only include these app dirs (tighter profile via discovery).
+    /// If `None`, all known app dirs are included.
+    pub existing_app_dirs: Option<&'a [String]>,
     pub extra_ports: &'a [u16],
     pub localhost_ports: &'a [u16],
     pub proxy_port: Option<u16>,
@@ -122,8 +125,9 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_system_access(&mut sb, &home, opts.allow_browser, allow_chromium_runtime);
     emit_tool_dirs(
         &mut sb,
-        &home,
+        opts.home_dir,
         opts.existing_home_tool_dirs,
+        opts.existing_app_dirs,
         opts.agent,
         opts.allow_cache_exec,
         opts.allow_cache_exec_any,
@@ -319,12 +323,6 @@ fn emit_home_access(sb: &mut String, home: &str, agent: Agent, agent_dirs: &[Age
     );
     sbpl!(sb);
 
-    // mise config — tool version manager reads global config for tool paths and settings.
-    // Contains tool versions and PATH entries, no secrets.
-    sbpl!(sb, ";; mise config (tool versions, no secrets)");
-    sbpl!(sb, "(allow file-read* (subpath \"{home}/.config/mise\"))");
-    sbpl!(sb);
-
     // Microsoft DeviceID — telemetry device identifier
     sbpl!(sb, ";; Microsoft DeviceID");
     sbpl!(
@@ -481,12 +479,14 @@ fn emit_git_hooks(sb: &mut String, git_hooks_path: Option<&Path>) {
 
 fn emit_tool_dirs(
     sb: &mut String,
-    home: &str,
+    home_dir: &std::path::Path,
     existing_home_tool_dirs: Option<&[String]>,
+    existing_app_dirs: Option<&[String]>,
     agent: Agent,
     allow_cache_exec: &[String],
     allow_cache_exec_any: bool,
 ) {
+    let home = home_dir.to_string_lossy();
     sbpl!(sb, ";; Developer tools");
     for dir in TOOL_READ_DIRS {
         sbpl!(sb, "(allow file-read* (subpath \"{dir}\"))");
@@ -500,6 +500,7 @@ fn emit_tool_dirs(
             .collect(),
         None => HOME_TOOL_DIRS.iter().collect(),
     };
+
     for dir in &active_dirs {
         let p = dir.path;
         sbpl!(sb, "(allow file-read* (subpath \"{home}/{p}\"))");
@@ -524,6 +525,68 @@ fn emit_tool_dirs(
         }
         if dir.write && !dir.map_exec {
             sbpl!(sb, "(deny file-map-executable (subpath \"{home}/{p}\"))");
+        }
+    }
+
+    // App dirs: absolute paths resolved from XDG/macOS conventions.
+    // Use discovered existing dirs if available, else include all.
+    // Per-path filtering: each path is checked individually against existing_app_dirs.
+    for dir in app_dirs() {
+        let read_paths = dir.read_paths(home_dir);
+        let write_paths = dir.write_paths(home_dir);
+        let process_exec_paths = dir.process_exec_paths(home_dir);
+        let map_exec_paths = dir.map_exec_paths(home_dir);
+
+        // Allow rules first — emit only for paths that pass the inclusion check.
+        for path in dir.all_paths(home_dir) {
+            let include = match existing_app_dirs {
+                Some(existing) => existing
+                    .iter()
+                    .any(|e| e == path.to_string_lossy().as_ref()),
+                None => true,
+            };
+            if !include {
+                continue;
+            }
+            if validate_sbpl_path(&path).is_err() {
+                continue;
+            }
+            let p = path.display();
+            if read_paths.contains(&path) {
+                sbpl!(sb, "(allow file-read* (subpath \"{p}\"))");
+            }
+            if write_paths.contains(&path) {
+                sbpl!(sb, "(allow file-write* (subpath \"{p}\"))");
+            }
+            if process_exec_paths.contains(&path) {
+                sbpl!(sb, "(allow process-exec (subpath \"{p}\"))");
+            }
+            if map_exec_paths.contains(&path) {
+                sbpl!(sb, "(allow file-map-executable (subpath \"{p}\"))");
+            }
+        }
+        // Deny exec on writable paths that are not in exec lists (last-match-wins).
+        // Must come after allows; only emit for included paths.
+        for path in &write_paths {
+            let include = match existing_app_dirs {
+                Some(existing) => existing
+                    .iter()
+                    .any(|e| e == path.to_string_lossy().as_ref()),
+                None => true,
+            };
+            if !include {
+                continue;
+            }
+            if validate_sbpl_path(path).is_err() {
+                continue;
+            }
+            let p = path.display();
+            if !process_exec_paths.contains(path) {
+                sbpl!(sb, "(deny process-exec (subpath \"{p}\"))");
+            }
+            if !map_exec_paths.contains(path) {
+                sbpl!(sb, "(deny file-map-executable (subpath \"{p}\"))");
+            }
         }
     }
 

@@ -77,7 +77,7 @@ cplt --agent shell
 | Outbound network (port 443)                                                      | ✅ Allowed                                | All other ports blocked — use `--allow-port` to add extras                              |
 | Localhost outbound                                                               | 🔒 Kernel-blocked                         | Prevents local service access; inbound still works for proxy                            |
 | SSH agent (unix socket)                                                          | 🔒 Kernel-blocked                         | Prevents signing git operations or SSH to hosts                                         |
-| Developer tools (`~/.cargo`, `~/.mise`, `~/.gradle`, `~/.m2`, `~/.sdkman`, `~/.jenv`, `~/.pyenv`, `~/.konan`, etc.) | ✅ Allowed (read+write for caches)        | Only dirs that exist on disk; tightened at runtime via `--doctor`                       |
+| Developer tools (`~/.cargo`, `~/.gradle`, `~/.m2`, `~/.sdkman`, `~/.jenv`, `~/.pyenv`, `~/.konan`, etc.) | ✅ Allowed (read+write for caches)        | Only dirs that exist on disk; tightened at runtime via `--doctor`                       |
 | Registry credential files (`~/.m2/settings.xml`, `~/.gradle/gradle.properties`, `~/.cargo/credentials`) | 🔒 Kernel-blocked (macOS)                 | Override with `--allow-read`; see [Private registries](docs/known-impacts.md#private-registries) |
 | Go source code (`~/go/src`)                                                      | 🔒 Kernel-blocked                         | Only `~/go/bin` and `~/go/pkg` are readable                                             |
 | Read `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`                                  | 🔒 Kernel-blocked                         |                                                                                         |
@@ -307,20 +307,23 @@ By default, `cplt` sanitizes the child environment — only safe variables pass 
 
 ### Supported runtimes
 
-cplt auto-discovers installed tools and configures sandbox rules accordingly. Only directories that exist on disk get rules (no phantom paths).
+cplt auto-discovers installed tools and configures sandbox rules accordingly. 
+In general, only directories that exist on disk get rules (no phantom paths), but on macOS writable app directories are also included when discovered even if they do not exist yet.
+This allows for creation on first use.
+On Linux it is not possible to allow write to a non-existent path, so creation must happen outside the sandbox.
 
-| Runtime | Home dirs | Env vars / prefixes | Discovery |
-|---|---|---|---|
-| **Node.js** | `.nvm`, `.local` | `NODE_*`, `NPM_*`, `NVM_*` | `node` |
-| **Rust** | `.cargo`, `.rustup` | `CARGO_HOME`, `RUSTUP_HOME` | `cargo` |
-| **Go** | `go/bin`, `go/pkg` | `GOPATH`, `GOROOT`, `GOCACHE`, etc. | `go` |
+| Runtime | Home dirs                            | Env vars / prefixes | Discovery |
+|---|--------------------------------------|---|---|
+| **Node.js** | `.nvm`, `.local/bin`                 | `NODE_*`, `NPM_*`, `NVM_*` | `node` |
+| **Rust** | `.cargo`, `.rustup`                  | `CARGO_HOME`, `RUSTUP_HOME` | `cargo` |
+| **Go** | `go/bin`, `go/pkg`                   | `GOPATH`, `GOROOT`, `GOCACHE`, etc. | `go` |
 | **Java/Kotlin (JVM)** | `.sdkman`, `.jenv`, `.gradle`, `.m2` | `JAVA_HOME`, `JAVA_TOOL_OPTIONS`, `GRADLE_*`, `MAVEN_*`, `SDKMAN_*`, `JENV_*` | `java`, `gradle` |
-| **Kotlin Native** | `.konan` | — | — |
-| **Python** | `.pyenv` | `VIRTUAL_ENV`, `PYTHONPATH`, `PYENV_ROOT`, `PYENV_*` | `python3` |
-| **Yarn Berry** | `.yarn` | `YARN_*` (hardening overrides `YARN_ENABLE_SCRIPTS`) | `yarn` |
-| **pnpm** | `Library/pnpm` | `PNPM_HOME` | `pnpm` |
-| **Corepack** | — | `COREPACK_*` | — |
-| **mise** | `.mise` | `MISE_*` | `mise` |
+| **Kotlin Native** | `.konan`                             | — | — |
+| **Python** | `.pyenv`                             | `VIRTUAL_ENV`, `PYTHONPATH`, `PYENV_ROOT`, `PYENV_*` | `python3` |
+| **Yarn Berry** | `.yarn`                              | `YARN_*` (hardening overrides `YARN_ENABLE_SCRIPTS`) | `yarn` |
+| **pnpm** | `Library/pnpm`, `.local/share/pnpm`  | `PNPM_HOME` | `pnpm` |
+| **Corepack** | —                                    | `COREPACK_*` | — |
+| **mise** | `.local/share/mise`, `.mise`              | `MISE_*` | `mise` |
 
 To see which tools cplt detected, run `cplt doctor`.
 

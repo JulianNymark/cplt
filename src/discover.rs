@@ -71,6 +71,8 @@ pub struct ToolDiscovery {
     pub homebrew_prefix: Option<PathBuf>,
     /// Which HOME_TOOL_DIRS actually exist on disk.
     pub existing_home_tool_dirs: Vec<String>,
+    /// Writable APP_DIRS considered during discovery, including paths that may not yet exist.
+    pub existing_app_dirs: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -235,14 +237,16 @@ pub fn discover_agents() -> Vec<AgentInfo> {
 // ── Tool discovery ──────────────────────────────────────────────
 
 const TOOLS_TO_CHECK: &[&str] = &[
-    "gh", "git", "node", "mise", "cargo", "python3", "java", "go", "gradle", "yarn", "pnpm",
+    "gh", "git", "node", "cargo", "python3", "java", "go", "gradle", "yarn",
 ];
 
+use crate::sandbox::app_dirs;
 use crate::sandbox::home_tool_dirs;
 
 pub fn discover_tools(home_dir: &Path) -> ToolDiscovery {
     let tools: Vec<ToolInfo> = TOOLS_TO_CHECK
         .iter()
+        .chain(app_dirs().iter().map(|app_dir| &app_dir.application))
         .filter_map(|name| {
             which_resolved(name).map(|path| ToolInfo {
                 name: name.to_string(),
@@ -265,10 +269,29 @@ pub fn discover_tools(home_dir: &Path) -> ToolDiscovery {
         .map(|d| d.path.to_string())
         .collect();
 
+    // Writable app dirs are always included in this list because they potentially could be created on first use.
+    // On Linux, Landlock does not support adding access to non-existent paths, so even if included here,
+    // a non-existent path would still not be added to the created policy.
+    // See the relevant policy implementation for more details.
+    // non-writable dirs are pruned to paths that already exist on disk.
+    let existing_app_dirs: Vec<String> = app_dirs()
+        .iter()
+        .flat_map(|app_dir| {
+            let write_set: std::collections::HashSet<_> =
+                app_dir.write_paths(home_dir).into_iter().collect();
+            app_dir
+                .all_paths(home_dir)
+                .into_iter()
+                .filter(move |p| write_set.contains(p) || p.exists())
+        })
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+
     ToolDiscovery {
         tools,
         homebrew_prefix,
         existing_home_tool_dirs,
+        existing_app_dirs,
     }
 }
 
@@ -1045,16 +1068,14 @@ mod tests {
 
     #[test]
     fn auth_discovery_detects_env_vars() {
-        // Temporarily set a test env var
-        unsafe { std::env::set_var("COPILOT_GITHUB_TOKEN", "test-token-value") };
         let home = PathBuf::from(std::env::var("HOME").unwrap());
-        let auth = discover_auth(&home);
-        unsafe { std::env::remove_var("COPILOT_GITHUB_TOKEN") };
-
-        assert!(
-            auth.env_tokens
-                .contains(&"COPILOT_GITHUB_TOKEN".to_string())
-        );
+        temp_env::with_var("COPILOT_GITHUB_TOKEN", Some("test-token-value"), || {
+            let auth = discover_auth(&home);
+            assert!(
+                auth.env_tokens
+                    .contains(&"COPILOT_GITHUB_TOKEN".to_string())
+            );
+        });
     }
 
     #[test]

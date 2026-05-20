@@ -3,7 +3,8 @@
 //! Defines the security policy shared by macOS Seatbelt and Linux Landlock:
 //! path validation, tool directory permissions, and hardening env vars.
 
-use std::path::Path;
+use directories::ProjectDirs;
+use std::path::{Path, PathBuf};
 
 /// Characters that would break SBPL profile string interpolation.
 const SBPL_UNSAFE_CHARS: &[char] = &['"', ')', '(', ';', '\\', '\n', '\r', '\0'];
@@ -372,6 +373,221 @@ pub const GPG_SIGNING_ALLOW_FILES: &[&str] = &[
     "common.conf", // Shared config (GnuPG 2.3+)
 ];
 
+/// Application directory kinds according to relevant platform specifications.
+/// See https://docs.rs/directories for more details
+pub enum AppDirKind {
+    /// macOS: `~/Library/Caches/<app>` · Linux/macOS when using XDG: `~/.cache/<app>`
+    Cache,
+    /// macOS: `~/Library/Application Support/<app>` · Linux/macOS when using XDG: `~/.config/<app>`
+    Config,
+    /// macOS: `~/Library/Application Support/<app>` · Linux/macOS when using XDG: `~/.config/<app>`
+    ConfigLocal,
+    /// macOS: `~/Library/Application Support/<app>` · Linux/macOS when using XDG: `~/.local/share/<app>`
+    Data,
+    /// macOS: `~/Library/Application Support/<app>` · Linux/macOS when using XDG: `~/.local/share/<app>`
+    DataLocal,
+    /// macOS: `~/Library/Preferences/<app>` · Linux/macOS when using XDG: `~/.config/<app>`
+    Preference,
+    /// macOS: None · Linux: `/run/user/<uid>/<app>` (via `XDG_RUNTIME_DIR`)
+    Runtime,
+    /// macOS: None · Linux/macOS when using XDG: `~/.local/state/<app>`
+    State,
+}
+
+impl AppDirKind {
+    pub fn resolve(
+        &self,
+        qualifier: &str,
+        organization: &str,
+        application: &str,
+        home_dir: &std::path::Path,
+    ) -> Option<PathBuf> {
+        let project_dir = ProjectDirs::from(qualifier, organization, application)?;
+        let use_xdg = qualifier.is_empty();
+        type Lookup = (
+            &'static str,
+            &'static str,
+            fn(project_dir: ProjectDirs) -> Option<PathBuf>,
+        );
+        let lookup: Lookup = match self {
+            AppDirKind::Cache => ("XDG_CACHE_HOME", ".cache", |project_dir| {
+                Some(project_dir.cache_dir().to_owned())
+            }),
+            AppDirKind::Config => ("XDG_CONFIG_HOME", ".config", |project_dir| {
+                Some(project_dir.config_dir().to_owned())
+            }),
+            AppDirKind::ConfigLocal => ("XDG_CONFIG_HOME", ".config", |project_dir| {
+                Some(project_dir.config_local_dir().to_owned())
+            }),
+            AppDirKind::Data => ("XDG_DATA_HOME", ".local/share", |project_dir| {
+                Some(project_dir.data_dir().to_owned())
+            }),
+            AppDirKind::DataLocal => ("XDG_DATA_HOME", ".local/share", |project_dir| {
+                Some(project_dir.data_local_dir().to_owned())
+            }),
+            AppDirKind::Preference => ("XDG_CONFIG_HOME", ".config", |project_dir| {
+                Some(project_dir.preference_dir().to_owned())
+            }),
+            AppDirKind::Runtime => ("XDG_RUNTIME_DIR", "", |project_dir| {
+                project_dir.runtime_dir().map(ToOwned::to_owned)
+            }),
+            AppDirKind::State => ("XDG_STATE_HOME", ".local/state", |project_dir| {
+                project_dir.state_dir().map(ToOwned::to_owned)
+            }),
+        };
+        if use_xdg {
+            let xdg_dir = std::env::var_os(lookup.0)
+                .filter(|v| !v.as_encoded_bytes().trim_ascii().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    if lookup.1.is_empty() {
+                        None
+                    } else {
+                        Some(home_dir.join(lookup.1))
+                    }
+                })?
+                .join(application);
+            // Security: reject relative XDG paths. A relative value would produce a
+            // relative sandbox path, potentially widening access beyond the intended
+            // directory (e.g. path traversal via a malicious XDG env var).
+            if !xdg_dir.is_absolute() {
+                eprintln!(
+                    "Ignoring relative XDG-directory {} from env-variable {:?}",
+                    xdg_dir.display(),
+                    lookup.0
+                );
+                return None;
+            }
+            Some(xdg_dir)
+        } else {
+            lookup.2(project_dir)
+        }
+    }
+}
+
+/// Application directories with granular sandbox permissions.
+///
+/// The fields control permissions given to each application directory kind:
+/// - `process_exec`: allow direct binary execution (`process-exec`)
+/// - `map_exec`: allow shared library loading (`file-map-executable`) for native addons
+/// - `write`: allow file writes (`file-write*`) for build caches, dependency stores, etc.
+/// - `read`: allow file reads (`file-read*`) for configuration, etc.
+///
+/// Security principle: every writable+executable directory is a potential
+/// binary-drop staging path (see SECURITY.md axios case study). Grant exec
+/// only where tools genuinely install executables.
+pub struct AppDir {
+    pub qualifier: &'static str,
+    pub organization: &'static str,
+    pub application: &'static str,
+    pub process_exec: &'static [AppDirKind],
+    pub map_exec: &'static [AppDirKind],
+    pub write: &'static [AppDirKind],
+    pub read: &'static [AppDirKind],
+}
+
+impl AppDir {
+    /// Resolve `kinds` to paths, deduplicating while preserving order.
+    fn resolve_dedup(&self, kinds: &[AppDirKind], home_dir: &Path) -> Vec<PathBuf> {
+        let mut seen = std::collections::HashSet::new();
+        kinds
+            .iter()
+            .filter_map(|k| {
+                k.resolve(
+                    self.qualifier,
+                    self.organization,
+                    self.application,
+                    home_dir,
+                )
+            })
+            .filter(|p| seen.insert(p.clone()))
+            .collect()
+    }
+
+    pub fn process_exec_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
+        self.resolve_dedup(self.process_exec, home_dir)
+    }
+
+    pub fn map_exec_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
+        self.resolve_dedup(self.map_exec, home_dir)
+    }
+
+    pub fn write_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
+        self.resolve_dedup(self.write, home_dir)
+    }
+
+    pub fn read_paths(&self, home_dir: &Path) -> Vec<PathBuf> {
+        self.resolve_dedup(self.read, home_dir)
+    }
+
+    /// Union of all category paths, deduplicated.
+    pub fn all_paths(&self, home_dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut seen = std::collections::HashSet::new();
+        let mut paths = Vec::new();
+        for p in self
+            .process_exec_paths(home_dir)
+            .into_iter()
+            .chain(self.map_exec_paths(home_dir))
+            .chain(self.write_paths(home_dir))
+            .chain(self.read_paths(home_dir))
+        {
+            if seen.insert(p.clone()) {
+                paths.push(p);
+            }
+        }
+        paths
+    }
+}
+
+pub const DEFAULT_WRITE_APP_DIRS: &[AppDirKind] = &[
+    AppDirKind::Cache,
+    AppDirKind::Data,
+    AppDirKind::DataLocal,
+    AppDirKind::Runtime,
+    AppDirKind::State,
+];
+
+pub const DEFAULT_READ_APP_DIRS: &[AppDirKind] = &[
+    AppDirKind::Cache,
+    AppDirKind::Config,
+    AppDirKind::ConfigLocal,
+    AppDirKind::Data,
+    AppDirKind::DataLocal,
+    AppDirKind::Preference,
+    AppDirKind::Runtime,
+    AppDirKind::State,
+];
+
+pub const APP_DIRS: &[AppDir] = &[
+    AppDir {
+        qualifier: "",
+        organization: "",
+        application: "mise",
+        process_exec: &[AppDirKind::Data, AppDirKind::DataLocal],
+        map_exec: &[AppDirKind::Data, AppDirKind::DataLocal],
+        write: DEFAULT_WRITE_APP_DIRS,
+        read: DEFAULT_READ_APP_DIRS,
+    },
+    AppDir {
+        qualifier: "",
+        organization: "",
+        application: "pnpm",
+        process_exec: &[AppDirKind::Data, AppDirKind::DataLocal],
+        map_exec: &[AppDirKind::Data, AppDirKind::DataLocal],
+        write: DEFAULT_WRITE_APP_DIRS,
+        read: DEFAULT_READ_APP_DIRS,
+    },
+];
+
+/// Return the application directory list.
+///
+/// A single unified list covers both macOS and Linux paths. Some entries may
+/// not exist on a given platform or system, but they remain in the shared list
+/// and are handled by the platform-specific sandbox implementations at runtime.
+pub fn app_dirs() -> &'static [AppDir] {
+    APP_DIRS
+}
+
 /// Tool directory under $HOME with granular sandbox permissions.
 ///
 /// Each directory gets `file-read*` unconditionally. The flags control
@@ -404,12 +620,18 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
     // ── Version managers & runtimes: exec only, no write ──────────────────
     // Pre-installed toolchains managed outside the sandbox (mise, nvm, rustup, etc.).
     // Agent needs to run their binaries but should not modify installations.
+    // XDG user bin directory — standard location for user-installed executables
+    // (pip install --user, pipx, manually installed tools). Only the bin dir
+    // needs exec; other .local subdirs are covered by AppDirs or don't need exec.
     HomeToolDir {
-        path: ".local",
+        path: ".local/bin",
         process_exec: true,
         map_exec: true,
         write: false,
     },
+    // Legacy mise location — many users still have ~/.mise from before the XDG
+    // migration. The AppDir entry covers ~/.local/share/mise (XDG), but this
+    // legacy path must remain to avoid breaking existing installations.
     HomeToolDir {
         path: ".mise",
         process_exec: true,
@@ -549,16 +771,9 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
         write: true,
     },
     // pnpm global store: contains packages + executable shims
-    // macOS-native path
+    // macOS-native path not following conventions set out by AppDirs
     HomeToolDir {
         path: "Library/pnpm",
-        process_exec: true,
-        map_exec: true,
-        write: true,
-    },
-    // XDG path (Linux)
-    HomeToolDir {
-        path: ".local/share/pnpm",
         process_exec: true,
         map_exec: true,
         write: true,
@@ -584,8 +799,9 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
 /// Return the home tool directory list.
 ///
 /// A single unified list covers both macOS and Linux paths. Entries for
-/// paths that don't exist on a given platform are harmlessly skipped at
-/// runtime (the profile generator checks `dir.exists()` before emitting rules).
+/// paths that don't exist on a given platform are harmlessly skipped because
+/// `discover.rs` filters them via `existing_home_tool_dirs` before they reach
+/// the profile generator.
 pub fn home_tool_dirs() -> &'static [HomeToolDir] {
     HOME_TOOL_DIRS
 }
@@ -604,4 +820,82 @@ pub fn validate_sbpl_path(path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_rejects_relative_xdg_cache_home() {
+        // A relative XDG_CACHE_HOME must be rejected to prevent sandbox path widening.
+        let home = std::path::Path::new("/tmp/fakehome");
+        temp_env::with_var("XDG_CACHE_HOME", Some("relative/path"), || {
+            let result = AppDirKind::Cache.resolve("", "", "myapp", home);
+            assert!(
+                result.is_none(),
+                "resolve() must return None for a relative XDG path, got: {result:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_falls_back_when_xdg_cache_home_is_empty() {
+        // An empty XDG_CACHE_HOME must be treated as unset so the home-dir default fires.
+        let home = std::path::Path::new("/tmp/fakehome");
+        temp_env::with_var("XDG_CACHE_HOME", Some(""), || {
+            let result = AppDirKind::Cache.resolve("", "", "myapp", home);
+            assert_eq!(
+                result,
+                Some(home.join(".cache/myapp")),
+                "resolve() must fall back to home/.cache/<app> when XDG_CACHE_HOME is empty"
+            );
+        });
+    }
+
+    #[test]
+    fn write_paths_deduplicates_when_data_and_data_local_resolve_identically() {
+        // On Linux with XDG defaults, Data and DataLocal both resolve to
+        // ~/.local/share/<app>. write_paths() must return the path only once.
+        let home = std::path::Path::new("/tmp/fakehome");
+        temp_env::with_vars(
+            [
+                ("XDG_DATA_HOME", None::<&str>),
+                ("XDG_CACHE_HOME", None),
+                ("XDG_STATE_HOME", None),
+                ("XDG_RUNTIME_DIR", None),
+            ],
+            || {
+                let app_dir = AppDir {
+                    qualifier: "",
+                    organization: "",
+                    application: "testapp",
+                    process_exec: &[],
+                    map_exec: &[],
+                    write: &[AppDirKind::Data, AppDirKind::DataLocal],
+                    read: &[],
+                };
+                let paths = app_dir.write_paths(home);
+                assert_eq!(
+                    paths.len(),
+                    1,
+                    "write_paths() must deduplicate identical Data/DataLocal paths, got: {paths:?}"
+                );
+                assert_eq!(paths[0], home.join(".local/share/testapp"));
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_accepts_absolute_xdg_cache_home() {
+        let home = std::path::Path::new("/tmp/fakehome");
+        temp_env::with_var("XDG_CACHE_HOME", Some("/tmp/test-cache"), || {
+            let result = AppDirKind::Cache.resolve("", "", "myapp", home);
+            assert!(
+                result.is_some(),
+                "resolve() must return Some for an absolute XDG path"
+            );
+            assert!(result.unwrap().is_absolute());
+        });
+    }
 }
