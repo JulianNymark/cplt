@@ -146,6 +146,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_user_allows(&mut sb, opts.extra_read, opts.extra_write);
     emit_deny_rules(&mut sb, &home, opts.extra_deny);
     emit_registry_config_overrides(&mut sb, &home, opts.extra_read);
+    emit_denied_dotfile_overrides(&mut sb, &home, opts.extra_read);
     emit_gpg_signing_rules(&mut sb, &home, opts.allow_gpg_signing, opts.extra_deny);
     emit_docker_rules(&mut sb, &home, opts.allow_docker, opts.extra_deny);
     emit_network_rules(
@@ -913,6 +914,39 @@ fn emit_registry_config_overrides(sb: &mut String, home: &str, extra_read: &[Pat
         );
         for file in &overrides {
             sbpl!(sb, "(allow file-read* (literal \"{home}/{file}\"))");
+        }
+        sbpl!(sb);
+    }
+}
+
+/// Re-allow specific files inside DENIED_DOTFILES directories when the user
+/// has explicitly approved them via `allow.read`.
+///
+/// DENIED_DOTFILES uses `(deny file-read* (subpath ...))` which blocks entire
+/// directories. When a user explicitly approves a file inside one of these dirs,
+/// we emit a targeted `(allow file-read* (literal ...))` AFTER the deny so
+/// SBPL last-match-wins grants access to that specific file only.
+fn emit_denied_dotfile_overrides(sb: &mut String, home: &str, extra_read: &[PathBuf]) {
+    let home_path = Path::new(home);
+    let mut overrides: Vec<String> = Vec::new();
+
+    for path in extra_read {
+        for &dotfile in DENIED_DOTFILES {
+            let denied_dir = home_path.join(dotfile);
+            if path.starts_with(&denied_dir) && *path != denied_dir {
+                overrides.push(path.to_string_lossy().into_owned());
+                break;
+            }
+        }
+    }
+
+    if !overrides.is_empty() {
+        sbpl!(
+            sb,
+            ";; User-overridden files in sensitive directories (allow.read)"
+        );
+        for path in &overrides {
+            sbpl!(sb, "(allow file-read* (literal \"{path}\"))");
         }
         sbpl!(sb);
     }

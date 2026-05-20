@@ -898,6 +898,121 @@ fn profile_allows_credential_files_when_user_opts_in() {
     );
 }
 
+/// Regression test: allow.read for a file inside a DENIED_DOTFILES directory
+/// must produce a targeted re-allow AFTER the subpath deny.
+/// Bug: gcloud ADC file blocked despite allow.read approval (SBPL ordering issue).
+#[test]
+fn profile_extra_read_overrides_denied_dotfile_directory() {
+    use std::path::PathBuf;
+
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[PathBuf::from(
+            "/Users/test/.config/gcloud/application_default_credentials.json",
+        )],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+
+    // The deny for .config/gcloud (DENIED_DOTFILES) should still exist
+    assert!(
+        p.contains("(deny file-read* (subpath \"/Users/test/.config/gcloud\"))"),
+        "deny rule for .config/gcloud should still be emitted"
+    );
+
+    // A targeted re-allow must come AFTER the subpath deny (SBPL last-match-wins)
+    let deny_pos = p
+        .find("(deny file-read* (subpath \"/Users/test/.config/gcloud\"))")
+        .unwrap();
+    let allow_pos = p
+        .find("(allow file-read* (literal \"/Users/test/.config/gcloud/application_default_credentials.json\"))")
+        .expect("should have a post-deny re-allow for gcloud ADC file");
+    assert!(
+        allow_pos > deny_pos,
+        "re-allow must come AFTER the subpath deny (SBPL last-match-wins)"
+    );
+}
+
+#[test]
+fn profile_extra_read_overrides_multiple_denied_dotfile_dirs() {
+    use std::path::PathBuf;
+
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[
+            PathBuf::from("/Users/test/.config/gcloud/application_default_credentials.json"),
+            PathBuf::from("/Users/test/.aws/credentials"),
+        ],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+
+    // Both denied dotfile dirs should still have their deny rules
+    assert!(p.contains("(deny file-read* (subpath \"/Users/test/.config/gcloud\"))"));
+    assert!(p.contains("(deny file-read* (subpath \"/Users/test/.aws\"))"));
+
+    // Both should have re-allows AFTER their respective denies
+    let gcloud_deny = p
+        .find("(deny file-read* (subpath \"/Users/test/.config/gcloud\"))")
+        .unwrap();
+    let gcloud_allow = p
+        .find("(allow file-read* (literal \"/Users/test/.config/gcloud/application_default_credentials.json\"))")
+        .expect("gcloud ADC re-allow missing");
+    assert!(gcloud_allow > gcloud_deny);
+
+    let aws_deny = p
+        .find("(deny file-read* (subpath \"/Users/test/.aws\"))")
+        .unwrap();
+    let aws_allow = p
+        .find("(allow file-read* (literal \"/Users/test/.aws/credentials\"))")
+        .expect("aws credentials re-allow missing");
+    assert!(aws_allow > aws_deny);
+}
+
 #[test]
 fn profile_restricts_outbound_tcp() {
     let p = generate_profile(&ProfileOptions {
