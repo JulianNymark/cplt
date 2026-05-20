@@ -133,6 +133,26 @@ That matters most for CLI agents and credential exposure:
 - sensitive files can be blocked even when they live inside the repo
 - the same restrictions apply to child processes
 
+### Compared with Claude Code's sandbox (Anthropic Sandbox Runtime)
+
+[Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) (`srt`) is the sandboxing layer used by Claude Code. Same high-level approach — macOS Seatbelt + kernel-level Linux enforcement + HTTP proxy — different implementation.
+
+| Area | cplt | Anthropic srt |
+| --- | --- | --- |
+| Language / delivery | Single Rust binary | Node.js + npm package + external deps |
+| Linux backend | Landlock LSM (no deps, no namespaces) | bubblewrap (container via user namespaces) |
+| Environment filtering | Strict allowlist + suffix-deny (`_TOKEN`, `_SECRET`) | Inherits full parent env (secrets pass through) |
+| Credential dir protection | 15+ dirs denied by default | User must configure manually |
+| DNS rebinding protection | ✅ Post-DNS IP checked against private ranges | ❌ Not implemented |
+| Network proxy | HTTP CONNECT + domain allow/block | HTTP + SOCKS5 + experimental TLS MITM |
+| SSH git | Blocked at kernel (SSH agent socket denied) | Proxied via SOCKS5 |
+| Package manager scripts | Blocked by default (`npm_config_ignore_scripts`) | Not blocked |
+| Agent support | Copilot, OpenCode, Gemini, Pi, Shell | Claude Code |
+| Config | TOML (global + per-repo) | JSON (global only) + `--control-fd` live updates |
+| Library API | ❌ Binary only | ✅ Embeddable TypeScript library |
+
+cplt is more secure out-of-the-box (env filtering, credential protection, DNS rebinding, lifecycle script blocking). srt is more flexible (SOCKS5, TLS inspection, per-request callbacks, library embedding). The Linux backend choice matters: bwrap requires workarounds on Ubuntu 24.04+ (AppArmor userns restrictions); Landlock requires kernel ≥5.13 but has zero external dependencies.
+
 ### Honest gaps
 
 - macOS has the strongest file-level enforcement today; Linux coverage is improving but not identical
