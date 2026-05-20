@@ -410,3 +410,46 @@ read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
 > **Note:** `.npmrc` cannot be overridden — it is in the hard-deny list alongside `.netrc` and `.pypirc`. If you need npm private registry access, consider using project-level `.npmrc` (which is readable as part of the project directory) with a token injected via environment variable.
 
 > **Linux limitation:** These file-level denials are only enforced on macOS (via SBPL literal deny rules). On Linux, Landlock cannot deny individual files within an allowed directory — the parent dirs (`.m2`, `.gradle`, `.cargo`) remain fully readable for dependency resolution.
+
+## Cloud credential directories
+
+The following directories are **entirely blocked** (no read, write, or execute):
+
+| Directory | Purpose |
+|-----------|---------|
+| `~/.config/gcloud` | Google Cloud SDK config, ADC credentials, Python virtualenv |
+| `~/.aws` | AWS credentials and config |
+| `~/.azure` | Azure CLI credentials |
+| `~/.kube` | Kubernetes cluster credentials |
+| `~/.config/op` | 1Password CLI sessions |
+
+### Reading individual files (e.g. Application Default Credentials)
+
+You can grant **read-only** access to specific files inside these directories using `allow.read`:
+
+```bash
+# Per session
+cplt --allow-read ~/.config/gcloud/application_default_credentials.json -- -p "deploy"
+
+# Per repo (.cplt.toml)
+cplt config set --repo allow.read ~/.config/gcloud/application_default_credentials.json
+```
+
+This lets GCP SDKs authenticate using the ADC JSON file without exposing the entire directory.
+
+### Executing cloud CLIs (gcloud, aws, az) — intentionally blocked
+
+Even with `allow.read`, the agent **cannot execute** binaries inside these directories. For example, `gcloud` uses a Python virtualenv at `~/.config/gcloud/virtenv/` which requires execute permission that the sandbox does not grant.
+
+**This is intentional.** Cloud CLIs have unrestricted access to your cloud infrastructure — an agent running `gcloud` could create/delete resources, read secrets, or modify IAM policies. The sandbox prevents this escalation path.
+
+**Workarounds:**
+
+| Need | Solution |
+|------|----------|
+| GCP authentication for SDKs | `allow.read ~/.config/gcloud/application_default_credentials.json` — SDKs read the JSON directly |
+| AWS authentication for SDKs | `allow.read ~/.aws/credentials` — SDKs read credentials directly |
+| Running cloud CLI commands | Run them outside the sandbox in a regular terminal |
+| CI/CD with cloud access | Use project-level service account keys or workload identity (not user credentials) |
+
+> **Design principle:** `allow.read` grants read access to credential *files* so SDKs can authenticate. It does not grant execute permission because executing cloud CLIs would bypass the sandbox's network and filesystem restrictions.
