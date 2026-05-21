@@ -525,6 +525,18 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
                 ioctl: false,
             },
         });
+        // File-level write grants within a read-only dir
+        for file in &dir.write_files {
+            fs_rules.push(FsRule {
+                path: dir.path.join(file),
+                access: FsAccess {
+                    read: true,
+                    write: true,
+                    execute: false,
+                    ioctl: false,
+                },
+            });
+        }
     }
 
     // ── Network rules (requires ABI v4+, kernel 6.7+) ──
@@ -1754,18 +1766,21 @@ mod tests {
                 write: false,
                 map_exec: false,
                 process_exec: false,
+                write_files: vec!["auth.json"],
             },
             crate::agent::AgentDir {
                 path: home.join(".local/share/opencode"),
                 write: true,
                 map_exec: false,
                 process_exec: false,
+                write_files: vec![],
             },
             crate::agent::AgentDir {
                 path: home.join(".local/state/opencode"),
                 write: true,
                 map_exec: false,
                 process_exec: false,
+                write_files: vec![],
             },
         ];
         let mut config = test_config(&project, &home);
@@ -1780,6 +1795,19 @@ mod tests {
             .expect("OpenCode config dir should be in rules");
         assert!(config_rule.access.read);
         assert!(!config_rule.access.write, "config dir should be read-only");
+
+        // write_files should generate a separate rule for auth.json
+        let auth_rule = policy
+            .fs_rules
+            .iter()
+            .find(|r| r.path == home.join(".config/opencode/auth.json"))
+            .expect("auth.json should have its own rule");
+        assert!(auth_rule.access.read);
+        assert!(auth_rule.access.write, "auth.json should be writable");
+        assert!(
+            !auth_rule.access.execute,
+            "auth.json should NOT be executable"
+        );
 
         let data_rule = policy
             .fs_rules

@@ -109,12 +109,14 @@ impl Agent {
                             write: true,
                             map_exec: false,
                             process_exec: false,
+                            write_files: vec![],
                         },
                         AgentDir {
                             path: data_base.join("fish"),
                             write: true,
                             map_exec: false,
                             process_exec: false,
+                            write_files: vec![],
                         },
                     ],
                     "zsh" => vec![AgentDir {
@@ -122,6 +124,7 @@ impl Agent {
                         write: true,
                         map_exec: false,
                         process_exec: false,
+                        write_files: vec![],
                     }],
                     _ => vec![],
                 }
@@ -151,20 +154,22 @@ impl Agent {
                         write: false,
                         map_exec: false,
                         process_exec: false,
+                        // /connect stores auth token here
+                        write_files: vec!["auth.json"],
                     },
                     AgentDir {
                         path: data_dir,
                         write: true,
                         map_exec: false,
-                        // Explicitly deny exec on writable data dir
                         process_exec: false,
+                        write_files: vec![],
                     },
                     AgentDir {
                         path: state_dir,
                         write: true,
                         map_exec: false,
-                        // Explicitly deny exec on writable state data dir
                         process_exec: false,
+                        write_files: vec![],
                     },
                 ]
             }
@@ -175,6 +180,7 @@ impl Agent {
                     write: true,
                     map_exec: false,
                     process_exec: false,
+                    write_files: vec![],
                 }]
             }
             Agent::Pi => {
@@ -186,6 +192,7 @@ impl Agent {
                         write: true,
                         map_exec: false,
                         process_exec: false,
+                        write_files: vec![],
                     },
                     AgentDir {
                         path: home.join(".pi/agent/bin"),
@@ -193,6 +200,7 @@ impl Agent {
                         map_exec: false,
                         // Pi installs managed binaries here (fd, rg)
                         process_exec: true,
+                        write_files: vec![],
                     },
                 ]
             }
@@ -392,6 +400,9 @@ pub struct AgentDir {
     pub write: bool,
     pub map_exec: bool,
     pub process_exec: bool,
+    /// Specific files within this dir that get file-write* (literal) access
+    /// even when `write` is false. Paths are relative to `self.path`.
+    pub write_files: Vec<&'static str>,
 }
 
 /// Check if a copilot binary is a VS Code/Cursor/editor shim script.
@@ -479,6 +490,11 @@ mod tests {
             .find(|d| d.path.to_str().unwrap().contains("state"))
             .unwrap();
         assert!(!config_dir.write, "config dir should be read-only");
+        assert_eq!(
+            config_dir.write_files,
+            vec!["auth.json"],
+            "only auth.json should be writable in config dir"
+        );
         assert!(data_dir.write, "data dir should be writable");
         assert!(state_dir.write, "state data dir should be writable");
         // None should be executable

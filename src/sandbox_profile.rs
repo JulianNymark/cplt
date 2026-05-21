@@ -289,6 +289,11 @@ fn emit_home_access(sb: &mut String, home: &str, agent: Agent, agent_dirs: &[Age
             if dir.write {
                 sbpl!(sb, "(allow file-write* (subpath \"{path}\"))");
             }
+            // File-level writes: grant write to specific files without full dir write
+            for file in &dir.write_files {
+                let file_path = dir.path.join(file).display().to_string();
+                sbpl!(sb, "(allow file-write* (literal \"{file_path}\"))");
+            }
             if dir.map_exec {
                 sbpl!(sb, "(allow file-map-executable (subpath \"{path}\"))");
             }

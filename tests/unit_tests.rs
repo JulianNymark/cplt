@@ -5516,3 +5516,92 @@ fn existing_app_dirs_per_path_filtering() {
         "mise config dir (absent from existing_app_dirs) should NOT appear in profile — per-path filtering must work"
     );
 }
+
+#[test]
+fn profile_opencode_config_dir_write_scoped_to_auth_json() {
+    use cplt::agent::AgentDir;
+    use std::path::PathBuf;
+
+    let config_dir = PathBuf::from("/Users/test/.config/opencode");
+    let data_dir = PathBuf::from("/Users/test/.local/share/opencode");
+    let state_dir = PathBuf::from("/Users/test/.local/state/opencode");
+
+    let agent_dirs = vec![
+        AgentDir {
+            path: config_dir.clone(),
+            write: false,
+            map_exec: false,
+            process_exec: false,
+            write_files: vec!["auth.json"],
+        },
+        AgentDir {
+            path: data_dir.clone(),
+            write: true,
+            map_exec: false,
+            process_exec: false,
+            write_files: vec![],
+        },
+        AgentDir {
+            path: state_dir.clone(),
+            write: true,
+            map_exec: false,
+            process_exec: false,
+            write_files: vec![],
+        },
+    ];
+
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::OpenCode,
+        agent_dirs: &agent_dirs,
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+
+    // Config dir should be readable but NOT writable at subpath level
+    assert!(
+        p.contains("(allow file-read* (subpath \"/Users/test/.config/opencode\"))"),
+        "config dir should be readable"
+    );
+    assert!(
+        !p.contains("(allow file-write* (subpath \"/Users/test/.config/opencode\"))"),
+        "config dir should NOT have subpath write — only auth.json gets write"
+    );
+
+    // auth.json should have a literal file-write* rule
+    assert!(
+        p.contains("(allow file-write* (literal \"/Users/test/.config/opencode/auth.json\"))"),
+        "auth.json should have literal write access"
+    );
+
+    // Data and state dirs should have full subpath write
+    assert!(
+        p.contains("(allow file-write* (subpath \"/Users/test/.local/share/opencode\"))"),
+        "data dir should have subpath write"
+    );
+    assert!(
+        p.contains("(allow file-write* (subpath \"/Users/test/.local/state/opencode\"))"),
+        "state dir should have subpath write"
+    );
+}
