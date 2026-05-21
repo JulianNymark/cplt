@@ -136,17 +136,23 @@ impl Agent {
                     .map_or_else(|| home.join(".config"), PathBuf::from);
                 let config_dir = config_base.join("opencode");
 
-                // Respect XDG_DATA_HOME for data dir (sessions, SQLite DB)
+                // Respect XDG_DATA_HOME for data dir (sessions, account, logs, repos)
                 let data_base = std::env::var("XDG_DATA_HOME")
                     .ok()
                     .map_or_else(|| home.join(".local/share"), PathBuf::from);
                 let data_dir = data_base.join("opencode");
 
-                // Respect XDG_STATE_HOME for state data dir (locks, history, statistics)
+                // Respect XDG_STATE_HOME for state dir (locks, history, statistics)
                 let state_base = std::env::var("XDG_STATE_HOME")
                     .ok()
                     .map_or_else(|| home.join(".local/state"), PathBuf::from);
                 let state_dir = state_base.join("opencode");
+
+                // Respect XDG_CACHE_HOME for cache dir (managed tool binaries in bin/)
+                let cache_base = std::env::var("XDG_CACHE_HOME")
+                    .ok()
+                    .map_or_else(|| home.join(".cache"), PathBuf::from);
+                let cache_dir = cache_base.join("opencode");
 
                 vec![
                     AgentDir {
@@ -154,7 +160,7 @@ impl Agent {
                         write: false,
                         map_exec: false,
                         process_exec: false,
-                        // /connect stores auth token here
+                        // Legacy auth.json (newer versions use account.json in data dir)
                         write_files: vec!["auth.json"],
                     },
                     AgentDir {
@@ -169,6 +175,21 @@ impl Agent {
                         write: true,
                         map_exec: false,
                         process_exec: false,
+                        write_files: vec![],
+                    },
+                    AgentDir {
+                        path: cache_dir.clone(),
+                        write: true,
+                        map_exec: false,
+                        process_exec: false,
+                        write_files: vec![],
+                    },
+                    AgentDir {
+                        // OpenCode downloads managed tool binaries (rg, fd, etc.) here
+                        path: cache_dir.join("bin"),
+                        write: false,
+                        map_exec: false,
+                        process_exec: true,
                         write_files: vec![],
                     },
                 ]
@@ -475,8 +496,12 @@ mod tests {
     fn opencode_config_dirs_xdg_default() {
         let home = Path::new("/Users/test");
         let dirs = Agent::OpenCode.config_dirs(home);
-        assert!(dirs.len() >= 2, "should have config + data + state dirs");
-        // Config dir is read-only, data dir and state dir are writable
+        assert_eq!(
+            dirs.len(),
+            5,
+            "should have config + data + state + cache + cache/bin"
+        );
+
         let config_dir = dirs
             .iter()
             .find(|d| d.path.to_str().unwrap().contains("config"))
@@ -489,16 +514,37 @@ mod tests {
             .iter()
             .find(|d| d.path.to_str().unwrap().contains("state"))
             .unwrap();
+        let cache_dir = dirs
+            .iter()
+            .find(|d| {
+                d.path.to_str().unwrap().ends_with("opencode")
+                    && d.path.to_str().unwrap().contains("cache")
+            })
+            .unwrap();
+        let cache_bin = dirs
+            .iter()
+            .find(|d| {
+                d.path.to_str().unwrap().contains("cache")
+                    && d.path.to_str().unwrap().ends_with("bin")
+            })
+            .unwrap();
+
+        // Config dir: read-only with only auth.json writable
         assert!(!config_dir.write, "config dir should be read-only");
         assert_eq!(
             config_dir.write_files,
             vec!["auth.json"],
             "only auth.json should be writable in config dir"
         );
+
+        // Data + state + cache: writable
         assert!(data_dir.write, "data dir should be writable");
-        assert!(state_dir.write, "state data dir should be writable");
-        // None should be executable
-        assert!(dirs.iter().all(|d| !d.process_exec && !d.map_exec));
+        assert!(state_dir.write, "state dir should be writable");
+        assert!(cache_dir.write, "cache dir should be writable");
+
+        // Cache/bin: exec-only (managed tool binaries, not writable from sandbox)
+        assert!(!cache_bin.write, "cache/bin should not be writable");
+        assert!(cache_bin.process_exec, "cache/bin should allow exec");
     }
 
     #[test]

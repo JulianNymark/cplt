@@ -1782,6 +1782,20 @@ mod tests {
                 process_exec: false,
                 write_files: vec![],
             },
+            crate::agent::AgentDir {
+                path: home.join(".cache/opencode"),
+                write: true,
+                map_exec: false,
+                process_exec: false,
+                write_files: vec![],
+            },
+            crate::agent::AgentDir {
+                path: home.join(".cache/opencode/bin"),
+                write: false,
+                map_exec: false,
+                process_exec: true,
+                write_files: vec![],
+            },
         ];
         let mut config = test_config(&project, &home);
         config.agent = crate::agent::Agent::OpenCode;
@@ -1831,6 +1845,26 @@ mod tests {
         assert!(
             !state_rule.access.execute,
             "state data dir should NOT be executable"
+        );
+
+        let cache_rule = policy
+            .fs_rules
+            .iter()
+            .find(|r| r.path == home.join(".cache/opencode"))
+            .expect("OpenCode cache dir should be in rules");
+        assert!(cache_rule.access.read);
+        assert!(cache_rule.access.write, "cache dir should be writable");
+
+        let bin_rule = policy
+            .fs_rules
+            .iter()
+            .find(|r| r.path == home.join(".cache/opencode/bin"))
+            .expect("OpenCode cache/bin should be in rules");
+        assert!(bin_rule.access.read);
+        assert!(!bin_rule.access.write, "cache/bin should NOT be writable");
+        assert!(
+            bin_rule.access.execute,
+            "cache/bin should be executable (managed tools)"
         );
     }
 

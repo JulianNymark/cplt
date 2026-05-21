@@ -5525,6 +5525,7 @@ fn profile_opencode_config_dir_write_scoped_to_auth_json() {
     let config_dir = PathBuf::from("/Users/test/.config/opencode");
     let data_dir = PathBuf::from("/Users/test/.local/share/opencode");
     let state_dir = PathBuf::from("/Users/test/.local/state/opencode");
+    let cache_dir = PathBuf::from("/Users/test/.cache/opencode");
 
     let agent_dirs = vec![
         AgentDir {
@@ -5546,6 +5547,20 @@ fn profile_opencode_config_dir_write_scoped_to_auth_json() {
             write: true,
             map_exec: false,
             process_exec: false,
+            write_files: vec![],
+        },
+        AgentDir {
+            path: cache_dir.clone(),
+            write: true,
+            map_exec: false,
+            process_exec: false,
+            write_files: vec![],
+        },
+        AgentDir {
+            path: cache_dir.join("bin"),
+            write: false,
+            map_exec: false,
+            process_exec: true,
             write_files: vec![],
         },
     ];
@@ -5603,5 +5618,22 @@ fn profile_opencode_config_dir_write_scoped_to_auth_json() {
     assert!(
         p.contains("(allow file-write* (subpath \"/Users/test/.local/state/opencode\"))"),
         "state dir should have subpath write"
+    );
+
+    // Cache dir should be writable (for downloading tools)
+    assert!(
+        p.contains("(allow file-write* (subpath \"/Users/test/.cache/opencode\"))"),
+        "cache dir should have subpath write"
+    );
+
+    // Cache/bin should allow exec for managed tool binaries
+    assert!(
+        p.contains("(allow process-exec (subpath \"/Users/test/.cache/opencode/bin\"))"),
+        "cache/bin should allow process-exec"
+    );
+    // Cache/bin should NOT be writable (write+exec = persistence risk)
+    assert!(
+        p.contains("(deny file-write* (subpath \"/Users/test/.cache/opencode/bin\"))"),
+        "cache/bin should deny writes (exec-only dir)"
     );
 }

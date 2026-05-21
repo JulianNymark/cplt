@@ -1225,6 +1225,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Compute agent-specific sandbox directories
     let agent_dirs = active_agent.config_dirs(&home_dir);
 
+    // Pre-create agent directories before entering sandbox.
+    // Agents like OpenCode crash if their data/config dirs don't exist,
+    // and the sandbox may block mkdir on parent paths.
+    for dir in &agent_dirs {
+        if !dir.path.exists() {
+            let _ = std::fs::create_dir_all(&dir.path);
+        }
+    }
+
     // Start proxy (handle returned for RAII ownership)
     let proxy_handle = start_proxy_if_enabled(&mut resolved, &cli, config_path.as_ref())?;
 
