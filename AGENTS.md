@@ -116,9 +116,9 @@ Do not modify `blocked-domains.txt` without reviewing the domain's purpose.
   `Library/*` (macOS) and `.cache`/`.local/share/*` (XDG/Linux) paths in this one list.
   Do NOT create platform-specific duplicates. Non-existent paths are skipped at runtime.
 - `HomeToolDir` — per-directory exec/map/write permissions
-- Network outbound scoping — `--allow-localhost-any` alone uses `"localhost:*"` (sufficient for
-  Node.js/Python/Go). Combined with `--allow-jvm-attach`, uses `"*:*"` because Java NIO's
-  IPv4-mapped addresses (`::ffff:127.0.0.1`) are not matched by SBPL's `"localhost"` filter.
+- Network outbound scoping — `--allow-localhost-any` uses `"localhost:*"` for all cases.
+  Java's IPv4-mapped address issue is solved by injecting `-Djava.net.preferIPv4Stack=true`
+  via `JAVA_TOOL_OPTIONS` (macOS only), so `"*:*"` is no longer needed.
 - Config precedence: CLI flag > config file > default (secure default)
 
 ## Git conventions

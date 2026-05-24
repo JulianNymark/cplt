@@ -1693,10 +1693,15 @@ fn profile_allows_all_tcp_outbound_when_jvm_and_localhost_any() {
         allow_cache_exec_any: false,
         allow_browser: false,
     });
-    // With both flags, uses "*:*" for Java's IPv4-mapped addresses
+    // With preferIPv4Stack=true in JAVA_TOOL_OPTIONS, Java uses AF_INET4 and
+    // "localhost:*" works. No need for the old "*:*" nuclear option.
     assert!(
-        p.contains("(allow network-outbound (remote tcp \"*:*\"))"),
-        "Profile must allow all TCP when both allow_localhost_any and allow_jvm_attach are set"
+        p.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
+        "Profile must allow localhost when allow_localhost_any is set"
+    );
+    assert!(
+        !p.contains("(allow network-outbound (remote tcp \"*:*\"))"),
+        "Profile must NOT use '*:*' anymore — preferIPv4Stack makes it unnecessary"
     );
     assert!(
         !p.contains("(deny network-outbound (remote ip \"localhost:*\"))"),
@@ -4125,6 +4130,11 @@ fn env_scratch_dir_injects_java_tool_options() {
     assert!(
         val.contains("-Djava.rmi.server.hostname=localhost"),
         "should contain rmi hostname: {val}"
+    );
+    #[cfg(target_os = "macos")]
+    assert!(
+        val.contains("-Djava.net.preferIPv4Stack=true"),
+        "should contain preferIPv4Stack on macOS: {val}"
     );
 }
 

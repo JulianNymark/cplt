@@ -959,6 +959,97 @@ mod macos_tests {
     }
 
     #[test]
+    fn real_profile_java_localhost_with_prefer_ipv4_stack() {
+        require_sandbox!();
+        // Skip if Java is not available
+        if Command::new("java").arg("-version").output().is_err() {
+            eprintln!("SKIP: java not found");
+            return;
+        }
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let mut opts = default_opts(&project, &home);
+        // Allow localhost on a specific port (not allow_localhost_any)
+        opts.localhost_ports = &[19877];
+        let profile = write_real_profile(&opts);
+
+        // Java program that binds to 19877 and connects to it.
+        // With preferIPv4Stack=true, the connection uses AF_INET4 and matches
+        // SBPL "localhost:19877". Without it, Java uses IPv6 dual-stack which
+        // produces ::ffff:127.0.0.1 — not matched by SBPL.
+        let java_code = r#"
+import java.net.*;
+public class T {
+    public static void main(String[] a) throws Exception {
+        try (ServerSocket ss = new ServerSocket(19877, 1, InetAddress.getByName("127.0.0.1"))) {
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress("127.0.0.1", 19877), 1000);
+                System.out.println("JAVA_LOCALHOST_OK");
+            }
+        }
+    }
+}
+"#;
+        // Write, compile and run inside sandbox with preferIPv4Stack
+        let cmd = format!(
+            "cd /tmp && cat > T.java << 'JAVA'\n{java_code}\nJAVA\n\
+             javac T.java 2>&1 && \
+             java -Djava.net.preferIPv4Stack=true T 2>&1"
+        );
+        let (output, _) = run_sandboxed(&profile, &cmd);
+
+        fs::remove_file(&profile).ok();
+        assert!(
+            output.contains("JAVA_LOCALHOST_OK"),
+            "Java with preferIPv4Stack=true should connect to localhost:19877, got: {output}"
+        );
+    }
+
+    #[test]
+    fn real_profile_java_localhost_blocked_without_prefer_ipv4_stack() {
+        require_sandbox!();
+        if Command::new("java").arg("-version").output().is_err() {
+            eprintln!("SKIP: java not found");
+            return;
+        }
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let mut opts = default_opts(&project, &home);
+        opts.localhost_ports = &[19878];
+        let profile = write_real_profile(&opts);
+
+        // Same test but WITHOUT preferIPv4Stack — should fail due to IPv4-mapped
+        let java_code = r#"
+import java.net.*;
+public class T2 {
+    public static void main(String[] a) throws Exception {
+        try (ServerSocket ss = new ServerSocket(19878, 1, InetAddress.getByName("127.0.0.1"))) {
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress("127.0.0.1", 19878), 1000);
+                System.out.println("JAVA_LOCALHOST_OK");
+            }
+        } catch (Exception e) {
+            System.out.println("JAVA_BLOCKED:" + e.getMessage());
+        }
+    }
+}
+"#;
+        let cmd = format!(
+            "cd /tmp && cat > T2.java << 'JAVA'\n{java_code}\nJAVA\n\
+             javac T2.java 2>&1 && \
+             java -Djava.net.preferIPv4Stack=false T2 2>&1"
+        );
+        let (output, _) = run_sandboxed(&profile, &cmd);
+
+        fs::remove_file(&profile).ok();
+        // Should be blocked — either "Operation not permitted" or our marker
+        assert!(
+            output.contains("Operation not permitted") || output.contains("JAVA_BLOCKED"),
+            "Java without preferIPv4Stack should be blocked on port-specific localhost, got: {output}"
+        );
+    }
+
+    #[test]
     fn real_profile_allows_jvm_attach_socket_in_tmp() {
         require_sandbox!();
         let project = fs::canonicalize(".").unwrap();

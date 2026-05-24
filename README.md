@@ -288,7 +288,7 @@ The project directory is the primary writable workspace, plus a narrow allowlist
 | `--deny-path <PATH>`       | Block a path that would otherwise be allowed. Deny always wins. Can be repeated.                                                                  |
 | `--allow-port <PORT>`      | Allow outbound TCP on an extra port (default: only 443). Can be repeated.                                                                         |
 | `--allow-localhost <PORT>` | Allow outbound to `localhost` on a specific port (localhost is blocked by default). Use for MCP servers or dev servers. Can be repeated.          |
-| `--allow-localhost-any`    | Allow outbound to `localhost` on **all** ports. Needed for build tools like Turbopack (Next.js) and Vite that use random ephemeral ports for IPC. When combined with `--allow-jvm-attach`, also covers Java's IPv4-mapped addresses (see [SECURITY.md](SECURITY.md)). |
+| `--allow-localhost-any`    | Allow outbound to `localhost` on **all** ports. Needed for build tools like Turbopack (Next.js) and Vite that use random ephemeral ports for IPC. |
 
 ### Environment variables
 
@@ -787,7 +787,7 @@ Tools that compile-then-execute from `$TMPDIR` are **blocked by default** becaus
 
 **Fix:** The scratch dir is now **on by default** — cplt creates `~/Library/Caches/cplt/tmp/{session-id}/` with `rwx` permissions, redirects `TMPDIR`, `TMP`, `TEMP`, and `GOTMPDIR` there, and cleans up on exit. Stale directories older than 24 hours are garbage-collected on startup.
 
-**JVM note:** On macOS, the JVM ignores `TMPDIR` — it reads `java.io.tmpdir` from `confstr(_CS_DARWIN_USER_TEMP_DIR)` which always returns `/var/folders/...`. cplt automatically injects `-Djava.io.tmpdir=<scratch> -Djansi.tmpdir=<scratch> -Djava.rmi.server.hostname=localhost` via `JAVA_TOOL_OPTIONS` so that Maven Surefire forks, the Kotlin compiler daemon, and Jansi native lib extraction all use the scratch dir. The RMI hostname flag ensures the Kotlin daemon's Java RMI communication stays on `localhost` (without it, `InetAddress.getLocalHost()` may resolve to a non-loopback IP via mDNS, which the sandbox blocks). Override with `--pass-env JAVA_TOOL_OPTIONS` if you need custom JVM flags. For inline mocking (MockK, Mockito, ByteBuddy), also add `--allow-jvm-attach` — see [JVM Attach API](#jvm-attach-api).
+**JVM note:** On macOS, the JVM ignores `TMPDIR` — it reads `java.io.tmpdir` from `confstr(_CS_DARWIN_USER_TEMP_DIR)` which always returns `/var/folders/...`. cplt automatically injects `-Djava.io.tmpdir=<scratch> -Djansi.tmpdir=<scratch> -Djava.rmi.server.hostname=localhost -Djava.net.preferIPv4Stack=true` via `JAVA_TOOL_OPTIONS` so that Maven Surefire forks, the Kotlin compiler daemon, and Jansi native lib extraction all use the scratch dir. The RMI hostname flag ensures the Kotlin daemon's Java RMI communication stays on `localhost`. The `preferIPv4Stack` flag forces pure IPv4 sockets so that the sandbox's localhost filtering works correctly for Java (without it, Java's dual-stack IPv6 sockets produce IPv4-mapped addresses that SBPL can't match). Override with `--pass-env JAVA_TOOL_OPTIONS` if you need custom JVM flags. For inline mocking (MockK, Mockito, ByteBuddy), also add `--allow-jvm-attach` — see [JVM Attach API](#jvm-attach-api).
 
 **Gradle 9+ nested sandbox:** Starting with Gradle 8.8, the Gradle daemon runs inside its own macOS sandbox via `sandbox-exec` (controlled by `GRADLE_MACOS_SANDBOX` env var, previously `org.gradle.daemon.sandbox` property). This conflicts with cplt's sandbox because **macOS does not support nested `sandbox-exec` calls** — the inner sandbox fails with "Operation not permitted" on socket operations. cplt automatically injects `GRADLE_MACOS_SANDBOX=off` to disable Gradle's redundant sandbox (cplt already provides kernel-level sandboxing). This is a [known upstream issue](https://github.com/gradle/gradle/issues/29476) affecting any tool that wraps Gradle in an outer sandbox. Override with `--pass-env GRADLE_MACOS_SANDBOX` if you need Gradle's own sandbox for some reason.
 
@@ -866,8 +866,11 @@ Localhost outbound is blocked by default, which prevents sandboxed processes fro
 | Local API/dev server           | ❌ Blocked         | Use `--allow-localhost 8080`                         |
 | Spring Boot (`:8080`)          | ❌ Blocked         | Use `--allow-localhost 8080`                         |
 | Next.js/Turbopack build        | ❌ Workers blocked | Use `--allow-localhost-any` (random ephemeral ports) |
+| **Any JVM localhost call**     | ✅ Works          | cplt injects `-Djava.net.preferIPv4Stack=true` (see note below) |
 
 **Fix:** Use `--allow-localhost <PORT>` for specific services, or `--allow-localhost-any` for build tools that use random ports (Next.js, Vite, esbuild).
+
+> **JVM localhost (background):** The JVM opens dual-stack IPv6 sockets by default. Without intervention, macOS sees Java's connections to `127.0.0.1` as IPv4-mapped (`::ffff:127.0.0.1`) which the sandbox can't match with port-level precision. cplt solves this by injecting `-Djava.net.preferIPv4Stack=true` via `JAVA_TOOL_OPTIONS`, forcing pure IPv4 sockets so that `--allow-localhost <PORT>` works for Java. Override with `--pass-env JAVA_TOOL_OPTIONS` if you need custom JVM flags (and use `--allow-localhost-any` as fallback).
 
 ### Docker and Testcontainers
 

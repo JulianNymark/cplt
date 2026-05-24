@@ -154,7 +154,6 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
         &home,
         opts.extra_ports,
         opts.allow_localhost_any,
-        opts.allow_jvm_attach,
         opts.proxy_port,
         opts.localhost_ports,
     );
@@ -1120,7 +1119,6 @@ fn emit_network_rules(
     home: &str,
     extra_ports: &[u16],
     allow_localhost_any: bool,
-    allow_jvm_attach: bool,
     proxy_port: Option<u16>,
     localhost_ports: &[u16],
 ) {
@@ -1150,23 +1148,15 @@ fn emit_network_rules(
 
     // Block localhost outbound — prevents SSRF to local dev servers, databases, etc.
     // Must come AFTER port allows so it overrides them for localhost.
-    if !allow_localhost_any {
+    if allow_localhost_any {
+        // Allow all localhost ports. With -Djava.net.preferIPv4Stack=true injected
+        // via JAVA_TOOL_OPTIONS (macOS), Java connections stay as pure IPv4 and
+        // "localhost:*" matches correctly. No need for "*:*" anymore.
+        sbpl!(sb, "(allow network-outbound (remote ip \"localhost:*\"))");
+    } else {
         // Defense-in-depth: the general `(deny network-outbound (remote tcp))` above
         // already blocks all TCP. This adds explicit localhost deny for clarity.
         sbpl!(sb, "(deny network-outbound (remote ip \"localhost:*\"))");
-    } else if allow_jvm_attach {
-        // JVM mode: Java NIO uses IPv6 sockets with IPv4-mapped addresses
-        // (::ffff:127.0.0.1) which SBPL "localhost" doesn't match. Since SBPL only
-        // accepts "*" or "localhost" as the host part, we must allow all TCP.
-        // This is scoped to JVM users (--allow-jvm-attach) — non-JVM users get
-        // the tighter "localhost:*" rule below.
-        //
-        // The proxy remains as compensating control for domain filtering.
-        sbpl!(sb, "(allow network-outbound (remote tcp \"*:*\"))");
-    } else {
-        // Non-JVM mode: "localhost:*" works for Node.js, Python, Go, C programs
-        // that use standard AF_INET sockets.
-        sbpl!(sb, "(allow network-outbound (remote ip \"localhost:*\"))");
     }
 
     // Carve-outs for specific localhost ports (proxy, MCP servers, dev servers).

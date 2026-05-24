@@ -150,7 +150,7 @@ pub fn build_sandbox_env(
             }
         }
 
-        // Inject JVM temp dir and RMI properties via JAVA_TOOL_OPTIONS.
+        // Inject JVM temp dir, RMI, and IPv4 stack properties via JAVA_TOOL_OPTIONS.
         // On macOS, the JVM ignores TMPDIR — it uses confstr(_CS_DARWIN_USER_TEMP_DIR)
         // which always returns /var/folders/... where the sandbox blocks exec.
         // JAVA_TOOL_OPTIONS is the standard way to inject flags into ALL JVM processes,
@@ -159,21 +159,30 @@ pub fn build_sandbox_env(
         // Also sets java.rmi.server.hostname=localhost to force RMI (used by Kotlin daemon)
         // to use localhost — without this, InetAddress.getLocalHost() may resolve to a
         // non-loopback IP via mDNS, which the sandbox blocks on non-443 ports.
+        //
+        // On macOS: forces IPv4 stack so localhost connections use AF_INET4 (127.0.0.1)
+        // instead of IPv6 dual-stack which produces IPv4-mapped addresses (::ffff:127.0.0.1).
+        // SBPL's "localhost:*" filter doesn't match IPv4-mapped addresses, so without this
+        // flag, Java can't use port-specific localhost rules (--allow-localhost <PORT>).
+        // This is macOS-only because Linux Landlock handles addresses differently.
         if !extra_pass_env.iter().any(|v| v == "JAVA_TOOL_OPTIONS") {
-            let jvm_tmpdir_flags = format!(
+            let mut jvm_flags = format!(
                 "-Djava.io.tmpdir={scratch_str} -Djansi.tmpdir={scratch_str} -Djava.rmi.server.hostname=localhost"
             );
+            #[cfg(target_os = "macos")]
+            {
+                jvm_flags.push_str(" -Djava.net.preferIPv4Stack=true");
+            }
             // Append to existing JAVA_TOOL_OPTIONS if present, otherwise create new
             if let Some(pos) = env.vars.iter().position(|(k, _)| k == "JAVA_TOOL_OPTIONS") {
                 let existing = env.vars[pos].1.clone();
                 if existing.is_empty() {
-                    env.vars[pos].1 = jvm_tmpdir_flags;
+                    env.vars[pos].1 = jvm_flags;
                 } else {
-                    env.vars[pos].1 = format!("{existing} {jvm_tmpdir_flags}");
+                    env.vars[pos].1 = format!("{existing} {jvm_flags}");
                 }
             } else {
-                env.vars
-                    .push(("JAVA_TOOL_OPTIONS".to_string(), jvm_tmpdir_flags));
+                env.vars.push(("JAVA_TOOL_OPTIONS".to_string(), jvm_flags));
             }
         }
     }
