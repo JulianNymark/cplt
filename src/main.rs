@@ -468,8 +468,13 @@ enum Command {
         write: bool,
 
         /// Overwrite existing file (requires --write).
-        #[arg(long, requires = "write")]
+        #[arg(long, requires = "write", conflicts_with = "merge")]
         force: bool,
+
+        /// Merge new detections into existing .cplt.toml (requires --write).
+        /// Adds newly detected ports, paths, and flags without removing existing entries.
+        #[arg(long, requires = "write")]
+        merge: bool,
 
         /// Suppress ecosystem details, only show generated TOML.
         #[arg(long, short)]
@@ -843,24 +848,42 @@ fn resolve_context(cli: &Cli) -> anyhow::Result<ResolvedContext> {
                     .collect()
             } else {
                 // Check trust store — validate content hash
-                match trust::load_trust(&project_dir) {
-                    Some(t) => {
-                        let current_hash = trust::proposal_content_hash(&loaded.config.propose);
-                        if !t.accepted.content_hash.is_empty()
-                            && t.accepted.content_hash != current_hash
-                        {
-                            // Proposals changed since approval — invalidate
-                            if !resolved.quiet {
-                                ui::warn(
-                                    ".cplt.toml permissions changed since last approval — re-approve with `cplt trust accept`",
-                                );
-                            }
-                            Vec::new()
-                        } else {
-                            t.accepted.keys
+                if let Some(t) = trust::load_trust(&project_dir) {
+                    let current_hash = trust::proposal_content_hash(&loaded.config.propose);
+                    if !t.accepted.content_hash.is_empty()
+                        && t.accepted.content_hash != current_hash
+                    {
+                        // Proposals changed since approval — invalidate
+                        if !resolved.quiet {
+                            ui::warn(
+                                ".cplt.toml permissions changed since last approval — re-approve with `cplt trust accept`",
+                            );
                         }
+                        Vec::new()
+                    } else {
+                        t.accepted.keys
                     }
-                    None => Vec::new(),
+                } else {
+                    // No trust entry — first time seeing this repo config
+                    let proposed = repo_config::proposed_keys(&loaded.config.propose);
+                    if !proposed.is_empty() && !resolved.quiet {
+                        ui::warn(
+                            "Untrusted .cplt.toml — this repo wants to relax sandbox permissions.",
+                        );
+                        eprintln!(
+                            "  {}⚠{} Review proposed permissions before approving.",
+                            ui::color(ui::YELLOW),
+                            ui::color(ui::RESET)
+                        );
+                        eprintln!(
+                            "  {}Show:{} cplt trust        {}Approve:{} cplt trust accept --all",
+                            ui::color(ui::DIM),
+                            ui::color(ui::RESET),
+                            ui::color(ui::DIM),
+                            ui::color(ui::RESET),
+                        );
+                    }
+                    Vec::new()
                 }
             };
 
@@ -1119,13 +1142,14 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Command::Init {
                 write,
                 force,
+                merge,
                 quiet,
                 global,
             } => {
                 if global {
                     run_init_global_command(write, force, quiet)
                 } else {
-                    run_init_command(write, force, quiet)
+                    run_init_command(write, force, merge, quiet)
                 }
             }
             Command::Doctor => run_doctor(),
@@ -2170,13 +2194,14 @@ fn run_config_explain(key: Option<&str>) -> ExitCode {
     }
 }
 
-fn run_init_command(write: bool, force: bool, quiet: bool) -> ExitCode {
+fn run_init_command(write: bool, force: bool, merge: bool, quiet: bool) -> ExitCode {
     let project_dir = detect_project_root()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let opts = cplt::init::InitOptions {
         write,
         force,
+        merge,
         quiet,
     };
 
@@ -2273,6 +2298,7 @@ fn run_init_global_command(write: bool, force: bool, quiet: bool) -> ExitCode {
     let opts = cplt::init::InitOptions {
         write,
         force,
+        merge: false,
         quiet,
     };
 
