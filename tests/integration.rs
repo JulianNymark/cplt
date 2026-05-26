@@ -974,11 +974,13 @@ mod macos_tests {
             eprintln!("SKIP: java not found");
             return;
         }
+        let java_home = std::env::var("JAVA_HOME").ok().map(PathBuf::from);
         let project = fs::canonicalize(".").unwrap();
         let home = home_dir();
         let mut opts = default_opts(&project, &home);
         // Allow localhost on a specific port (not allow_localhost_any)
         opts.localhost_ports = &[19877];
+        opts.java_home = java_home.as_deref();
         let profile = write_real_profile(&opts);
 
         // Java program that binds to 19877 and connects to it.
@@ -1028,10 +1030,12 @@ public class T {
             eprintln!("SKIP: java not found");
             return;
         }
+        let java_home = std::env::var("JAVA_HOME").ok().map(PathBuf::from);
         let project = fs::canonicalize(".").unwrap();
         let home = home_dir();
         let mut opts = default_opts(&project, &home);
         opts.localhost_ports = &[19878];
+        opts.java_home = java_home.as_deref();
         let profile = write_real_profile(&opts);
 
         // Same test but WITHOUT preferIPv4Stack — should fail due to IPv4-mapped
