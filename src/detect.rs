@@ -539,15 +539,44 @@ fn detect_docker(ctx: &DetectContext) -> DetectorOutput {
     let mut suggestions = vec![Suggestion::Propose(SandboxFlag::AllowDocker)];
 
     // Content scan: extract port mappings from compose files
-    for compose_file in &[
+    let primary_compose_files = [
         "docker-compose.yml",
         "docker-compose.yaml",
         "compose.yml",
         "compose.yaml",
-    ] {
+    ];
+
+    for compose_file in &primary_compose_files {
         if let Some(content) = ctx.read_text(compose_file) {
             for port in extract_compose_ports(&content) {
                 suggestions.push(Suggestion::AllowPort(port));
+            }
+            // Follow extends.file references to find ports in referenced files
+            for referenced in extract_extends_files(&content) {
+                if let Some(ref_content) = ctx.read_text(&referenced) {
+                    for port in extract_compose_ports(&ref_content) {
+                        suggestions.push(Suggestion::AllowPort(port));
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan alternate compose files (docker-compose.*.yml, compose.*.yml)
+    for alt_file in find_alternate_compose_files(ctx) {
+        if primary_compose_files.contains(&alt_file.as_str()) {
+            continue;
+        }
+        if let Some(content) = ctx.read_text(&alt_file) {
+            for port in extract_compose_ports(&content) {
+                suggestions.push(Suggestion::AllowPort(port));
+            }
+            for referenced in extract_extends_files(&content) {
+                if let Some(ref_content) = ctx.read_text(&referenced) {
+                    for port in extract_compose_ports(&ref_content) {
+                        suggestions.push(Suggestion::AllowPort(port));
+                    }
+                }
             }
         }
     }
@@ -1068,9 +1097,61 @@ fn extract_compose_ports(content: &str) -> Vec<u16> {
     ports
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// Workspace / monorepo discovery
-// ══════════════════════════════════════════════════════════════════════
+/// Extract `extends.file` references from a docker-compose file.
+/// Returns relative paths to referenced compose files.
+fn extract_extends_files(content: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut in_extends = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("extends:") {
+            in_extends = true;
+            continue;
+        }
+        if in_extends {
+            if trimmed.starts_with("file:") {
+                let value = trimmed.trim_start_matches("file:").trim();
+                let value = value.trim_matches('"').trim_matches('\'');
+                if !value.is_empty() && !value.contains("..") {
+                    files.push(value.to_string());
+                }
+                in_extends = false;
+            } else if !trimmed.starts_with("service:") && !trimmed.is_empty() {
+                in_extends = false;
+            }
+        }
+    }
+
+    files
+}
+
+/// Find alternate compose files matching docker-compose.*.y[a]ml / compose.*.y[a]ml.
+fn find_alternate_compose_files(ctx: &DetectContext) -> Vec<String> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(ctx.root()) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !entry.path().is_file() {
+            continue;
+        }
+        let is_alt = (name_str.starts_with("docker-compose.") || name_str.starts_with("compose."))
+            && (name_str.ends_with(".yml") || name_str.ends_with(".yaml"))
+            && name_str != "docker-compose.yml"
+            && name_str != "docker-compose.yaml"
+            && name_str != "compose.yml"
+            && name_str != "compose.yaml";
+        if is_alt {
+            files.push(name_str.to_string());
+        }
+    }
+    files
+}
 
 /// How a workspace member was discovered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2376,7 +2457,92 @@ services:
         assert!(ports.contains(&5432));
     }
 
-    // ── SandboxFlag coverage ─────────────────────────────────────────
+    #[test]
+    fn compose_extends_file_extraction() {
+        let content = r#"
+services:
+  grafana:
+    extends:
+      file: .config/docker-compose-base.yaml
+      service: grafana
+  mimir:
+    ports:
+      - "9009:9009"
+"#;
+        let files = extract_extends_files(content);
+        assert_eq!(files, vec![".config/docker-compose-base.yaml"]);
+    }
+
+    #[test]
+    fn compose_extends_rejects_traversal() {
+        let content = r"
+services:
+  evil:
+    extends:
+      file: ../../etc/passwd
+      service: hack
+";
+        let files = extract_extends_files(content);
+        assert!(files.is_empty(), "path traversal should be rejected");
+    }
+
+    #[test]
+    fn docker_follows_extends_for_ports() {
+        let dir = setup_dir();
+        let config_dir = dir.path().join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        fs::write(
+            dir.path().join("docker-compose.yaml"),
+            r#"services:
+  grafana:
+    extends:
+      file: .config/docker-compose-base.yaml
+      service: grafana
+  mimir:
+    ports:
+      - "9009:9009"
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            config_dir.join("docker-compose-base.yaml"),
+            "services:\n  grafana:\n    ports:\n      - 3000:3000/tcp\n      - 2345:2345/tcp\n",
+        )
+        .unwrap();
+
+        let report = detect_project(dir.path());
+        assert!(report.suggestions.contains(&Suggestion::AllowPort(9009)));
+        assert!(report.suggestions.contains(&Suggestion::AllowPort(3000)));
+        assert!(report.suggestions.contains(&Suggestion::AllowPort(2345)));
+    }
+
+    #[test]
+    fn docker_scans_alternate_compose_files() {
+        let dir = setup_dir();
+        fs::write(dir.path().join("Dockerfile"), "FROM node:20").unwrap();
+        fs::write(
+            dir.path().join("docker-compose.yaml"),
+            "services:\n  web:\n    ports:\n      - \"3000:3000\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("docker-compose.demo.yaml"),
+            "services:\n  demo:\n    ports:\n      - \"8080:8080\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("compose.dev.yml"),
+            "services:\n  dev:\n    ports:\n      - \"4200:4200\"\n",
+        )
+        .unwrap();
+
+        let report = detect_project(dir.path());
+        assert!(report.suggestions.contains(&Suggestion::AllowPort(3000)));
+        assert!(report.suggestions.contains(&Suggestion::AllowPort(8080)));
+        assert!(report.suggestions.contains(&Suggestion::AllowPort(4200)));
+    }
 
     #[test]
     fn sandbox_flag_key_names() {
