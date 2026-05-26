@@ -1036,7 +1036,9 @@ pub fn parse_command(args: &[&str]) -> Option<ParsedCommand> {
             continue;
         }
         if arg.starts_with("-R") && arg.len() > 2 {
-            repo_flag = Some(arg[2..].to_string());
+            // Handle both `-Rowner/repo` and `-R=owner/repo`
+            let val = arg[2..].strip_prefix('=').unwrap_or(&arg[2..]);
+            repo_flag = Some(val.to_string());
             i += 1;
             continue;
         }
@@ -1187,6 +1189,9 @@ pub fn is_repo_in_scope(cmd: &ParsedCommand, current_repo: &str) -> bool {
 ///
 /// Returns None if the path doesn't match the /repos/{owner}/{repo} pattern.
 fn extract_repo_from_api_path(endpoint: &str) -> Option<String> {
+    // Strip query string/fragment before parsing path segments
+    let endpoint = endpoint.split('?').next().unwrap_or(endpoint);
+    let endpoint = endpoint.split('#').next().unwrap_or(endpoint);
     let path = endpoint.strip_prefix('/').unwrap_or(endpoint);
     let parts: Vec<&str> = path.split('/').collect();
 
@@ -1402,7 +1407,10 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
                         .as_deref()
                         .map(|s| format!(" {s}"))
                         .unwrap_or_default(),
-                    cmd.repo_flag.as_deref().unwrap_or("unknown"),
+                    cmd.repo_flag
+                        .as_deref()
+                        .or(cmd.api_endpoint.as_deref())
+                        .unwrap_or("unknown"),
                     current_repo,
                     result.reason,
                 ))

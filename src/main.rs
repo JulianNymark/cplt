@@ -330,7 +330,7 @@ the attack surface. Prefer --allow-cache-exec with specific subdirs (e.g.,
     #[arg(long)]
     no_gh_guard: bool,
 
-    /// Enable git push prevention. Blocks `git push` and `git request-pull`
+    /// Enable git push prevention. Blocks `git push`, `git request-pull`, and `git send-pack`
     /// while allowing all other git operations.
     #[arg(long)]
     git_guard: bool,

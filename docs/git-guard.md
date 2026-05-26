@@ -63,7 +63,7 @@ Agent calls:  git push origin feature/x
 Wrapper script (in scratch dir, shadows real git in $PATH)
                   │
                   ▼
-cplt git-gate --repo <url> --scratch <dir> [--protect-default-branch-only true] -- push origin feature/x
+cplt git-gate --real-git /usr/bin/git --mode block --prevent-push true --prevent-force-push true -- push origin feature/x
                   │
          ┌───────┴───────┐
          │ Is it a       │

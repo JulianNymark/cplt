@@ -18,7 +18,7 @@
 //! Run: cargo test --test e2e_guards
 //!
 //! These tests do NOT require sandbox-exec or macOS — they test the gate
-//! subcommands directly and work cross-platform.
+//! subcommands directly and work on macOS and Linux.
 
 use std::path::PathBuf;
 use std::process::Command;

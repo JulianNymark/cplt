@@ -226,12 +226,20 @@ fn cache_gh_token_to_file(scratch_dir: &Path, agent: Agent) {
         return;
     }
 
-    // Write token to file with restrictive permissions
-    use std::os::unix::fs::PermissionsExt;
+    // Write token to file, creating it with 0600 from the start to avoid a
+    // permissions window where the file is world-readable.
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let token_path = scratch_dir.join(".gh-token");
-    if std::fs::write(&token_path, &token).is_ok() {
-        let _ = std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600));
-    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&token_path)
+    else {
+        return;
+    };
+    let _ = file.write_all(token.as_bytes());
 }
 
 /// Install gh and git wrapper scripts into the scratch dir and prepend to PATH.
