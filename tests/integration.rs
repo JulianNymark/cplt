@@ -962,7 +962,12 @@ mod macos_tests {
     fn real_profile_java_localhost_with_prefer_ipv4_stack() {
         require_sandbox!();
         // Skip if Java is not available
-        if Command::new("java").arg("-version").output().is_err() {
+        if Command::new("java")
+            .arg("-version")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
             eprintln!("SKIP: java not found");
             return;
         }
@@ -1008,7 +1013,12 @@ public class T {
     #[test]
     fn real_profile_java_localhost_blocked_without_prefer_ipv4_stack() {
         require_sandbox!();
-        if Command::new("java").arg("-version").output().is_err() {
+        if Command::new("java")
+            .arg("-version")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
             eprintln!("SKIP: java not found");
             return;
         }

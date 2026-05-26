@@ -166,13 +166,13 @@ pub fn build_sandbox_env(
         // flag, Java can't use port-specific localhost rules (--allow-localhost <PORT>).
         // This is macOS-only because Linux Landlock handles addresses differently.
         if !extra_pass_env.iter().any(|v| v == "JAVA_TOOL_OPTIONS") {
-            let mut jvm_flags = format!(
+            let base_flags = format!(
                 "-Djava.io.tmpdir={scratch_str} -Djansi.tmpdir={scratch_str} -Djava.rmi.server.hostname=localhost"
             );
             #[cfg(target_os = "macos")]
-            {
-                jvm_flags.push_str(" -Djava.net.preferIPv4Stack=true");
-            }
+            let jvm_flags = format!("{base_flags} -Djava.net.preferIPv4Stack=true");
+            #[cfg(not(target_os = "macos"))]
+            let jvm_flags = base_flags;
             // Append to existing JAVA_TOOL_OPTIONS if present, otherwise create new
             if let Some(pos) = env.vars.iter().position(|(k, _)| k == "JAVA_TOOL_OPTIONS") {
                 let existing = env.vars[pos].1.clone();
