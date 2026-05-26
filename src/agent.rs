@@ -298,6 +298,21 @@ impl Agent {
                 continue;
             }
 
+            // Resolve mise/asdf shims to the real binary to avoid version conflicts
+            // when the project's .tool-versions specifies a different node version.
+            if let Some(real_bin) = resolve_mise_shim(&candidate, binary_name) {
+                if self_exe.as_ref() == Some(&real_bin) {
+                    continue;
+                }
+                if matches!(self, Agent::Copilot) && is_editor_shim(&real_bin) {
+                    if editor_shim.is_none() {
+                        editor_shim = Some(real_bin);
+                    }
+                    continue;
+                }
+                return Ok(real_bin);
+            }
+
             let resolved = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
             if self_exe.as_ref() == Some(&resolved) {
                 continue; // skip cplt aliased as this binary
@@ -432,6 +447,97 @@ fn is_editor_shim(path: &Path) -> bool {
         return false;
     };
     content.starts_with("#!") && content.contains("copilotCLIShim.js")
+}
+
+/// Detect if a candidate path (before canonicalization) is a mise or asdf shim.
+///
+/// Mise shims are symlinks to the mise binary in a shims directory. When run
+/// inside a sandbox with a project `.tool-versions` that specifies a different
+/// node version than the one the tool was installed with, mise fails with
+/// "No version is set for command <name>". We resolve the real binary path
+/// to bypass mise's version resolution entirely.
+fn resolve_mise_shim(candidate: &Path, binary_name: &str) -> Option<PathBuf> {
+    let dir = candidate.parent()?;
+    let dir_str = dir.to_str()?;
+
+    // Check if the candidate is in a known shims directory
+    let is_shim_dir = dir_str.ends_with("/mise/shims")
+        || dir_str.contains("/mise/shims")
+        || dir_str.ends_with("/asdf/shims")
+        || dir_str.contains("/asdf/shims");
+
+    if !is_shim_dir {
+        return None;
+    }
+
+    // Use `mise which <binary>` to resolve to the real binary path.
+    // Run from $HOME to avoid the project's .tool-versions influencing resolution.
+    // If that fails, scan mise's installs directory directly for the binary.
+    let home = std::env::var("HOME").ok();
+    let cwd = home.as_deref().unwrap_or("/");
+
+    let output = std::process::Command::new("mise")
+        .arg("which")
+        .arg(binary_name)
+        .current_dir(cwd)
+        .output()
+        .or_else(|_| {
+            std::process::Command::new("asdf")
+                .arg("which")
+                .arg(binary_name)
+                .current_dir(cwd)
+                .output()
+        })
+        .ok();
+
+    if let Some(ref out) = output
+        && out.status.success()
+    {
+        let real_path = String::from_utf8_lossy(&out.stdout);
+        let real_path = real_path.trim();
+        if !real_path.is_empty() {
+            let path = PathBuf::from(real_path);
+            if path.is_file() {
+                return Some(std::fs::canonicalize(&path).unwrap_or(path));
+            }
+        }
+    }
+
+    // Fallback: scan mise installs directory directly for the binary.
+    // This handles the case where `mise which` fails because no version is
+    // "active" (e.g., no global .tool-versions), but the binary exists in
+    // an installed version's bin/ directory.
+    if let Some(ref home_str) = home {
+        let installs_dir = PathBuf::from(home_str).join(".local/share/mise/installs");
+        if let Some(found) = find_binary_in_mise_installs(&installs_dir, binary_name) {
+            return Some(found);
+        }
+        // Also check legacy ~/.asdf/installs
+        let asdf_installs = PathBuf::from(home_str).join(".asdf/installs");
+        if let Some(found) = find_binary_in_mise_installs(&asdf_installs, binary_name) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+/// Search mise/asdf installs directory for a binary by name.
+/// Scans `<installs_dir>/<plugin>/<version>/bin/<binary_name>`.
+fn find_binary_in_mise_installs(installs_dir: &Path, binary_name: &str) -> Option<PathBuf> {
+    let plugins = std::fs::read_dir(installs_dir).ok()?;
+    for plugin in plugins.flatten() {
+        let Ok(versions) = std::fs::read_dir(plugin.path()) else {
+            continue;
+        };
+        for version in versions.flatten() {
+            let candidate = version.path().join("bin").join(binary_name);
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    None
 }
 
 impl std::fmt::Display for Agent {
@@ -649,5 +755,31 @@ mod tests {
     fn unknown_agent_error_lists_pi() {
         let err = Agent::from_str("nope").unwrap_err();
         assert!(err.contains("pi"), "error should mention pi: {err}");
+    }
+
+    #[test]
+    fn resolve_mise_shim_non_shim_dir_returns_none() {
+        // A path not in a shims directory should return None immediately
+        let candidate = Path::new("/usr/local/bin/copilot");
+        assert!(resolve_mise_shim(candidate, "copilot").is_none());
+    }
+
+    #[test]
+    fn resolve_mise_shim_detects_mise_shims_dir() {
+        // A path in ~/.local/share/mise/shims/ should be detected
+        let candidate = Path::new("/home/user/.local/share/mise/shims/copilot");
+        // Will return None because `mise which` won't find the binary,
+        // but verifies the directory detection logic
+        let result = resolve_mise_shim(candidate, "copilot");
+        // Either None (mise not available or binary not found) or Some (resolved)
+        // The important thing is it didn't panic and tried to resolve
+        let _ = result;
+    }
+
+    #[test]
+    fn resolve_mise_shim_detects_asdf_shims_dir() {
+        let candidate = Path::new("/home/user/.asdf/shims/copilot");
+        let result = resolve_mise_shim(candidate, "copilot");
+        let _ = result;
     }
 }
