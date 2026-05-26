@@ -1297,11 +1297,14 @@ export GOTOOLCHAIN=local
 # Verify GOCACHE is redirected to scratch (not default ~/Library/Caches/go-build)
 CACHE="${GOCACHE:-unset}"
 case "$CACHE" in
-    unset|*/Library/Caches/*|*/.cache/go-build)
+    unset|*/Library/Caches/go-build*|*/.cache/go-build)
         echo "RESULT:gocache_redirected:FAIL:GOCACHE=$CACHE"
         ;;
-    *)
+    */cplt/tmp/*)
         echo "RESULT:gocache_redirected:OK"
+        ;;
+    *)
+        echo "RESULT:gocache_redirected:FAIL:GOCACHE=$CACHE"
         ;;
 esac
 
