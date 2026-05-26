@@ -77,6 +77,15 @@ jobs:
           which sandbox-exec
           sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
 
+      - name: Install Java (for JVM integration tests)
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # ratchet:actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install Gradle (for Gradle sandbox tests)
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # ratchet:gradle/actions/setup-gradle@v4
+
       - name: Run all tests
         run: cargo test --verbose
 

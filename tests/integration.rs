@@ -961,11 +961,14 @@ mod macos_tests {
     #[test]
     fn real_profile_java_localhost_with_prefer_ipv4_stack() {
         require_sandbox!();
-        // Skip if Java is not available
+        // Skip if Java is not available (macOS shim reports success but no JRE)
         if Command::new("java")
             .arg("-version")
             .output()
-            .map(|o| !o.status.success())
+            .map(|o| {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                !o.status.success() || stderr.contains("Unable to locate")
+            })
             .unwrap_or(true)
         {
             eprintln!("SKIP: java not found");
@@ -1016,7 +1019,10 @@ public class T {
         if Command::new("java")
             .arg("-version")
             .output()
-            .map(|o| !o.status.success())
+            .map(|o| {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                !o.status.success() || stderr.contains("Unable to locate")
+            })
             .unwrap_or(true)
         {
             eprintln!("SKIP: java not found");
