@@ -46,6 +46,9 @@ pub fn run_init(project_dir: &Path, report: &DetectionReport, opts: &InitOptions
 
     let config_path = project_dir.join(".cplt.toml");
 
+    // Note: init reads the working-tree file (not git HEAD) intentionally.
+    // This is a local dev tool for authoring configs — the runtime config loader
+    // in repo_config.rs reads from git HEAD for tamper-resistance.
     let toml = if opts.merge && config_path.exists() {
         let existing = match std::fs::read_to_string(&config_path) {
             Ok(c) => c,

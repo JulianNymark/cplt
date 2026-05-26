@@ -1113,7 +1113,10 @@ fn extract_extends_files(content: &str) -> Vec<String> {
             if trimmed.starts_with("file:") {
                 let value = trimmed.trim_start_matches("file:").trim();
                 let value = value.trim_matches('"').trim_matches('\'');
-                if !value.is_empty() && !value.contains("..") {
+                if !value.is_empty()
+                    && !value.contains("..")
+                    && !std::path::Path::new(value).is_absolute()
+                {
                     files.push(value.to_string());
                 }
                 in_extends = false;
