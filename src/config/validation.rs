@@ -33,8 +33,37 @@ const VALID_SANDBOX_KEYS: &[&str] = &[
     "allow_cache_exec",
     "allow_cache_exec_any",
     "allow_browser",
+    // Deprecated — use [gh_guard] and [git_guard] sections instead.
+    "gh_proxy",
+    "git_push_prevention",
 ];
-const VALID_SECTIONS: &[&str] = &["proxy", "allow", "deny", "sandbox"];
+const VALID_GH_GUARD_KEYS: &[&str] = &[
+    "enabled",
+    "mode",
+    "scope_check",
+    "block_auth_token",
+    "inject_token",
+    "unknown_command",
+];
+const VALID_GIT_GUARD_KEYS: &[&str] = &[
+    "enabled",
+    "mode",
+    "prevent_push",
+    "prevent_force_push",
+    "protect_default_branch_only",
+    "allow_push",
+];
+const VALID_AUDIT_KEYS: &[&str] = &["enabled", "destination", "level", "format"];
+const VALID_SECTIONS: &[&str] = &[
+    "proxy",
+    "allow",
+    "deny",
+    "sandbox",
+    "gh_guard",
+    "git_guard",
+    "audit",
+    "config_version",
+];
 
 /// A single validation diagnostic.
 #[derive(Debug)]
@@ -80,7 +109,7 @@ pub fn validate_config(toml_text: &str) -> Vec<ConfigDiagnostic> {
         }
     };
 
-    // Check top-level keys (should all be known section names)
+    // Check top-level keys (should all be known sections or scalar keys)
     for key in table.keys() {
         if !VALID_SECTIONS.contains(&key.as_str()) {
             let suggestion = suggest_key(key, VALID_SECTIONS);
@@ -89,7 +118,7 @@ pub fn validate_config(toml_text: &str) -> Vec<ConfigDiagnostic> {
                 .unwrap_or_default();
             diagnostics.push(ConfigDiagnostic {
                 level: DiagnosticLevel::Error,
-                message: format!("unknown section [{key}]{hint}"),
+                message: format!("unknown top-level key '{key}'{hint}"),
             });
         }
     }
@@ -99,6 +128,9 @@ pub fn validate_config(toml_text: &str) -> Vec<ConfigDiagnostic> {
     check_section_keys(&table, "allow", VALID_ALLOW_KEYS, &mut diagnostics);
     check_section_keys(&table, "deny", VALID_DENY_KEYS, &mut diagnostics);
     check_section_keys(&table, "sandbox", VALID_SANDBOX_KEYS, &mut diagnostics);
+    check_section_keys(&table, "gh_guard", VALID_GH_GUARD_KEYS, &mut diagnostics);
+    check_section_keys(&table, "git_guard", VALID_GIT_GUARD_KEYS, &mut diagnostics);
+    check_section_keys(&table, "audit", VALID_AUDIT_KEYS, &mut diagnostics);
 
     // Also verify it deserializes correctly (catches type errors)
     if diagnostics
@@ -292,9 +324,10 @@ quiet = false
         let diagnostics = validate_config(toml);
         assert!(
             diagnostics.iter().any(|d| {
-                d.level == DiagnosticLevel::Error && d.message.contains("unknown section [proxxy]")
+                d.level == DiagnosticLevel::Error
+                    && d.message.contains("unknown top-level key 'proxxy'")
             }),
-            "should detect unknown section: {diagnostics:?}"
+            "should detect unknown top-level key: {diagnostics:?}"
         );
     }
 
@@ -435,7 +468,12 @@ quiet = false
         }
 
         // Every sandbox key must appear in the default config template
+        // (except deprecated keys that are documented in their own sections)
+        const DEPRECATED_SANDBOX_KEYS: &[&str] = &["gh_proxy", "git_push_prevention"];
         for &key in VALID_SANDBOX_KEYS {
+            if DEPRECATED_SANDBOX_KEYS.contains(&key) {
+                continue;
+            }
             assert!(
                 template.contains(key),
                 "VALID_SANDBOX_KEYS contains '{key}' but default_config_contents() does not mention it"

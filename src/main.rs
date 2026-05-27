@@ -2,10 +2,11 @@
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
-use cplt::{agent, config, discover, proxy, repo_config, sandbox, scratch, trust, update};
+use cplt::{
+    agent, config, discover, gh_proxy, proxy, repo_config, sandbox, scratch, trust, update,
+};
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
-#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -319,6 +320,25 @@ the attack surface. Prefer --allow-cache-exec with specific subdirs (e.g.,
     #[arg(long)]
     no_scratch_dir: bool,
 
+    /// Enable the gh CLI guard that blocks destructive GitHub operations.
+    /// A wrapper script intercepts `gh` commands and blocks destructive writes
+    /// (delete repo, merge PR, etc.) while allowing safe reads.
+    #[arg(long)]
+    gh_guard: bool,
+
+    /// Disable the gh CLI guard (overrides config file setting).
+    #[arg(long)]
+    no_gh_guard: bool,
+
+    /// Enable git push prevention. Blocks `git push` and `git request-pull`
+    /// while allowing all other git operations.
+    #[arg(long)]
+    git_guard: bool,
+
+    /// Disable git push prevention (overrides config file setting).
+    #[arg(long)]
+    no_git_guard: bool,
+
     /// Skip the startup check that verifies the sandbox is working.
     /// The check runs a quick test command inside the sandbox to confirm
     /// that file and network restrictions are active.
@@ -491,6 +511,77 @@ enum Command {
     /// Checks auth mechanisms, agent install, tool availability,
     /// and sandbox-critical paths. Exits 0 if all critical checks pass.
     Doctor,
+
+    /// [internal] Evaluate a gh command against the proxy policy.
+    ///
+    /// Called by the gh wrapper script inside the sandbox. Not intended
+    /// for direct use. Evaluates the command, passes through if allowed,
+    /// or exits with an error if blocked.
+    #[command(hide = true)]
+    GhGate {
+        /// Path to the real gh binary.
+        #[arg(long)]
+        real_gh: PathBuf,
+
+        /// Enforcement mode: block, warn, or audit.
+        #[arg(long, default_value = "block")]
+        mode: String,
+
+        /// Enable repository scope checking.
+        #[arg(long, default_value_t = true)]
+        scope_check: bool,
+
+        /// Disable repository scope checking.
+        #[arg(long, conflicts_with = "scope_check")]
+        no_scope_check: bool,
+
+        /// Block `gh auth token` (credential exfiltration prevention).
+        #[arg(long, default_value_t = true)]
+        block_auth_token: bool,
+
+        /// Allow `gh auth token`.
+        #[arg(long, conflicts_with = "block_auth_token")]
+        no_block_auth_token: bool,
+
+        /// Policy for unrecognized commands: "block" or "allow".
+        #[arg(long, default_value = "block")]
+        unknown_command: String,
+
+        /// gh arguments to evaluate and potentially pass through.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+
+    /// [internal] Evaluate a git command against push prevention policy.
+    ///
+    /// Called by the git wrapper script inside the sandbox. Blocks push
+    /// operations while allowing all other git commands.
+    #[command(hide = true)]
+    GitGate {
+        /// Path to the real git binary.
+        #[arg(long)]
+        real_git: PathBuf,
+
+        /// Enforcement mode: block, warn, or audit.
+        #[arg(long, default_value = "block")]
+        mode: String,
+
+        /// Whether push prevention is enabled ("true" or "false").
+        #[arg(long, default_value = "true")]
+        prevent_push: String,
+
+        /// Whether force push prevention is enabled ("true" or "false").
+        #[arg(long, default_value = "true")]
+        prevent_force_push: String,
+
+        /// Only block pushes to default branch (main/master). Allows pushes to feature branches.
+        #[arg(long, default_value = "false")]
+        protect_default_branch_only: String,
+
+        /// git arguments to evaluate and potentially pass through.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -784,6 +875,8 @@ fn resolve_context(cli: &Cli) -> anyhow::Result<ResolvedContext> {
         allow_browser: cli.allow_browser,
         scratch: config::FeatureToggle::from_pair(cli.scratch_dir, cli.no_scratch_dir),
         quiet: config::FeatureToggle::from_pair(cli.quiet, cli.no_quiet),
+        gh_guard: config::FeatureToggle::from_pair(cli.gh_guard, cli.no_gh_guard),
+        git_push_prevention: config::FeatureToggle::from_pair(cli.git_guard, cli.no_git_guard),
     }) {
         Ok(r) => r,
         Err(e) => bail!("{e}"),
@@ -1153,6 +1246,57 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             }
             Command::Doctor => run_doctor(),
+            Command::GhGate {
+                real_gh,
+                mode,
+                scope_check,
+                no_scope_check,
+                block_auth_token,
+                no_block_auth_token,
+                unknown_command,
+                args,
+            } => {
+                let policy = gh_proxy::GatePolicy {
+                    mode: match mode.as_str() {
+                        "warn" => config::EnforcementMode::Warn,
+                        "audit" => config::EnforcementMode::Audit,
+                        _ => config::EnforcementMode::Block,
+                    },
+                    scope_check: scope_check && !no_scope_check,
+                    block_auth_token: block_auth_token && !no_block_auth_token,
+                    unknown_command: if unknown_command == "allow" {
+                        gh_proxy::UnknownCommandDecision::Allow
+                    } else {
+                        gh_proxy::UnknownCommandDecision::Block
+                    },
+                };
+                run_gh_gate(&real_gh, &args, &policy)
+            }
+            Command::GitGate {
+                real_git,
+                args,
+                mode,
+                prevent_push,
+                prevent_force_push,
+                protect_default_branch_only,
+            } => {
+                let mode = match mode.as_str() {
+                    "warn" => config::EnforcementMode::Warn,
+                    "audit" => config::EnforcementMode::Audit,
+                    _ => config::EnforcementMode::Block,
+                };
+                let prevent_push = prevent_push != "false";
+                let prevent_force_push = prevent_force_push != "false";
+                let protect_default_branch_only = protect_default_branch_only != "false";
+                run_git_gate(
+                    &real_git,
+                    &args,
+                    mode,
+                    prevent_push,
+                    prevent_force_push,
+                    protect_default_branch_only,
+                )
+            }
         });
     }
 
@@ -1386,6 +1530,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         resolved.inherit_env,
         &disabled_categories,
         &resolved.deny_env,
+        &resolved.gh_guard,
+        &resolved.git_guard,
     );
 
     // Cleanup
@@ -1466,6 +1612,145 @@ fn build_copilot_args(cli: &Cli, agent: &agent::Agent) -> Vec<String> {
 
     args.extend(cli.copilot_args.iter().cloned());
     args
+}
+
+/// Handle `cplt gh-gate` — evaluate a gh command and exec the real binary if allowed.
+///
+/// Called from the wrapper script placed in the sandbox's PATH. If the command
+/// is allowed, this replaces the current process with the real gh binary.
+/// If blocked, prints an error message and exits with code 1.
+fn run_gh_gate(real_gh: &Path, args: &[String], policy: &gh_proxy::GatePolicy) -> ExitCode {
+    // Intercept `gh auth token` — serve from cached file instead of blocking.
+    // This allows Copilot to authenticate without exposing the token as an env var
+    // to all child processes. The token file is written to scratch dir at startup.
+    if policy.block_auth_token && is_gh_auth_token_request(args) {
+        return serve_cached_gh_token();
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    match gh_proxy::gate(&arg_refs, &cwd, policy) {
+        Ok(()) => {
+            // Allowed — exec the real gh binary (replaces this process)
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new(real_gh).args(args).exec();
+            // exec() only returns on error
+            ui::error(&format!("Failed to exec gh: {err}"));
+            ExitCode::FAILURE
+        }
+        Err(msg) => match policy.mode {
+            config::EnforcementMode::Block => {
+                eprintln!("{msg}");
+                ExitCode::FAILURE
+            }
+            config::EnforcementMode::Warn => {
+                eprintln!("⚠️  WARNING (would block): {msg}");
+                // Allow through in warn mode
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new(real_gh).args(args).exec();
+                ui::error(&format!("Failed to exec gh: {err}"));
+                ExitCode::FAILURE
+            }
+            config::EnforcementMode::Audit => {
+                // Log the decision to stderr for audit trail
+                eprintln!("[audit] gh-gate: would block: {msg}");
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new(real_gh).args(args).exec();
+                ui::error(&format!("Failed to exec gh: {err}"));
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+/// Check if args represent a `gh auth token` invocation.
+fn is_gh_auth_token_request(args: &[String]) -> bool {
+    // args are the arguments after `--` in `cplt gh-gate ... -- auth token`
+    let mut iter = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.starts_with('-'));
+    iter.next() == Some("auth") && iter.next() == Some("token")
+}
+
+/// Serve the cached GitHub token from the scratch dir's `.gh-token` file.
+/// Deletes the file after reading so subsequent calls by subprocesses fail.
+/// Returns ExitCode::SUCCESS if token found, FAILURE otherwise.
+fn serve_cached_gh_token() -> ExitCode {
+    // TMPDIR is set to the scratch dir inside the sandbox
+    let tmpdir = std::env::var("TMPDIR")
+        .or_else(|_| std::env::var("TMP"))
+        .unwrap_or_default();
+
+    if tmpdir.is_empty() {
+        eprintln!("⚠️ BLOCKED by sandbox: 'gh auth token' — no cached token available.");
+        return ExitCode::FAILURE;
+    }
+
+    let token_path = Path::new(&tmpdir).join(".gh-token");
+
+    match std::fs::read_to_string(&token_path) {
+        Ok(token) if !token.is_empty() => {
+            // Delete the file immediately after reading — one-time use only.
+            // Copilot caches the token in memory after first read, so subsequent
+            // calls to `gh auth token` by tools/subprocesses will get "not available".
+            let _ = std::fs::remove_file(&token_path);
+            print!("{token}");
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!("⚠️ BLOCKED by sandbox: 'gh auth token' — no cached token available.");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Handle `cplt git-gate` — evaluate a git command and exec the real binary if allowed.
+fn run_git_gate(
+    real_git: &Path,
+    args: &[String],
+    mode: config::EnforcementMode,
+    prevent_push: bool,
+    prevent_force_push: bool,
+    protect_default_branch_only: bool,
+) -> ExitCode {
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    match gh_proxy::gate_git(
+        &arg_refs,
+        prevent_push,
+        prevent_force_push,
+        protect_default_branch_only,
+    ) {
+        Ok(()) => {
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new(real_git).args(args).exec();
+            ui::error(&format!("Failed to exec git: {err}"));
+            ExitCode::FAILURE
+        }
+        Err(msg) => match mode {
+            config::EnforcementMode::Block => {
+                eprintln!("{msg}");
+                ExitCode::FAILURE
+            }
+            config::EnforcementMode::Warn => {
+                eprintln!("⚠️  WARNING (would block): {msg}");
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new(real_git).args(args).exec();
+                ui::error(&format!("Failed to exec git: {err}"));
+                ExitCode::FAILURE
+            }
+            config::EnforcementMode::Audit => {
+                // Log the decision to stderr for audit trail
+                eprintln!("[audit] git-gate: would block: {msg}");
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new(real_git).args(args).exec();
+                ui::error(&format!("Failed to exec git: {err}"));
+                ExitCode::FAILURE
+            }
+        },
+    }
 }
 
 fn run_doctor() -> ExitCode {
@@ -1793,6 +2078,8 @@ fn display_repo_config(loaded: &repo_config::LoadedRepoConfig, project_dir: &std
             ),
             ("allow_env_files", rc.propose.allow_env_files),
             ("allow_browser", rc.propose.allow_browser),
+            ("gh_guard", rc.propose.gh_guard),
+            ("git_push_prevention", rc.propose.git_push_prevention),
         ];
         for (name, val) in bools {
             if let Some(v) = val {

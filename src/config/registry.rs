@@ -14,11 +14,13 @@ pub enum ConfigValueType {
     Str,
     U16Array,
     StrArray,
+    /// Array of TOML tables (e.g. `[[git_guard.allow_push]]`).
+    ArrayOfTables,
 }
 
 impl ConfigValueType {
     pub fn is_array(self) -> bool {
-        matches!(self, Self::U16Array | Self::StrArray)
+        matches!(self, Self::U16Array | Self::StrArray | Self::ArrayOfTables)
     }
 }
 
@@ -273,6 +275,153 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         default_display: "false",
         description: "Allow the agent to open URLs in your default browser (needed for OAuth code flows).",
     },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "gh_proxy",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "DEPRECATED: use [gh_guard] section instead. Enables gh CLI proxy.",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "git_push_prevention",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "DEPRECATED: use [git_guard] section instead. Enables git push prevention.",
+    },
+    // [gh_guard]
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "enabled",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Enable gh CLI proxy that blocks destructive GitHub operations (delete repo, merge PR, etc.).",
+    },
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "mode",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "block",
+        description: "Enforcement mode: \"block\" (deny and exit), \"warn\" (print warning, allow), or \"audit\" (silent log).",
+    },
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "scope_check",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "true",
+        description: "Enforce same-repo check — blocks operations targeting other repositories via -R flag.",
+    },
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "block_auth_token",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "true",
+        description: "Block 'gh auth token' command to prevent credential exfiltration.",
+    },
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "inject_token",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Pre-extract GH_TOKEN before sandbox launch (only for Copilot agent).",
+    },
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "unknown_command",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "block",
+        description: "Policy for commands not in the classification table: \"block\" (default-deny) or \"allow\" (permissive).",
+    },
+    // [git_guard]
+    ConfigKeyInfo {
+        section: "git_guard",
+        key: "enabled",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Enable git command interception (blocks git push, request-pull, send-pack).",
+    },
+    ConfigKeyInfo {
+        section: "git_guard",
+        key: "mode",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "block",
+        description: "Enforcement mode: \"block\" (deny and exit), \"warn\" (print warning, allow), or \"audit\" (silent log).",
+    },
+    ConfigKeyInfo {
+        section: "git_guard",
+        key: "prevent_push",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "true",
+        description: "Block git push, request-pull, and send-pack.",
+    },
+    ConfigKeyInfo {
+        section: "git_guard",
+        key: "prevent_force_push",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "true",
+        description: "Block force push (only meaningful when prevent_push is false).",
+    },
+    ConfigKeyInfo {
+        section: "git_guard",
+        key: "protect_default_branch_only",
+        value_type: ConfigValueType::Bool,
+        dangerous: true,
+        default_display: "false",
+        description: "Only block pushes to default branch (main/master). Allows feature branch pushes.",
+    },
+    ConfigKeyInfo {
+        section: "git_guard",
+        key: "allow_push",
+        value_type: ConfigValueType::ArrayOfTables,
+        dangerous: true,
+        default_display: "[]",
+        description: "Structured push exceptions. Each entry specifies remote/branches/force conditions under which push is allowed.",
+    },
+    // [audit]
+    ConfigKeyInfo {
+        section: "audit",
+        key: "enabled",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Enable audit logging for all sandbox gate decisions.",
+    },
+    ConfigKeyInfo {
+        section: "audit",
+        key: "destination",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "stderr",
+        description: "Where to write audit entries: \"stderr\" or a file path.",
+    },
+    ConfigKeyInfo {
+        section: "audit",
+        key: "level",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "blocked",
+        description: "What to log: \"blocked\" (only blocked), \"decisions\" (all gate decisions), or \"all\" (including passthrough).",
+    },
+    ConfigKeyInfo {
+        section: "audit",
+        key: "format",
+        value_type: ConfigValueType::Str,
+        dangerous: false,
+        default_display: "text",
+        description: "Output format: \"text\" (human-readable) or \"jsonl\" (machine-parseable).",
+    },
 ];
 
 /// Look up a config key by "section.key" dotted notation.
@@ -311,6 +460,7 @@ pub(super) fn type_label(vt: ConfigValueType) -> &'static str {
         ConfigValueType::Str => "string",
         ConfigValueType::U16Array => "integer array",
         ConfigValueType::StrArray => "string array",
+        ConfigValueType::ArrayOfTables => "array of tables",
     }
 }
 

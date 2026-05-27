@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 use super::error::ConfigError;
 use super::path::{config_path, expand_tilde, resolve_config_path};
-use super::types::{CliFlags, Config, LoadedConfig, Resolved};
+use super::types::{
+    CliFlags, Config, EnforcementMode, GhGuardPolicy, GitGuardPolicy, LoadedConfig, Resolved,
+    ResolvedPushRule, UnknownCommandPolicy,
+};
 use crate::sandbox::{HardeningCategory, validate_sbpl_path};
 use crate::ui;
 
@@ -253,6 +256,54 @@ impl Config {
         // Quiet: FeatureToggle resolves --quiet/--no-quiet (default: off)
         let quiet = cli.quiet.resolve(self.sandbox.quiet.unwrap_or(false));
 
+        // gh-guard: CLI flag overrides enabled; sub-options come from [gh_proxy] config.
+        // Backward compat: old `sandbox.gh_proxy = true` is treated as `gh_guard.enabled = true`.
+        let gh_guard_enabled_default = self
+            .gh_guard
+            .enabled
+            .or(self.sandbox.gh_proxy)
+            .unwrap_or(false);
+        let gh_guard_enabled = cli.gh_guard.resolve(gh_guard_enabled_default);
+        let gh_guard = GhGuardPolicy {
+            enabled: gh_guard_enabled,
+            mode: self.gh_guard.mode.unwrap_or(EnforcementMode::Block),
+            scope_check: self.gh_guard.scope_check.unwrap_or(true),
+            block_auth_token: self.gh_guard.block_auth_token.unwrap_or(true),
+            inject_token: self.gh_guard.inject_token.unwrap_or(false),
+            unknown_command: self
+                .gh_guard
+                .unknown_command
+                .unwrap_or(UnknownCommandPolicy::Block),
+        };
+
+        // git-guard: CLI flag overrides enabled. Backward compat from sandbox.git_push_prevention.
+        let git_guard_enabled_default = self
+            .git_guard
+            .enabled
+            .or(self.sandbox.git_push_prevention)
+            .unwrap_or(false);
+        let git_guard_enabled = cli.git_push_prevention.resolve(git_guard_enabled_default);
+        let git_guard = GitGuardPolicy {
+            enabled: git_guard_enabled,
+            mode: self.git_guard.mode.unwrap_or(EnforcementMode::Block),
+            prevent_push: self.git_guard.prevent_push.unwrap_or(true),
+            prevent_force_push: self.git_guard.prevent_force_push.unwrap_or(true),
+            protect_default_branch_only: self
+                .git_guard
+                .protect_default_branch_only
+                .unwrap_or(false),
+            allow_push: self
+                .git_guard
+                .allow_push
+                .iter()
+                .map(|r| ResolvedPushRule {
+                    remote: r.remote.clone(),
+                    branches: r.branches.clone(),
+                    force: r.force.unwrap_or(false),
+                })
+                .collect(),
+        };
+
         // Validate all paths for SBPL injection characters
         for p in allow_read
             .iter()
@@ -315,6 +366,8 @@ impl Config {
             allow_browser,
             scratch_dir,
             quiet,
+            gh_guard,
+            git_guard,
             agent: self.sandbox.agent.clone(),
             deny_env: Vec::new(),
         })
@@ -579,6 +632,55 @@ impl Resolved {
         }
         eprintln!();
 
+        // Command guards
+        if self.gh_guard.enabled || self.git_guard.enabled {
+            eprintln!("{blue}[cplt]{nc}  {dim}Command guards:{nc}");
+            if self.gh_guard.enabled {
+                if self.scratch_dir {
+                    let policy_note = match self.gh_guard.unknown_command {
+                        UnknownCommandPolicy::Block => "default-deny",
+                        UnknownCommandPolicy::Allow => "permissive",
+                    };
+                    let mode_note = match self.gh_guard.mode {
+                        EnforcementMode::Block => "",
+                        EnforcementMode::Warn => " [WARN MODE]",
+                        EnforcementMode::Audit => " [AUDIT MODE]",
+                    };
+                    eprintln!(
+                        "{blue}[cplt]{nc}    gh guard:      {green}on{nc}          {dim}{policy_note}, scope_check={}{mode_note}{nc}",
+                        if self.gh_guard.scope_check {
+                            "on"
+                        } else {
+                            "off"
+                        }
+                    );
+                } else {
+                    let yellow = ui::color(ui::YELLOW);
+                    eprintln!(
+                        "{blue}[cplt]{nc}    gh guard:      {yellow}inactive{nc}    {dim}requires scratch_dir{nc}"
+                    );
+                }
+            }
+            if self.git_guard.enabled {
+                if self.scratch_dir {
+                    let mode_note = match self.git_guard.mode {
+                        EnforcementMode::Block => "",
+                        EnforcementMode::Warn => " [WARN MODE]",
+                        EnforcementMode::Audit => " [AUDIT MODE]",
+                    };
+                    eprintln!(
+                        "{blue}[cplt]{nc}    git guard:     {green}on{nc}          {dim}blocks git push{mode_note}{nc}"
+                    );
+                } else {
+                    let yellow = ui::color(ui::YELLOW);
+                    eprintln!(
+                        "{blue}[cplt]{nc}    git guard:     {yellow}inactive{nc}    {dim}requires scratch_dir{nc}"
+                    );
+                }
+            }
+            eprintln!();
+        }
+
         eprintln!(
             "{blue}[cplt]{nc}  {dim}Home:{nc}           {}",
             home_dir.display()
@@ -656,6 +758,14 @@ impl Resolved {
         }
         if repo_config.propose.allow_env_files == Some(true) && is_approved("allow_env_files") {
             self.allow_env_files = true;
+        }
+        if repo_config.propose.gh_guard == Some(true) && is_approved("gh_guard") {
+            self.gh_guard.enabled = true;
+        }
+        if repo_config.propose.git_push_prevention == Some(true)
+            && is_approved("git_push_prevention")
+        {
+            self.git_guard.enabled = true;
         }
 
         // Path proposals

@@ -61,6 +61,8 @@ fn configure_command(
     scratch_dir: Option<&Path>,
     proxy_port: Option<u16>,
     agent: Agent,
+    gh_guard: &crate::config::GhGuardPolicy,
+    git_guard: &crate::config::GitGuardPolicy,
 ) {
     for arg in copilot_args {
         cmd.arg(arg);
@@ -127,6 +129,191 @@ fn configure_command(
             cmd.env("no_proxy", "localhost,127.0.0.1,::1");
         }
     }
+
+    // Install command wrappers if scratch dir exists and features are enabled.
+    // - gh proxy: intercepts gh commands and blocks destructive operations
+    // - git push prevention: blocks git push while allowing all other git operations
+    if let Some(scratch) = scratch_dir {
+        if gh_guard.enabled {
+            // Inject GH_TOKEN into env only when explicitly requested.
+            if gh_guard.inject_token {
+                inject_gh_token_if_needed(cmd, agent);
+            }
+            // Cache token to file so the wrapper can serve `gh auth token` requests
+            // without exposing the token as an env var to all child processes.
+            if gh_guard.block_auth_token {
+                cache_gh_token_to_file(scratch, agent);
+            }
+        }
+        install_command_wrappers(cmd, scratch, gh_guard, git_guard);
+    }
+}
+
+/// Inject GH_TOKEN into the command env if not already present.
+///
+/// Runs `gh auth token` outside the sandbox to extract the token from
+/// `~/.config/gh/hosts.yml`, then injects it as GH_TOKEN. This allows
+/// the gh proxy to safely block `gh auth token` inside the sandbox
+/// while still giving the agent API access.
+///
+/// Only injects for agents that need GitHub access (Copilot).
+fn inject_gh_token_if_needed(cmd: &mut Command, agent: Agent) {
+    // Only inject for Copilot — other agents have their own auth
+    if agent != Agent::Copilot {
+        return;
+    }
+
+    // Skip if any GitHub token is already set (non-empty) in the environment
+    let has_token = |key| std::env::var(key).is_ok_and(|v| !v.is_empty());
+    if has_token("GH_TOKEN") || has_token("GITHUB_TOKEN") || has_token("COPILOT_GITHUB_TOKEN") {
+        return;
+    }
+
+    // Extract token from gh CLI config (outside sandbox)
+    let Ok(output) = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return;
+    };
+
+    if !output.status.success() {
+        return;
+    }
+
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !token.is_empty() {
+        cmd.env("GH_TOKEN", &token);
+    }
+}
+
+/// Cache the GitHub token to a file in the scratch dir.
+///
+/// The gh wrapper script reads this file to serve `gh auth token` requests
+/// without exposing the token as an environment variable to all child processes.
+/// The file is owner-readable only (mode 0o600).
+fn cache_gh_token_to_file(scratch_dir: &Path, agent: Agent) {
+    // Only cache for Copilot — other agents have their own auth
+    if agent != Agent::Copilot {
+        return;
+    }
+
+    // Skip if any GitHub token is already set (non-empty) in the environment —
+    // in that case Copilot will use the env var directly.
+    let has_token = |key| std::env::var(key).is_ok_and(|v| !v.is_empty());
+    if has_token("GH_TOKEN") || has_token("GITHUB_TOKEN") || has_token("COPILOT_GITHUB_TOKEN") {
+        return;
+    }
+
+    // Extract token from gh CLI config (outside sandbox)
+    let Ok(output) = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return;
+    };
+
+    if !output.status.success() {
+        return;
+    }
+
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() {
+        return;
+    }
+
+    // Write token to file with restrictive permissions
+    use std::os::unix::fs::PermissionsExt;
+    let token_path = scratch_dir.join(".gh-token");
+    if std::fs::write(&token_path, &token).is_ok() {
+        let _ = std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+/// Install gh and git wrapper scripts into the scratch dir and prepend to PATH.
+///
+/// Both wrappers follow the same pattern: intercept the command, call back to
+/// cplt for a policy decision, then exec the real binary or block.
+/// Policy is baked into the wrapper invocation — not re-read from config at gate time.
+fn install_command_wrappers(
+    cmd: &mut Command,
+    scratch_dir: &Path,
+    gh_guard: &crate::config::GhGuardPolicy,
+    git_guard: &crate::config::GitGuardPolicy,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Find cplt binary (ourselves)
+    let Ok(cplt_bin) = std::env::current_exe() else {
+        return;
+    };
+
+    let bin_dir = scratch_dir.join("bin");
+    if std::fs::create_dir_all(&bin_dir).is_err() {
+        return;
+    }
+
+    let cplt_str = cplt_bin.to_string_lossy();
+    let mut installed_any = false;
+
+    // Install gh wrapper (only if gh_proxy enabled)
+    if gh_guard.enabled
+        && let Some(real_gh) = which_binary("gh")
+    {
+        let script = crate::gh_proxy::generate_wrapper_script(
+            &real_gh.to_string_lossy(),
+            &cplt_str,
+            gh_guard,
+        );
+        let wrapper_path = bin_dir.join("gh");
+        if std::fs::write(&wrapper_path, script).is_ok() {
+            let _ = std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o755));
+            installed_any = true;
+        }
+    }
+
+    // Install git guard wrapper (only if git_guard enabled)
+    if git_guard.enabled
+        && let Some(real_git) = which_binary("git")
+    {
+        let script = crate::gh_proxy::generate_git_wrapper_script(
+            &real_git.to_string_lossy(),
+            &cplt_str,
+            git_guard,
+        );
+        let wrapper_path = bin_dir.join("git");
+        if std::fs::write(&wrapper_path, script).is_ok() {
+            let _ = std::fs::set_permissions(&wrapper_path, std::fs::Permissions::from_mode(0o755));
+            installed_any = true;
+        }
+    }
+
+    // Prepend {scratch}/bin to PATH so wrappers shadow the real binaries.
+    if installed_any {
+        let bin_dir_str = bin_dir.to_string_lossy().to_string();
+        let new_path = if let Some(current_path) = std::env::var_os("PATH") {
+            format!("{}:{}", bin_dir_str, current_path.to_string_lossy())
+        } else {
+            bin_dir_str
+        };
+        cmd.env("PATH", &new_path);
+    }
+}
+
+/// Find a binary in PATH by name.
+fn which_binary(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Spawn a sandboxed command, forward signals, and wait for exit.
@@ -239,6 +426,7 @@ pub fn preflight(sandbox: &super::PreparedSandbox) -> Result<(), String> {
 /// Writes the SBPL profile to a temp file, invokes `sandbox-exec`, and
 /// cleans up the profile file on exit.
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 pub fn exec(
     sandbox: &super::PreparedSandbox,
     copilot_bin: &Path,
@@ -247,6 +435,8 @@ pub fn exec(
     inherit_env: bool,
     disabled_categories: &[HardeningCategory],
     deny_env: &[String],
+    gh_guard: &crate::config::GhGuardPolicy,
+    git_guard: &crate::config::GitGuardPolicy,
 ) -> u8 {
     let profile_path = match write_temp_profile(&sandbox.profile_text) {
         Ok(p) => p,
@@ -270,6 +460,8 @@ pub fn exec(
         sandbox.scratch_dir.as_deref(),
         sandbox.proxy_port,
         sandbox.agent,
+        gh_guard,
+        git_guard,
     );
 
     // Strip repo-config denied env vars
@@ -332,6 +524,7 @@ pub fn preflight(_sandbox: &super::PreparedSandbox) -> Result<(), String> {
 /// process between fork() and exec(). All allocation and I/O was done
 /// in the parent via `precompute()` — the hook only makes raw syscalls.
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
 pub fn exec(
     sandbox: &super::PreparedSandbox,
     copilot_bin: &Path,
@@ -340,6 +533,8 @@ pub fn exec(
     inherit_env: bool,
     disabled_categories: &[HardeningCategory],
     deny_env: &[String],
+    gh_guard: &crate::config::GhGuardPolicy,
+    git_guard: &crate::config::GitGuardPolicy,
 ) -> u8 {
     use std::os::unix::process::CommandExt as _;
 
@@ -356,6 +551,8 @@ pub fn exec(
         sandbox.scratch_dir.as_deref(),
         sandbox.proxy_port,
         sandbox.agent,
+        gh_guard,
+        git_guard,
     );
 
     // Strip repo-config denied env vars

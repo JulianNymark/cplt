@@ -177,6 +177,36 @@ pub fn default_config_contents() -> String {
 # sandbox settings and don't need to see them every time.
 # Override with --no-quiet for a single run.
 # quiet = false
+
+# ── gh CLI proxy ────────────────────────────────────────────────────────────
+# Intercepts `gh` commands and enforces a command-level policy.
+# [gh_guard]
+# enabled = false             # enable the proxy (blocks destructive GitHub operations)
+# mode = "block"              # "block" | "warn" | "audit"
+# scope_check = true          # enforce same-repo check on write commands
+# block_auth_token = true     # deny 'gh auth token' exfiltration
+# inject_token = false        # pre-inject GH_TOKEN into sandbox (opt-in)
+# unknown_command = "block"   # policy for commands not in classification table
+
+# ── git guard ───────────────────────────────────────────────────────────────
+# Intercepts `git` commands to prevent accidental pushes.
+# [git_guard]
+# enabled = false             # enable git command interception
+# mode = "block"              # "block" | "warn" | "audit"
+# prevent_push = true         # block push, request-pull, send-pack
+# prevent_force_push = true   # block force push (only when prevent_push = false)
+# [[git_guard.allow_push]]   # structured push exceptions
+# remote = "fork"
+# branches = ["agent/*"]
+# force = false
+
+# ── audit logging ───────────────────────────────────────────────────────────
+# Global audit log for all sandbox gate decisions.
+# [audit]
+# enabled = false
+# destination = "stderr"      # "stderr" or file path
+# level = "blocked"           # "blocked" | "decisions" | "all"
+# format = "text"             # "text" | "jsonl"
 "#
     .to_string()
 }
