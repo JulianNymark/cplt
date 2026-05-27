@@ -50,6 +50,8 @@ cplt config set sandbox.allow_lifecycle_scripts true
 
 Or for a single run: `cplt --allow-lifecycle-scripts -- -p "install dependencies"`
 
+<a id="temp-dir-exec"></a>
+
 ## Temp dir execution (go test, mise, node-gyp)
 
 Tools that compile-then-execute from `$TMPDIR` are **blocked by default** because the sandbox denies `process-exec` and `file-map-executable` from `/private/tmp` and `/private/var/folders`. This affects:
@@ -89,7 +91,7 @@ cplt config set sandbox.allow_localhost_any true
 cplt config set sandbox.allow_jvm_attach true
 
 # If you need additional write paths (e.g. custom Kotlin data dir):
-cplt config set sandbox.allow_write '["~/.local/share/kotlin"]'
+cplt config set allow.write "~/.local/share/kotlin"
 ```
 
 If you're still seeing this error, check that you haven't set `scratch_dir = false` in your config:

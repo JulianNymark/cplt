@@ -16,7 +16,7 @@ The git guard is **opt-in** (disabled by default):
 ```bash
 cplt config set git_guard.enabled true
 cplt config set git_guard.prevent_push true                  # block git push/request-pull/send-pack
-cplt config set git_guard.protect_default_branch_only false  # only block pushes to main/master
+cplt config set git_guard.protect_default_branch_only false  # block all pushes (default)
 ```
 
 <details>

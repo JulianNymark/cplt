@@ -371,7 +371,7 @@ The proxy is **enabled by default** — all outbound traffic (Copilot CLI, `gh`,
 - **Domain blocking** — block known exfiltration infrastructure (paste sites, webhook services, etc.)
 - **Domain allowlisting** — restrict connections to only known-safe domains
 - **Audit log** — persistent file log of all connections for post-session review
-- **Port enforcement** — the proxy enforces the same port restrictions as the sandbox (443 + `--allow-port`)
+- **Port enforcement** — the proxy enforces the same port restrictions as the sandbox (443 + extra ports via `allow.ports`)
 
 **Disable for a single run:**
 
@@ -395,6 +395,9 @@ cplt config set proxy.allowed_domains "~/.config/cplt/allowed-domains.txt"
 cplt config set proxy.log_file "~/.config/cplt/proxy.log"
 ```
 
+<details>
+<summary>CLI flags reference (override for a single run)</summary>
+
 | Flag                        | What it does                                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------------------------ |
 | `--with-proxy`              | Explicitly enable the proxy (no-op when proxy is already on by default).                         |
@@ -405,6 +408,8 @@ cplt config set proxy.log_file "~/.config/cplt/proxy.log"
 | `--proxy-log <FILE>`        | Append a line per connection to this file for post-session audit.                                |
 | `--proxy-log-level <LEVEL>` | Stderr verbosity: `none` (default/silent), `error`, `blocked`, or `all`. The audit log file always records everything. |
 | `--allow-private-domain <DOMAIN>` | Allow connections to this domain even if it resolves to a private/internal IP. Use for corporate intranet services (e.g. internal MCP servers). Suffix matching: `intern.nav.no` covers all subdomains. Can be repeated. |
+
+</details>
 
 > **Domain matching:** both blocklist and allowlist use the same rules — `example.com` matches the exact domain and all subdomains (`sub.example.com`, `deep.sub.example.com`). Matching is case-insensitive. Trailing dots are stripped.
 >
@@ -756,15 +761,15 @@ The sandbox blocks some workflows by design. Common issues and fixes:
 
 | Impact | Fix |
 |---|---|
-| `.env` files blocked | `--allow-env-files` |
-| npm postinstall hooks blocked | `--allow-lifecycle-scripts` |
-| `go test` / `mise run` blocked (temp exec) | Scratch dir is on by default; use `--allow-tmp-exec` if needed |
-| Localhost connections blocked | `--allow-localhost <PORT>` or `--allow-localhost-any` |
-| Docker blocked | `--allow-docker` ⚠️ |
+| `.env` files blocked | `cplt config set sandbox.allow_env_files true` |
+| npm postinstall hooks blocked | `cplt config set sandbox.allow_lifecycle_scripts true` |
+| `go test` / `mise run` blocked (temp exec) | Scratch dir is on by default; `cplt config set sandbox.allow_tmp_exec true` if needed |
+| Localhost connections blocked | `cplt config set allow.localhost 3000` or `cplt config set sandbox.allow_localhost_any true` |
+| Docker blocked | `cplt config set sandbox.allow_docker true` ⚠️ |
 | SSH blocked | Use HTTPS remotes instead |
-| GPG signing disabled | `--allow-gpg-signing` |
-| JVM MockK/Mockito fails | `--allow-jvm-attach` |
-| Private registry creds blocked | `--allow-read ~/.m2/settings.xml` |
+| GPG signing disabled | `cplt config set sandbox.allow_gpg_signing true` |
+| JVM MockK/Mockito fails | `cplt config set sandbox.allow_jvm_attach true` |
+| Private registry creds blocked | `cplt config set allow.read "~/.m2/settings.xml"` |
 
 📖 **Full details with tables and troubleshooting:** [docs/known-impacts.md](docs/known-impacts.md)
 
@@ -812,18 +817,15 @@ npm/yarn/pnpm lifecycle scripts are **blocked by default** via `npm_config_ignor
 | `npm run build` / `npm test`     | ✅ Works     | Explicit scripts are not blocked, only lifecycle hooks         |
 | `yarn install` (Yarn Berry)      | ⚠️ May fail  | If packages have install scripts                               |
 
-**Fix:** Use `--allow-lifecycle-scripts` when the project needs postinstall hooks:
+**Fix:**
 
 ```bash
-cplt --allow-lifecycle-scripts -- -p "install dependencies and build the project"
+cplt config set sandbox.allow_lifecycle_scripts true
 ```
 
-Or set it permanently in config:
+Or for a single run: `cplt --allow-lifecycle-scripts`
 
-```toml
-[sandbox]
-allow_lifecycle_scripts = true
-```
+<a id="temp-dir-exec"></a>
 
 ### Temp dir execution (go test, mise, node-gyp)
 
@@ -866,7 +868,7 @@ cplt config set sandbox.allow_localhost_any true
 cplt config set sandbox.allow_jvm_attach true
 
 # If you need additional write paths (e.g. custom Kotlin data dir):
-cplt config set sandbox.allow_write '["~/.local/share/kotlin"]'
+cplt config set allow.write "~/.local/share/kotlin"
 ```
 
 If you're still seeing this error, check that you haven't set `scratch_dir = false` in your config:
@@ -881,26 +883,17 @@ Some tools unpack and execute binaries directly from `~/Library/Caches`, which i
 
 | Tool | Cache path | Fix |
 |---|---|---|
-| Playwright (browsers) | `~/Library/Caches/ms-playwright/` | `--allow-cache-exec ms-playwright` |
-| pnpm dlx | `~/Library/Caches/pnpm/dlx/` | `--allow-cache-exec pnpm/dlx` |
+| Playwright (browsers) | `~/Library/Caches/ms-playwright/` | `cplt config set sandbox.allow_cache_exec ms-playwright` |
+| pnpm dlx | `~/Library/Caches/pnpm/dlx/` | `cplt config set sandbox.allow_cache_exec pnpm/dlx` |
+
+**Fix:**
 
 ```bash
-# Allow Playwright browser binaries
-cplt --allow-cache-exec ms-playwright -- -p "run the e2e tests"
-
-# Allow pnpm dlx-cached binaries
-cplt --allow-cache-exec pnpm/dlx -- -p "run the scripts"
-
-# Both at once
-cplt --allow-cache-exec ms-playwright --allow-cache-exec pnpm/dlx -- -p "run tests"
+cplt config set sandbox.allow_cache_exec ms-playwright
+cplt config set sandbox.allow_cache_exec pnpm/dlx
 ```
 
-Or set permanently in config:
-
-```toml
-[sandbox]
-allow_cache_exec = ["ms-playwright", "pnpm/dlx"]
-```
+Or for a single run: `cplt --allow-cache-exec ms-playwright --allow-cache-exec pnpm/dlx`
 
 `--allow-cache-exec-any` opens exec for all of `~/Library/Caches` — use only as a last resort.
 
@@ -1049,18 +1042,13 @@ Certain git operations are blocked to prevent persistence attacks that survive t
 
 GPG commit/tag signing is **disabled by default** because `~/.gnupg` is blocked. Copilot commits are unsigned — you re-sign on merge/squash.
 
-If you want Copilot commits to be signed (e.g. branch protection requires signatures), use `--allow-gpg-signing`:
+If you want Copilot commits to be signed (e.g. branch protection requires signatures):
 
 ```bash
-cplt --allow-gpg-signing -- -p "commit your changes"
+cplt config set sandbox.allow_gpg_signing true
 ```
 
-Or set it permanently in config:
-
-```toml
-[sandbox]
-allow_gpg_signing = true
-```
+Or for a single run: `cplt --allow-gpg-signing`
 
 **Setup checklist:**
 
@@ -1168,23 +1156,14 @@ Registry credential files are **blocked by default** because they typically cont
 
 For Maven, Gradle, and Cargo files, you can override this with `--allow-read`:
 
+**Fix:**
+
 ```bash
-# Per session — Maven
-cplt --allow-read ~/.m2/settings.xml -- -p "build with Maven"
-
-# Per session — Gradle
-cplt --allow-read ~/.gradle/gradle.properties -- -p "build with Gradle"
-
-# Multiple files
-cplt --allow-read ~/.m2/settings.xml --allow-read ~/.gradle/gradle.properties -- -p "build"
+cplt config set allow.read "~/.m2/settings.xml"
+cplt config set allow.read "~/.gradle/gradle.properties"
 ```
 
-To allow permanently, add to `~/.config/cplt/config.toml`:
-
-```toml
-[allow]
-read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
-```
+Or for a single run: `cplt --allow-read ~/.m2/settings.xml`
 
 > **Note:** `.npmrc` cannot be overridden — it is in the hard-deny list alongside `.netrc` and `.pypirc`. If you need npm private registry access, consider using project-level `.npmrc` (which is readable as part of the project directory) with a token injected via environment variable.
 

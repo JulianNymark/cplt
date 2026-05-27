@@ -29,8 +29,8 @@ cplt config set git_guard.prevent_push true         # block git push/request-pul
 For per-repo enforcement (committed to version control):
 
 ```bash
-cplt config set --repo gh_guard true
-cplt config set --repo git_push_prevention true
+cplt config set --repo sandbox.gh_proxy true
+cplt config set --repo sandbox.git_push_prevention true
 ```
 
 <details>

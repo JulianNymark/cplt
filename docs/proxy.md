@@ -65,7 +65,7 @@ When the proxy is enabled, it supports both **blocking** (deny known-bad domains
 Block domains commonly used for data exfiltration. A default blocklist is included based on real attack infrastructure observed in 2025–2026 supply chain incidents:
 
 ```bash
-cplt --blocked-domains blocked-domains.txt -- -p "fix tests"
+cplt config set proxy.blocked_domains "~/.config/cplt/blocked-domains.txt"
 ```
 
 The blocklist covers webhook capture services, paste sites, file sharing, tunneling services, and IP recon endpoints. See [`blocked-domains.txt`](../blocked-domains.txt) for the full list with sources.
@@ -75,7 +75,7 @@ The blocklist covers webhook capture services, paste sites, file sharing, tunnel
 Restrict connections to only specific domains. When set, the proxy blocks everything not in the list:
 
 ```bash
-cplt --allowed-domains allowed-domains.txt -- -p "fix tests"
+cplt config set proxy.allowed_domains "~/.config/cplt/allowed-domains.txt"
 ```
 
 Example `allowed-domains.txt` for Copilot-only access:
@@ -90,13 +90,11 @@ telemetry.business.githubcopilot.com
 
 Both blocklist and allowlist can be used together — allowlist is checked first, then blocklist.
 
-Set either permanently in `~/.config/cplt/config.toml`:
+Set either permanently:
 
-```toml
-[proxy]
-enabled = true
-blocked_domains = "~/.config/cplt/blocked-domains.txt"
-# allowed_domains = "~/.config/cplt/allowed-domains.txt"
+```bash
+cplt config set proxy.blocked_domains "~/.config/cplt/blocked-domains.txt"
+cplt config set proxy.allowed_domains "~/.config/cplt/allowed-domains.txt"
 ```
 
 > **Note:** Both the allowlist and blocklist are re-read from disk every ~5 seconds (TTL-cached), so you can edit them live mid-session. Changes take effect within seconds without restarting cplt. If a file becomes unreadable at runtime, the last-known-good list is kept (fail-safe). At startup, an unreadable allowlist causes cplt to exit with an error (fail-closed).
@@ -118,7 +116,7 @@ Every connection attempt is printed to stderr in real time:
 To write a persistent audit log:
 
 ```bash
-cplt --proxy-log ~/.config/cplt/proxy.log -- -p "fix tests"
+cplt config set proxy.log_file "~/.config/cplt/proxy.log"
 ```
 
 Log file format (one line per connection):
@@ -148,21 +146,21 @@ Log file format (one line per connection):
 **Tool blocked with `BLOCKED-PRIVATE-RESOLVED`** — a domain (typically corporate intranet) resolved to a private IP:
 
 ```bash
-cplt --allow-private-domain mcp-onboarding.intern.nav.no -- -p "use the MCP server"
-# Or match all subdomains:
-cplt --allow-private-domain intern.nav.no -- -p "use the MCP server"
+cplt config set proxy.allow_private_domains intern.nav.no
 ```
 
-**MCP server on localhost blocked** — use `--allow-localhost` (not `--allow-private-domain`):
+Or for a single run: `cplt --allow-private-domain intern.nav.no`
+
+**MCP server on localhost blocked** — use `allow.localhost` (not `allow_private_domains`):
 
 ```bash
-cplt --allow-localhost 3000 -- -p "use local MCP server"
+cplt config set allow.localhost 3000
 ```
 
 **Tool needs a non-443 port** — add it explicitly:
 
 ```bash
-cplt --allow-port 8443 -- -p "test the API"
+cplt config set allow.ports 8443
 ```
 
 **Nothing connects — check if proxy is running:**
@@ -185,8 +183,8 @@ If you need to chain through a corporate proxy instead of using cplt's built-in 
 
 ```bash
 cplt config set proxy.enabled false
-cplt config set allow.env HTTP_PROXY
-cplt config set allow.env HTTPS_PROXY
+cplt config set sandbox.pass_env HTTP_PROXY
+cplt config set sandbox.pass_env HTTPS_PROXY
 ```
 
 > **Note:** Disabling the proxy removes cplt's built-in domain filtering, connection logging, and port enforcement. The `blocked_domains` and `allowed_domains` settings are features of the built-in proxy — they have no effect when the proxy is disabled. If your corporate proxy has its own domain filtering, rely on that instead. The sandbox still enforces filesystem and process isolation regardless of proxy settings.
