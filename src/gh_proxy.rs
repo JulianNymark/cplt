@@ -1378,7 +1378,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
             "⚠️ BLOCKED by sandbox: 'gh auth token' is not allowed in this environment.\n\
              Reason: token exfiltration prevention — use GH_TOKEN env var instead.\n\
              This operation is restricted by the cplt sandbox to prevent credential leaks.\n\
-             Stop and report this to the human operator — they can run this command outside the sandbox."
+             Please make a note of this for the human operator and continue with your remaining work."
                 .to_string(),
         );
     }
@@ -1399,7 +1399,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
                         "⚠️ BLOCKED by sandbox: 'gh {} {}' cannot verify target repository scope.\n\
                          The -R flag targets {:?} but the current repo could not be detected.\n\
                          This operation is restricted by the cplt sandbox environment.\n\
-                         Stop and report this to the human operator — they can run this command outside the sandbox.",
+                        Please make a note of this for the human operator and continue with your remaining work.",
                         cmd.command,
                         cmd.subcommand.as_deref().unwrap_or(""),
                         cmd.repo_flag.as_deref().unwrap_or("unknown")
@@ -1414,7 +1414,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
                     "⚠️ BLOCKED by sandbox: 'gh {}{}' targets '{}' which is outside the current repo '{}'.\n\
                      Reason: {}\n\
                      This operation is restricted by the cplt sandbox environment.\n\
-                     Stop and report this to the human operator — they can run this command outside the sandbox.",
+                    Please make a note of this for the human operator and continue with your remaining work.",
                     cmd.command,
                     cmd.subcommand
                         .as_deref()
@@ -1433,7 +1433,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
             "⚠️ BLOCKED by sandbox: 'gh {}{}' is not allowed in this environment.\n\
              Reason: {}\n\
              This operation is restricted by the cplt sandbox to prevent unintended changes.\n\
-             Stop and report this to the human operator — they can run this command outside the sandbox.",
+             Please make a note of this for the human operator and continue with your remaining work.",
             cmd.command,
             cmd.subcommand
                 .as_deref()
@@ -1447,7 +1447,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
                 "⚠️ BLOCKED by sandbox: 'gh {}{}' is not recognized by the policy table.\n\
                      This command may have been added in a newer gh CLI version.\n\
                      This operation is restricted by the cplt sandbox (default-deny for unknown commands).\n\
-                     Stop and report this to the human operator — they can run this command outside the sandbox.",
+                     Please make a note of this for the human operator and continue with your remaining work.",
                 cmd.command,
                 cmd.subcommand
                     .as_deref()
@@ -1656,7 +1656,7 @@ pub fn gate_git(
             "⚠️ BLOCKED by sandbox: 'git {sub}' is not allowed in this environment.\n\
              Push prevention is enabled — commit your changes locally.\n\
              This operation is restricted by the cplt sandbox to prevent unintended pushes.\n\
-             Stop and report this to the human operator — they will review and push when ready."
+             Please make a note of this for the human operator and continue with your remaining work."
         ));
     }
 
@@ -1674,7 +1674,7 @@ pub fn gate_git(
             return Err(
                 "⚠️ BLOCKED by sandbox: 'git push --force' is not allowed in this environment.\n\
                  Force push prevention is enabled — regular push is allowed but force push is blocked.\n\
-                 Stop and report this to the human operator."
+                 Please make a note of this for the human operator and continue with your remaining work."
                     .to_string(),
             );
         }
