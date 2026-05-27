@@ -12,34 +12,30 @@ The proxy is **enabled by default** — all outbound traffic (Copilot CLI, `gh`,
 - **Audit log** — persistent file log of all connections for post-session review
 - **Port enforcement** — the proxy enforces the same port restrictions as the sandbox (443 + `--allow-port`)
 
-**Disable for a single run:**
+**Disable for a single run** (override):
 
 ```bash
 cplt --no-proxy -- -p "fix the tests"
 ```
 
-**Disable permanently** (in `~/.config/cplt/config.toml`):
+**Disable the proxy:**
 
-```toml
-[proxy]
-enabled = false
+```bash
+cplt config set proxy.enabled false
 ```
 
 **Add connection filtering** (recommended):
 
 ```bash
-cplt --init-config
+cplt config set proxy.blocked_domains "~/.config/cplt/blocked-domains.txt"
+# or restrict to known-safe domains only:
+cplt config set proxy.allowed_domains "~/.config/cplt/allowed-domains.txt"
+# optional audit log:
+cplt config set proxy.log_file "~/.config/cplt/proxy.log"
 ```
 
-Then edit `~/.config/cplt/config.toml`:
-
-```toml
-[proxy]
-# blocked_domains = "~/.config/cplt/blocked-domains.txt"  # block known-bad domains
-# allowed_domains = "~/.config/cplt/allowed-domains.txt"  # restrict to known-safe domains
-# log_file = "~/.config/cplt/proxy.log"                   # persistent audit log
-# log_level = "none"                                      # stderr: none|error|blocked|all
-```
+<details>
+<summary>CLI flags reference (override for a single run)</summary>
 
 | Flag                        | What it does                                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -51,6 +47,8 @@ Then edit `~/.config/cplt/config.toml`:
 | `--proxy-log <FILE>`        | Append a line per connection to this file for post-session audit.                                |
 | `--proxy-log-level <LEVEL>` | Stderr verbosity: `none` (default/silent), `error`, `blocked`, or `all`. The audit log file always records everything. |
 | `--allow-private-domain <DOMAIN>` | Allow connections to this domain even if it resolves to a private/internal IP. Use for corporate intranet services (e.g. internal MCP servers). Suffix matching: `intern.nav.no` covers all subdomains. Can be repeated. |
+
+</details>
 
 > **Domain matching:** both blocklist and allowlist use the same rules — `example.com` matches the exact domain and all subdomains (`sub.example.com`, `deep.sub.example.com`). Matching is case-insensitive. Trailing dots are stripped.
 >
@@ -186,10 +184,12 @@ cplt injects its own `HTTP_PROXY`/`HTTPS_PROXY` into the sandbox environment, re
 If you need to chain through a corporate proxy instead of using cplt's built-in proxy:
 
 ```bash
-cplt --no-proxy --pass-env HTTP_PROXY --pass-env HTTPS_PROXY -- -p "fix tests"
+cplt config set proxy.enabled false
+cplt config set allow.env HTTP_PROXY
+cplt config set allow.env HTTPS_PROXY
 ```
 
-> **Note:** `--no-proxy` disables cplt's built-in domain filtering, connection logging, and port enforcement. The `--allowed-domains` and `--blocked-domains` flags are features of the built-in proxy — they have no effect when the proxy is disabled. If your corporate proxy has its own domain filtering, rely on that instead. The sandbox still enforces filesystem and process isolation regardless of proxy settings.
+> **Note:** Disabling the proxy removes cplt's built-in domain filtering, connection logging, and port enforcement. The `blocked_domains` and `allowed_domains` settings are features of the built-in proxy — they have no effect when the proxy is disabled. If your corporate proxy has its own domain filtering, rely on that instead. The sandbox still enforces filesystem and process isolation regardless of proxy settings.
 
 ## Copilot CLI network endpoints
 

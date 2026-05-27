@@ -379,27 +379,20 @@ The proxy is **enabled by default** — all outbound traffic (Copilot CLI, `gh`,
 cplt --no-proxy -- -p "fix the tests"
 ```
 
-**Disable permanently** (in `~/.config/cplt/config.toml`):
+**Disable permanently:**
 
-```toml
-[proxy]
-enabled = false
+```bash
+cplt config set proxy.enabled false
 ```
 
 **Add connection filtering** (recommended):
 
 ```bash
-cplt --init-config
-```
-
-Then edit `~/.config/cplt/config.toml`:
-
-```toml
-[proxy]
-# blocked_domains = "~/.config/cplt/blocked-domains.txt"  # block known-bad domains
-# allowed_domains = "~/.config/cplt/allowed-domains.txt"  # restrict to known-safe domains
-# log_file = "~/.config/cplt/proxy.log"                   # persistent audit log
-# log_level = "none"                                      # stderr: none|error|blocked|all
+cplt config set proxy.blocked_domains "~/.config/cplt/blocked-domains.txt"
+# or restrict to known-safe domains only:
+cplt config set proxy.allowed_domains "~/.config/cplt/allowed-domains.txt"
+# optional audit log:
+cplt config set proxy.log_file "~/.config/cplt/proxy.log"
 ```
 
 | Flag                        | What it does                                                                                     |
@@ -617,7 +610,17 @@ cplt --agent shell -- -c 'npm test'
 cplt is configured at two levels: **global** (developer preferences) and **per-repo** (team policy).
 
 ```bash
-cplt --init-config    # create a starter global config
+# Set global preferences
+cplt config set sandbox.quiet true
+cplt config set proxy.blocked_domains "~/.config/cplt/blocked-domains.txt"
+cplt config set gh_guard.enabled true
+cplt config set git_guard.enabled true
+
+# Set per-repo policy (committed to .cplt.toml)
+cplt config set --repo sandbox.allow_jvm_attach true
+cplt config set --repo deny.paths "~/secrets"
+
+# Inspect
 cplt config show      # show effective config (file + defaults)
 cplt config explain   # list all keys with descriptions
 ```

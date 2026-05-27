@@ -17,17 +17,18 @@ The sandbox is kernel-enforced — **all restrictions apply to every process spa
 | `.env.example`                 | ⚠️ Blocked  | Matches `.env.*` pattern — use `--allow-env-files` if needed          |
 | Writing `.env` files           | ✅ Works    | Only read is denied; Copilot can create `.env` from templates         |
 
-**Fix:** Use `--allow-env-files` when working on projects that need env file loading:
+**Fix:**
 
 ```bash
-cplt --allow-env-files -- -p "start the dev server and fix the failing test"
+cplt config set sandbox.allow_env_files true
 ```
 
-Or set it permanently in config:
+Or for a single run: `cplt --allow-env-files -- -p "start the dev server"`
 
-```toml
-[sandbox]
-allow_env_files = true
+Or set it permanently:
+
+```bash
+cplt config set sandbox.allow_env_files true
 ```
 
 ## Lifecycle scripts (postinstall hooks)
@@ -41,18 +42,13 @@ npm/yarn/pnpm lifecycle scripts are **blocked by default** via `npm_config_ignor
 | `npm run build` / `npm test`     | ✅ Works     | Explicit scripts are not blocked, only lifecycle hooks         |
 | `yarn install` (Yarn Berry)      | ⚠️ May fail  | If packages have install scripts                               |
 
-**Fix:** Use `--allow-lifecycle-scripts` when the project needs postinstall hooks:
+**Fix:**
 
 ```bash
-cplt --allow-lifecycle-scripts -- -p "install dependencies and build the project"
+cplt config set sandbox.allow_lifecycle_scripts true
 ```
 
-Or set it permanently in config:
-
-```toml
-[sandbox]
-allow_lifecycle_scripts = true
-```
+Or for a single run: `cplt --allow-lifecycle-scripts -- -p "install dependencies"`
 
 ## Temp dir execution (go test, mise, node-gyp)
 
@@ -111,23 +107,14 @@ Some tools unpack and execute binaries directly from `~/Library/Caches`, which i
 | Playwright (browsers) | `~/Library/Caches/ms-playwright/` | `--allow-cache-exec ms-playwright` |
 | pnpm dlx | `~/Library/Caches/pnpm/dlx/` | `--allow-cache-exec pnpm/dlx` |
 
+**Fix:**
+
 ```bash
-# Allow Playwright browser binaries
-cplt --allow-cache-exec ms-playwright -- -p "run the e2e tests"
-
-# Allow pnpm dlx-cached binaries
-cplt --allow-cache-exec pnpm/dlx -- -p "run the scripts"
-
-# Both at once
-cplt --allow-cache-exec ms-playwright --allow-cache-exec pnpm/dlx -- -p "run tests"
+cplt config set sandbox.allow_cache_exec ms-playwright
+cplt config set sandbox.allow_cache_exec pnpm/dlx
 ```
 
-Or set permanently in config:
-
-```toml
-[sandbox]
-allow_cache_exec = ["ms-playwright", "pnpm/dlx"]
-```
+Or for a single run: `cplt --allow-cache-exec ms-playwright --allow-cache-exec pnpm/dlx`
 
 `--allow-cache-exec-any` opens exec for all of `~/Library/Caches` — use only as a last resort.
 
@@ -149,7 +136,7 @@ Localhost outbound is blocked by default, which prevents sandboxed processes fro
 | Spring Boot (`:8080`)          | ❌ Blocked         | Use `--allow-localhost 8080`                         |
 | Next.js/Turbopack build        | ❌ Workers blocked | Use `--allow-localhost-any` (random ephemeral ports) |
 
-**Fix:** Use `--allow-localhost <PORT>` for specific services, or `--allow-localhost-any` for build tools that use random ports (Next.js, Vite, esbuild).
+**Fix:** Use `cplt config set allow.localhost <PORT>` for specific services, or `cplt config set sandbox.allow_localhost_any true` for build tools that use random ports (Next.js, Vite, esbuild).
 
 ## Docker and Testcontainers
 
@@ -270,18 +257,13 @@ Certain git operations are blocked to prevent persistence attacks that survive t
 
 GPG commit/tag signing is **disabled by default** because `~/.gnupg` is blocked. Copilot commits are unsigned — you re-sign on merge/squash.
 
-If you want Copilot commits to be signed (e.g. branch protection requires signatures), use `--allow-gpg-signing`:
+If you want Copilot commits to be signed (e.g. branch protection requires signatures):
 
 ```bash
-cplt --allow-gpg-signing -- -p "commit your changes"
+cplt config set sandbox.allow_gpg_signing true
 ```
 
-Or set it permanently in config:
-
-```toml
-[sandbox]
-allow_gpg_signing = true
-```
+Or for a single run: `cplt --allow-gpg-signing`
 
 **Setup checklist:**
 
@@ -343,17 +325,13 @@ If all of that works, `cplt --allow-gpg-signing` will work too. The `gpg-agent` 
 
 JVM testing frameworks like **MockK** (inline mocking), **Mockito** (inline agents), and **ByteBuddy** use the JVM Attach API for runtime class instrumentation. This API creates a Unix domain socket at `/tmp/.java_pid<PID>` — which the sandbox blocks by default.
 
-Enable it with `--allow-jvm-attach`:
-
-```bash
-cplt --allow-jvm-attach -- -p "run the tests"
-```
-
-Or permanently in config:
+Enable it:
 
 ```bash
 cplt config set sandbox.allow_jvm_attach true
 ```
+
+Or for a single run: `cplt --allow-jvm-attach`
 
 **When to enable:**
 
@@ -368,7 +346,11 @@ cplt config set sandbox.allow_jvm_attach true
 
 ## Port restriction
 
-Only port 443 is allowed by default. Services on other ports need `--allow-port`:
+Only port 443 is allowed by default. Services on other ports need explicit configuration:
+
+```bash
+cplt config set allow.ports 8443
+```
 
 - `npm install` from private registries on non-standard ports
 - API calls to services not on 443
@@ -389,23 +371,14 @@ Registry credential files are **blocked by default** because they typically cont
 
 For Maven, Gradle, and Cargo files, you can override this with `--allow-read`:
 
+**Fix:**
+
 ```bash
-# Per session — Maven
-cplt --allow-read ~/.m2/settings.xml -- -p "build with Maven"
-
-# Per session — Gradle
-cplt --allow-read ~/.gradle/gradle.properties -- -p "build with Gradle"
-
-# Multiple files
-cplt --allow-read ~/.m2/settings.xml --allow-read ~/.gradle/gradle.properties -- -p "build"
+cplt config set allow.read "~/.m2/settings.xml"
+cplt config set allow.read "~/.gradle/gradle.properties"
 ```
 
-To allow permanently, add to `~/.config/cplt/config.toml`:
-
-```toml
-[allow]
-read = ["~/.m2/settings.xml", "~/.gradle/gradle.properties"]
-```
+Or for a single run: `cplt --allow-read ~/.m2/settings.xml`
 
 > **Note:** `.npmrc` cannot be overridden — it is in the hard-deny list alongside `.netrc` and `.pypirc`. If you need npm private registry access, consider using project-level `.npmrc` (which is readable as part of the project directory) with a token injected via environment variable.
 

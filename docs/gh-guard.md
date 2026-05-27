@@ -14,6 +14,39 @@ The git guard prevents agents from pushing code by blocking `git push`,
 
 Both features are **opt-in** (disabled by default) for a safe rollout:
 
+```bash
+# Enable gh guard (blocks destructive gh operations)
+cplt config set gh_guard.enabled true
+cplt config set gh_guard.scope_check true          # enforce repo-scoping on write commands
+cplt config set gh_guard.block_auth_token true     # deny "gh auth token" exfiltration
+cplt config set gh_guard.unknown_command block      # block unrecognized gh commands
+
+# Enable git guard (blocks git push)
+cplt config set git_guard.enabled true
+cplt config set git_guard.prevent_push true         # block git push/request-pull
+```
+
+For per-repo enforcement (committed to version control):
+
+```bash
+cplt config set --repo gh_guard true
+cplt config set --repo git_push_prevention true
+```
+
+<details>
+<summary>CLI flags (override for a single run)</summary>
+
+```bash
+cplt --gh-guard          # enable gh guard
+cplt --no-gh-guard       # disable gh guard
+cplt --git-guard         # enable git push prevention
+cplt --no-git-guard      # disable git push prevention
+```
+</details>
+
+<details>
+<summary>Advanced: full TOML reference</summary>
+
 ```toml
 # ~/.config/cplt/config.toml
 
@@ -28,22 +61,7 @@ unknown_command = "block"   # block|allow unrecognized gh commands
 enabled = true              # blocks git push
 prevent_push = true         # block git push/request-pull
 ```
-
-CLI flags (override config for a single run):
-
-```bash
-cplt --gh-guard          # enable gh guard
-cplt --no-gh-guard       # disable gh guard
-cplt --git-guard         # enable git push prevention
-cplt --no-git-guard      # disable git push prevention
-```
-
-Per-repo via `.cplt.toml`:
-```toml
-[propose]
-gh_guard = true
-git_push_prevention = true
-```
+</details>
 
 ### Backward compatibility
 

@@ -1,10 +1,47 @@
 # Configuration
 
+## Quick setup
+
+Use `cplt config set` to configure cplt without editing files:
+
+```bash
+cplt config set sandbox.quiet true
+cplt config set proxy.port 9090
+cplt config set allow.read ~/Desktop
+cplt config set allow.ports 8080
+cplt config set gh_guard.enabled true
+cplt config set git_guard.enabled true
+```
+
+For project-specific settings (committed to `.cplt.toml`):
+
+```bash
+cplt config set --repo sandbox.allow_jvm_attach true
+cplt config set --repo allow.ports 8080
+cplt config set --repo deny.paths "~/secrets"
+```
+
+**Removing values:**
+
+```bash
+cplt config set allow.read ~/Desktop --unset     # remove one element
+cplt config set allow.read --unset               # remove entire key
+cplt config set sandbox.quiet --unset            # revert to default
+```
+
+**Inspecting config:**
+
+```bash
+cplt config show                          # show effective config (file + defaults)
+cplt config get sandbox.quiet             # get a single value
+cplt config explain                       # list all keys with descriptions
+cplt config explain sandbox.pass_env      # explain a specific key
+cplt config validate                      # check for syntax errors and unknown keys
+```
+
 ## Configuration file
 
-Save your preferred defaults to `~/.config/cplt/config.toml` so you don't need to pass flags every time.
-
-**Create the default config:**
+The config file lives at `~/.config/cplt/config.toml`. You can create a starter template with:
 
 ```bash
 cplt --init-config
@@ -65,42 +102,9 @@ CPLT_CONFIG=/path/to/custom.toml cplt -- --version
 
 **Path expansion:** Paths in `[allow]` and `[deny]` support `~/` expansion and are resolved relative to the config file directory. `proxy.blocked_domains` supports `~/` expansion only.
 
-### Managing config from the CLI
+### Advanced: editing TOML directly
 
-Instead of editing TOML by hand, use `cplt config`:
-
-```bash
-cplt config show                          # show effective config (file + defaults)
-cplt config get sandbox.quiet             # get a single value
-cplt config explain                       # list all keys with descriptions
-cplt config explain sandbox.pass_env      # explain a specific key
-cplt config validate                      # check for syntax errors and unknown keys
-```
-
-**Setting values:**
-
-```bash
-# Scalar keys — set replaces the value
-cplt config set sandbox.quiet true
-cplt config set proxy.port 9090
-
-# Array keys — set appends (idempotent, no duplicates)
-cplt config set allow.read ~/Desktop
-cplt config set allow.read ~/Documents    # adds a second entry
-cplt config set allow.read ~/Desktop      # no-op, already present
-cplt config set allow.ports 8080
-```
-
-**Removing values:**
-
-```bash
-# Remove a single element from an array
-cplt config set allow.read ~/Desktop --unset
-
-# Remove an entire key (reverts to default)
-cplt config set allow.read --unset
-cplt config set sandbox.quiet --unset
-```
+For complex configuration (arrays of objects, multi-line values), you can edit `~/.config/cplt/config.toml` directly. Use `cplt config validate` to check for errors after editing.
 
 **Repo-local config (`--repo`):**
 

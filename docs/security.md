@@ -30,7 +30,7 @@ SBPL (Seatbelt Profile Language) does not support wildcard port filtering by IP 
 - **SSH agent is blocked** — unix socket access is denied, preventing use of loaded SSH keys
 - **Filesystem isolation is the primary control** — credentials are kernel-blocked regardless of network
 - **The proxy is on by default** — logs and filters all outbound connections (Copilot, gh, curl)
-- **Use `--allow-port`** to add extra ports when needed (e.g., `--allow-port 8080` for a dev server)
+- **Use `cplt config set allow.ports 8080`** to add extra ports when needed (e.g., for a dev server)
 
 See [SECURITY.md](../SECURITY.md) for the full threat model and honest gaps.
 

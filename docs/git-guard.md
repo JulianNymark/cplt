@@ -13,30 +13,28 @@ but a human must review and push.
 
 The git guard is **opt-in** (disabled by default):
 
-```toml
-# ~/.config/cplt/config.toml
-
-[git_guard]
-enabled = true                       # activate the git wrapper
-prevent_push = true                  # block git push/request-pull/send-pack
-protect_default_branch_only = false  # only block pushes to main/master
+```bash
+cplt config set git_guard.enabled true
+cplt config set git_guard.prevent_push true                  # block git push/request-pull/send-pack
+cplt config set git_guard.protect_default_branch_only false  # only block pushes to main/master
 ```
 
-Or via CLI:
+<details>
+<summary>CLI flag (override for a single run)</summary>
 
 ```bash
 cplt --git-guard -- -p "fix the tests"
 ```
+</details>
 
 ### protect_default_branch_only
 
 When enabled, only pushes to the default branch (`main` or `master`) are
 blocked. Feature branch pushes are allowed:
 
-```toml
-[git_guard]
-enabled = true
-protect_default_branch_only = true
+```bash
+cplt config set git_guard.enabled true
+cplt config set git_guard.protect_default_branch_only true
 ```
 
 | Command | Result |
