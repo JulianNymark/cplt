@@ -897,7 +897,53 @@ pub fn git_hooks_path(home_dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Discover the Electron `.app` bundle used by a VS Code-installed Copilot CLI.
+/// Detect if the project is a git worktree and return the shared `.git` directory.
+///
+/// In a git worktree, the project's `.git` is a file pointing to the main repo's
+/// `.git/worktrees/<name>`. Git operations need read+write access to the shared
+/// `.git` directory (objects, refs, packed-refs, etc.).
+///
+/// Returns `None` when:
+/// - Not in a git repo
+/// - Not a worktree (regular repo with `.git` dir in project root)
+/// - The common dir resolves to an unsafe root
+/// - The common dir is not under `$HOME`
+pub fn git_common_dir(home_dir: &Path, project_dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(project_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() || raw == ".git" {
+        // Not a worktree — the common dir is the local .git directory
+        return None;
+    }
+    // Resolve to absolute path (git may return relative from project_dir)
+    let path = if Path::new(&raw).is_absolute() {
+        PathBuf::from(&raw)
+    } else {
+        project_dir.join(&raw)
+    };
+    let resolved = std::fs::canonicalize(&path).unwrap_or(path);
+    // Safety: reject unsafe roots
+    if crate::is_unsafe_root(&resolved, home_dir) {
+        return None;
+    }
+    // Must be under $HOME to prevent overly broad filesystem access
+    if !resolved.starts_with(home_dir) {
+        return None;
+    }
+    if resolved.is_dir() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
 ///
 /// When Copilot is installed via the VS Code extension, the `copilot` binary is a
 /// shell script shim that invokes VS Code's Electron runtime:

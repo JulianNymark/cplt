@@ -1390,6 +1390,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Discover global git hooks path from core.hooksPath
     let git_hooks_path = discover::git_hooks_path(&home_dir);
 
+    // Discover git worktree common directory (shared .git for worktrees)
+    let git_common_dir = discover::git_common_dir(&home_dir, &project_dir);
+
     // Discover Electron app bundle when Copilot CLI is installed via VS Code.
     // macOS-only: the shim invokes VS Code's Electron runtime, which needs
     // dyld access to load Electron Framework from within the .app bundle.
@@ -1442,6 +1445,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         copilot_install_dir: copilot_install_dir.as_deref(),
         java_home: java_home_dir.as_deref(),
         git_hooks_path: git_hooks_path.as_deref(),
+        git_common_dir: git_common_dir.as_deref(),
         allow_gpg_signing: resolved.allow_gpg_signing,
         allow_jvm_attach: resolved.allow_jvm_attach,
         allow_docker: resolved.allow_docker,

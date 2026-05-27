@@ -358,6 +358,19 @@ pub fn generate_policy(config: &super::SandboxConfig) -> LandlockPolicy {
         });
     }
 
+    // ── Git worktree common dir: read + write ──
+    if let Some(p) = config.git_common_dir {
+        fs_rules.push(FsRule {
+            path: p.to_path_buf(),
+            access: FsAccess {
+                read: true,
+                write: true,
+                execute: false,
+                ioctl: false,
+            },
+        });
+    }
+
     // ── Scratch directory: read + write + execute (always) ──
     // The scratch dir is the controlled alternative to /tmp for compile-then-exec
     // workflows (e.g. node-gyp, cargo). Execute is always allowed here regardless
@@ -1199,6 +1212,7 @@ mod tests {
             copilot_install_dir: None,
             java_home: None,
             git_hooks_path: None,
+            git_common_dir: None,
             allow_gpg_signing: false,
             allow_jvm_attach: false,
             allow_docker: false,

@@ -471,6 +471,7 @@ fn profile_contains_deny_default() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -504,6 +505,7 @@ fn profile_allows_tty_ioctl() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -546,6 +548,7 @@ fn landlock_policy_device_files_have_ioctl() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -606,6 +609,7 @@ fn profile_grants_project_access() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -644,6 +648,7 @@ fn profile_grants_copilot_config_access() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -677,6 +682,7 @@ fn profile_denies_sensitive_dirs() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -735,6 +741,7 @@ fn profile_denies_sensitive_files() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -781,6 +788,7 @@ fn profile_denies_credential_files_in_tool_dirs() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -850,6 +858,7 @@ fn profile_allows_credential_files_when_user_opts_in() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -925,6 +934,7 @@ fn profile_extra_read_overrides_denied_dotfile_directory() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -980,6 +990,7 @@ fn profile_extra_read_overrides_multiple_denied_dotfile_dirs() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1033,6 +1044,7 @@ fn profile_restricts_outbound_tcp() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1093,6 +1105,7 @@ fn profile_extra_ports_adds_allows() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1137,6 +1150,7 @@ fn profile_allow_browser_enables_lsopen() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1173,6 +1187,7 @@ fn profile_proxy_port_allows_localhost() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1213,6 +1228,7 @@ fn profile_allow_localhost_opens_specific_ports() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1268,6 +1284,7 @@ fn profile_deny_rules_come_after_allow_rules() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1310,6 +1327,7 @@ fn profile_allows_gh_config_read_only() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1354,6 +1372,7 @@ fn profile_allows_file_map_executable_for_copilot() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1394,6 +1413,7 @@ fn profile_denies_env_files_by_default() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1458,6 +1478,7 @@ fn profile_allows_env_files_when_flag_set() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1494,6 +1515,7 @@ fn profile_env_deny_comes_after_project_allow() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1542,6 +1564,7 @@ fn profile_env_deny_comes_after_user_allows() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1629,6 +1652,7 @@ fn profile_allows_all_localhost_when_flag_set() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1683,6 +1707,7 @@ fn profile_allows_all_tcp_outbound_when_jvm_and_localhost_any() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: true,
         allow_docker: false,
@@ -1733,6 +1758,7 @@ fn profile_denies_write_to_copilot_pkg() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -1954,6 +1980,7 @@ fn profile_denies_exec_from_tmp() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -2014,6 +2041,7 @@ fn profile_allows_jvm_attach_when_flag_set() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: true,
         allow_docker: false,
@@ -2094,6 +2122,7 @@ fn profile_allows_localhost_tcp_bind() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -2141,6 +2170,7 @@ fn allow_localhost_any_affects_both_backends() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -2178,6 +2208,7 @@ fn allow_localhost_any_affects_both_backends() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -2227,6 +2258,7 @@ fn config_options_parity_across_backends() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: true,
         allow_docker: false,
@@ -2309,6 +2341,7 @@ fn config_options_parity_across_backends() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: true,
         allow_docker: false,
@@ -2386,6 +2419,7 @@ fn profile_denies_git_persistence_vectors() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -2444,6 +2478,7 @@ fn profile_denies_write_to_cplt_toml() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -2484,6 +2519,7 @@ fn default_profile() -> String {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3061,6 +3097,7 @@ fn profile_scratch_dir_adds_all_permissions() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3126,6 +3163,7 @@ fn profile_allow_tmp_exec_removes_denies() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3288,6 +3326,7 @@ fn profile_allows_copilot_install_dir() {
         )),
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3335,6 +3374,7 @@ fn profile_allows_vscode_copilot_path() {
         copilot_install_dir: Some(std::path::Path::new(vscode_dir)),
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3387,6 +3427,7 @@ fn profile_allows_electron_app_bundle() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3542,6 +3583,7 @@ fn profile_allows_git_hooks_path() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: Some(std::path::Path::new("/Users/test/.config/git/hooks")),
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3572,6 +3614,68 @@ fn profile_no_git_hooks_path_omits_section() {
     assert!(
         !p.contains("Global git hooks"),
         "Default profile should not have git hooks section"
+    );
+}
+
+// ============================================================
+// git_common_dir — worktree shared directory profile emission
+// ============================================================
+
+#[test]
+fn profile_allows_git_worktree_common_dir() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/feature-branch"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        git_hooks_path: None,
+        git_common_dir: Some(std::path::Path::new("/Users/test/repos/main-repo/.git")),
+        allow_gpg_signing: false,
+        allow_jvm_attach: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains("(allow file-read* (subpath \"/Users/test/repos/main-repo/.git\"))"),
+        "Profile must allow reading worktree common dir"
+    );
+    assert!(
+        p.contains("(allow file-write* (subpath \"/Users/test/repos/main-repo/.git\"))"),
+        "Profile must allow writing worktree common dir"
+    );
+    assert!(
+        p.contains("(deny file-write* (subpath \"/Users/test/repos/main-repo/.git/hooks\"))"),
+        "Profile must deny writing to hooks in common dir"
+    );
+    assert!(
+        p.contains("(deny file-write* (literal \"/Users/test/repos/main-repo/.git/config\"))"),
+        "Profile must deny writing to config in common dir"
+    );
+}
+
+#[test]
+fn profile_no_git_common_dir_omits_section() {
+    let p = default_profile();
+    assert!(
+        !p.contains("Git worktree shared"),
+        "Default profile should not have worktree section"
     );
 }
 
@@ -3687,6 +3791,7 @@ fn profile_gpg_signing_allows_public_keyring() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3731,6 +3836,7 @@ fn profile_gpg_signing_allows_agent_socket() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3772,6 +3878,7 @@ fn profile_gpg_signing_denies_private_keys() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3812,6 +3919,7 @@ fn profile_gpg_signing_rules_come_after_deny() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3862,6 +3970,7 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3900,6 +4009,7 @@ fn profile_gpg_signing_deny_path_wins() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3941,6 +4051,7 @@ fn profile_gpg_signing_denies_legacy_secring() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -3977,6 +4088,7 @@ fn profile_gpg_signing_allows_socket_file_read() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: true,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -4272,6 +4384,84 @@ fn env_gradle_macos_sandbox_respects_pass_env() {
     );
 }
 
+// ============================================================
+// NODE_OPTIONS sanitization — strip dangerous preload flags
+// ============================================================
+
+#[test]
+fn env_node_options_strips_require() {
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        (
+            "NODE_OPTIONS",
+            "--require /tmp/evil.js --max-old-space-size=4096",
+        ),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+    let node_opts = env.vars.iter().find(|(k, _)| k == "NODE_OPTIONS");
+    assert!(node_opts.is_some());
+    assert_eq!(node_opts.unwrap().1, "--max-old-space-size=4096");
+}
+
+#[test]
+fn env_node_options_strips_loader() {
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        ("NODE_OPTIONS", "--loader=./evil.mjs --no-warnings"),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+    let node_opts = env.vars.iter().find(|(k, _)| k == "NODE_OPTIONS");
+    assert!(node_opts.is_some());
+    assert_eq!(node_opts.unwrap().1, "--no-warnings");
+}
+
+#[test]
+fn env_node_options_strips_import() {
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        (
+            "NODE_OPTIONS",
+            "--import ./register.js --dns-result-order=ipv4first",
+        ),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+    let node_opts = env.vars.iter().find(|(k, _)| k == "NODE_OPTIONS");
+    assert!(node_opts.is_some());
+    assert_eq!(node_opts.unwrap().1, "--dns-result-order=ipv4first");
+}
+
+#[test]
+fn env_node_options_removes_entirely_if_only_dangerous() {
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        ("NODE_OPTIONS", "--require /tmp/evil.js -r ./other.js"),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+    let node_opts = env.vars.iter().find(|(k, _)| k == "NODE_OPTIONS");
+    assert!(
+        node_opts.is_none(),
+        "NODE_OPTIONS should be removed entirely when only dangerous flags remain"
+    );
+}
+
+#[test]
+fn env_node_options_preserves_safe_flags() {
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        (
+            "NODE_OPTIONS",
+            "--max-old-space-size=8192 --openssl-legacy-provider --no-warnings",
+        ),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+    let node_opts = env.vars.iter().find(|(k, _)| k == "NODE_OPTIONS");
+    assert!(node_opts.is_some());
+    assert_eq!(
+        node_opts.unwrap().1,
+        "--max-old-space-size=8192 --openssl-legacy-provider --no-warnings"
+    );
+}
+
 #[test]
 fn config_parses_scratch_dir() {
     use cplt::config::Config;
@@ -4387,6 +4577,7 @@ fn profile_docker_disabled_by_default() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -4429,6 +4620,7 @@ fn profile_docker_enabled_allows_config_and_sockets() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: true,
@@ -4503,6 +4695,7 @@ fn profile_docker_skipped_when_deny_path_overlaps() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: true,
@@ -4544,6 +4737,7 @@ fn profile_allow_cache_exec_subdir_adds_carveout() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -4591,6 +4785,7 @@ fn profile_allow_cache_exec_any_allows_all_caches() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -4632,6 +4827,7 @@ fn profile_default_denies_cache_exec() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -4669,6 +4865,7 @@ fn profile_allow_cache_exec_multiple_subdirs() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -4789,6 +4986,7 @@ fn profile_cache_exec_carveout_comes_after_exec_deny() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5078,6 +5276,7 @@ fn chromium_runtime_rules_emitted_for_ms_playwright() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5133,6 +5332,7 @@ fn chromium_runtime_rules_emitted_for_ms_playwright_subpath() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5177,6 +5377,7 @@ fn chromium_runtime_rules_absent_by_default() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5218,6 +5419,7 @@ fn chromium_runtime_rules_absent_for_unrelated_cache_exec() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5260,6 +5462,7 @@ fn chromium_runtime_rules_absent_for_cache_exec_any_alone() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5311,6 +5514,7 @@ fn chromium_runtime_rules_absent_for_near_miss_names() {
             copilot_install_dir: None,
             java_home: None,
             git_hooks_path: None,
+            git_common_dir: None,
             allow_gpg_signing: false,
             allow_jvm_attach: false,
             allow_docker: false,
@@ -5365,6 +5569,7 @@ fn existing_app_dirs_none_includes_all() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5409,6 +5614,7 @@ fn existing_app_dirs_matching_includes_dir() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5454,6 +5660,7 @@ fn existing_app_dirs_nonmatching_excludes_dir() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5507,6 +5714,7 @@ fn existing_app_dirs_per_path_filtering() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,
@@ -5593,6 +5801,7 @@ fn profile_opencode_config_dir_write_scoped_to_auth_json() {
         copilot_install_dir: None,
         java_home: None,
         git_hooks_path: None,
+        git_common_dir: None,
         allow_gpg_signing: false,
         allow_jvm_attach: false,
         allow_docker: false,

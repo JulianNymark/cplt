@@ -385,6 +385,7 @@ mod macos_tests {
             copilot_install_dir: None,
             java_home: None,
             git_hooks_path: None,
+            git_common_dir: None,
             allow_gpg_signing: false,
             allow_jvm_attach: false,
             allow_docker: false,

@@ -63,6 +63,10 @@ pub struct ProfileOptions<'a> {
     /// Global git hooks directory from `core.hooksPath`.
     /// Git needs to read and execute hooks from this directory for commits.
     pub git_hooks_path: Option<&'a Path>,
+    /// Shared .git directory for git worktrees.
+    /// When the project is a worktree, git needs read+write access to the main
+    /// repo's .git directory (objects, refs, packed-refs, etc.).
+    pub git_common_dir: Option<&'a Path>,
     /// Allow GPG commit/tag signing. When true, grants read-only access to
     /// the public keyring and GPG agent socket. Private keys stay denied.
     pub allow_gpg_signing: bool,
@@ -122,6 +126,7 @@ pub fn generate_profile(opts: &ProfileOptions) -> String {
     emit_project_access(&mut sb, &project);
     emit_home_access(&mut sb, &home, opts.agent, opts.agent_dirs);
     emit_git_hooks(&mut sb, opts.git_hooks_path);
+    emit_git_worktree(&mut sb, opts.git_common_dir);
     emit_system_access(&mut sb, &home, opts.allow_browser, allow_chromium_runtime);
     emit_tool_dirs(
         &mut sb,
@@ -478,6 +483,22 @@ fn emit_git_hooks(sb: &mut String, git_hooks_path: Option<&Path>) {
         // Deny writes — hooks must not be modifiable from the sandbox.
         // Must come after any broader allow (last-match-wins).
         sbpl!(sb, "(deny file-write* (subpath \"{p}\"))");
+        sbpl!(sb);
+    }
+}
+
+/// Grant access to the shared .git directory for git worktrees.
+/// Git worktrees share objects, refs, and packed-refs with the main repo.
+/// Security denies (hooks, config) are applied to the common dir too.
+fn emit_git_worktree(sb: &mut String, git_common_dir: Option<&Path>) {
+    if let Some(common) = git_common_dir {
+        let p = common.to_string_lossy();
+        sbpl!(sb, ";; Git worktree shared directory");
+        sbpl!(sb, "(allow file-read* (subpath \"{p}\"))");
+        sbpl!(sb, "(allow file-write* (subpath \"{p}\"))");
+        // Apply the same security denies as the project .git directory
+        sbpl!(sb, "(deny file-write* (subpath \"{p}/hooks\"))");
+        sbpl!(sb, "(deny file-write* (literal \"{p}/config\"))");
         sbpl!(sb);
     }
 }

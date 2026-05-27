@@ -101,6 +101,8 @@ pub struct SandboxConfig<'a> {
     pub java_home: Option<&'a Path>,
     /// Global git hooks directory from `core.hooksPath`.
     pub git_hooks_path: Option<&'a Path>,
+    /// Shared .git directory for git worktrees.
+    pub git_common_dir: Option<&'a Path>,
     pub allow_gpg_signing: bool,
     /// Allow JVM Attach API unix sockets in /tmp (.java_pid* pattern only).
     pub allow_jvm_attach: bool,
@@ -243,6 +245,7 @@ fn prepare_impl(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         copilot_install_dir: config.copilot_install_dir,
         java_home: config.java_home,
         git_hooks_path: config.git_hooks_path,
+        git_common_dir: config.git_common_dir,
         allow_gpg_signing: config.allow_gpg_signing,
         allow_jvm_attach: config.allow_jvm_attach,
         allow_docker: config.allow_docker,
@@ -346,6 +349,9 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
     }
     if let Some(p) = config.git_hooks_path {
         policy::validate_sbpl_path(p).map_err(|e| format!("Git hooks path: {e}"))?;
+    }
+    if let Some(p) = config.git_common_dir {
+        policy::validate_sbpl_path(p).map_err(|e| format!("Git common dir: {e}"))?;
     }
     if let Some(dir) = config.electron_app_dir {
         policy::validate_sbpl_path(dir).map_err(|e| format!("Electron app path: {e}"))?;

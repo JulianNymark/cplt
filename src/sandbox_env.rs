@@ -198,5 +198,62 @@ pub fn build_sandbox_env(
             .push(("GRADLE_MACOS_SANDBOX".to_string(), "off".to_string()));
     }
 
+    // Sanitize NODE_OPTIONS: strip dangerous directives that allow preload injection.
+    // NODE_OPTIONS passes through the allowlist for legitimate use (--max-old-space-size),
+    // but --require/--loader/--import can inject code into all Node.js child processes.
+    sanitize_node_options(&mut env.vars);
+
     env
+}
+
+/// Dangerous NODE_OPTIONS flags that allow code preloading or module interception.
+const NODE_OPTIONS_DANGEROUS: &[&str] = &[
+    "--require",
+    "-r",
+    "--loader",
+    "--experimental-loader",
+    "--import",
+    "--experimental-vm-modules",
+    "--experimental-policy",
+    "--conditions",
+];
+
+/// Strip dangerous directives from NODE_OPTIONS while preserving safe ones.
+///
+/// Dangerous flags (--require, --loader, --import, etc.) allow preload injection
+/// across all Node.js child processes inside the sandbox. Safe flags like
+/// --max-old-space-size and --openssl-legacy-provider are preserved.
+fn sanitize_node_options(vars: &mut Vec<(String, String)>) {
+    let Some(pos) = vars.iter().position(|(k, _)| k == "NODE_OPTIONS") else {
+        return;
+    };
+    let original = vars[pos].1.clone();
+    let sanitized = strip_dangerous_node_flags(&original);
+    if sanitized.is_empty() {
+        vars.remove(pos);
+    } else {
+        vars[pos].1 = sanitized;
+    }
+}
+
+/// Parse NODE_OPTIONS and remove dangerous flags (and their arguments).
+fn strip_dangerous_node_flags(value: &str) -> String {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < parts.len() {
+        let part = parts[i];
+        // Check if this flag (or its --flag=value form) is dangerous
+        let flag_name = part.split('=').next().unwrap_or(part);
+        if NODE_OPTIONS_DANGEROUS.contains(&flag_name) {
+            // Skip this flag and its argument (if separate, not --flag=value)
+            if !part.contains('=') && i + 1 < parts.len() && !parts[i + 1].starts_with('-') {
+                i += 1; // skip the argument too
+            }
+        } else {
+            result.push(part);
+        }
+        i += 1;
+    }
+    result.join(" ")
 }
