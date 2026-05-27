@@ -325,6 +325,16 @@ fn gh_gate_allows_same_repo_api_endpoint() {
 }
 
 #[test]
+fn gh_gate_allows_relative_api_endpoint() {
+    // Relative paths (no leading /repos/) are resolved by gh to current repo
+    let (_, _, ok) = gh_gate(&["api", "pulls/67/comments"]);
+    assert!(
+        ok,
+        "relative API paths should be allowed (resolved to current repo)"
+    );
+}
+
+#[test]
 fn gh_gate_blocks_non_repo_api_endpoint() {
     // Endpoints like /user, /orgs don't target the current repo — blocked for security
     let (_, stderr, ok) = gh_gate(&["api", "/user"]);
@@ -756,17 +766,23 @@ fn git_gate_protect_default_allows_push_to_copilot_branch() {
 }
 
 #[test]
-fn git_gate_protect_default_allows_bare_push() {
-    // `git push` with no args pushes current branch — likely a feature branch
+fn git_gate_protect_default_blocks_bare_push() {
+    // Bare push can't verify branch (real-git=/usr/bin/true) → fail closed
     let (_, _, ok) = git_gate_protect_default(&["push"]);
-    assert!(ok, "bare git push should be allowed (current branch)");
+    assert!(
+        !ok,
+        "bare git push should be blocked when branch can't be resolved"
+    );
 }
 
 #[test]
-fn git_gate_protect_default_allows_push_with_remote_only() {
-    // `git push origin` — pushes current branch to remote
+fn git_gate_protect_default_blocks_push_with_remote_only() {
+    // `git push origin` — can't verify branch → fail closed
     let (_, _, ok) = git_gate_protect_default(&["push", "origin"]);
-    assert!(ok, "push with only remote should be allowed");
+    assert!(
+        !ok,
+        "push with only remote should be blocked when branch can't be resolved"
+    );
 }
 
 #[test]
