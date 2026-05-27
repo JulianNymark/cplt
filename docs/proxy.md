@@ -189,7 +189,7 @@ If you need to chain through a corporate proxy instead of using cplt's built-in 
 cplt --no-proxy --pass-env HTTP_PROXY --pass-env HTTPS_PROXY -- -p "fix tests"
 ```
 
-Note that `--no-proxy` disables domain filtering, connection logging, and port enforcement. Use `--allowed-domains` or `--blocked-domains` as compensating controls when possible.
+> **Note:** `--no-proxy` disables cplt's built-in domain filtering, connection logging, and port enforcement. The `--allowed-domains` and `--blocked-domains` flags are features of the built-in proxy — they have no effect when the proxy is disabled. If your corporate proxy has its own domain filtering, rely on that instead. The sandbox still enforces filesystem and process isolation regardless of proxy settings.
 
 ## Copilot CLI network endpoints
 
