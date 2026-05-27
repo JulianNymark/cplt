@@ -199,7 +199,7 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         section: "sandbox",
         key: "allow_lifecycle_scripts",
         value_type: ConfigValueType::Bool,
-        dangerous: false,
+        dangerous: true,
         default_display: "false",
         description: "Allow npm/yarn/pnpm lifecycle scripts (postinstall, prepare, etc.) to run.",
     },
