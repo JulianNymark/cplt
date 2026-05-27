@@ -256,6 +256,9 @@ impl Config {
         // Quiet: FeatureToggle resolves --quiet/--no-quiet (default: off)
         let quiet = cli.quiet.resolve(self.sandbox.quiet.unwrap_or(false));
 
+        // Yes: FeatureToggle resolves --yes/--no-yes (default: off)
+        let yes = cli.yes.resolve(self.sandbox.yes.unwrap_or(false));
+
         // gh-guard: CLI flag overrides enabled; sub-options come from [gh_proxy] config.
         // Backward compat: old `sandbox.gh_proxy = true` is treated as `gh_guard.enabled = true`.
         let gh_guard_enabled_default = self
@@ -366,6 +369,7 @@ impl Config {
             allow_browser,
             scratch_dir,
             quiet,
+            yes,
             gh_guard,
             git_guard,
             agent: self.sandbox.agent.clone(),
@@ -1092,6 +1096,32 @@ validate = false
             })
             .unwrap();
         assert!(!resolved.quiet, "--no-quiet should always win over --quiet");
+    }
+
+    #[test]
+    fn yes_disabled_by_default() {
+        let config = Config::default();
+        let resolved = config.merge(CliFlags::default()).unwrap();
+        assert!(!resolved.yes);
+    }
+
+    #[test]
+    fn config_yes_enables_auto_confirm() {
+        let config: Config = toml::from_str("[sandbox]\nyes = true\n").unwrap();
+        let resolved = config.merge(CliFlags::default()).unwrap();
+        assert!(resolved.yes);
+    }
+
+    #[test]
+    fn no_yes_flag_overrides_config_yes() {
+        let config: Config = toml::from_str("[sandbox]\nyes = true\n").unwrap();
+        let resolved = config
+            .merge(CliFlags {
+                yes: FeatureToggle::ForceOff,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!resolved.yes);
     }
 
     #[test]

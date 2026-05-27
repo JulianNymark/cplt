@@ -383,8 +383,14 @@ the attack surface. Prefer --allow-cache-exec with specific subdirs (e.g.,
     /// Skip the interactive confirmation prompt and proceed immediately.
     /// The sandbox configuration summary is still printed for auditability.
     /// Required when stdin is not a TTY (CI, scripts, piped input).
+    /// Can also be set in config: sandbox.yes = true
     #[arg(long, short = 'y')]
     yes: bool,
+
+    /// Show the confirmation prompt even if sandbox.yes = true in the config file.
+    /// Overrides the config setting for this run.
+    #[arg(long)]
+    no_yes: bool,
 
     /// Auto-approve all permissions from .cplt.toml for this run only.
     /// For CI/scripts where interactive approval isn't possible.
@@ -879,6 +885,7 @@ fn resolve_context(cli: &Cli) -> anyhow::Result<ResolvedContext> {
         allow_browser: cli.allow_browser,
         scratch: config::FeatureToggle::from_pair(cli.scratch_dir, cli.no_scratch_dir),
         quiet: config::FeatureToggle::from_pair(cli.quiet, cli.no_quiet),
+        yes: config::FeatureToggle::from_pair(cli.yes, cli.no_yes),
         gh_guard: config::FeatureToggle::from_pair(cli.gh_guard, cli.no_gh_guard),
         git_push_prevention: config::FeatureToggle::from_pair(cli.git_guard, cli.no_git_guard),
     }) {
@@ -1497,7 +1504,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if !resolved.quiet {
         resolved.print_summary(&project_dir, &home_dir, active_agent);
     }
-    if let Err(e) = prompt_confirm(cli.yes, resolved.quiet) {
+    if let Err(e) = prompt_confirm(resolved.yes, resolved.quiet) {
         bail!("{e}");
     }
 

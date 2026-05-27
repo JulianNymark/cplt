@@ -237,6 +237,14 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
     },
     ConfigKeyInfo {
         section: "sandbox",
+        key: "yes",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Skip the confirmation prompt at startup (equivalent to --yes).",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
         key: "allow_jvm_attach",
         value_type: ConfigValueType::Bool,
         dangerous: false,

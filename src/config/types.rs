@@ -307,6 +307,9 @@ pub struct SandboxConfig {
     /// Suppress the startup configuration summary and non-essential info messages.
     /// Errors and warnings are always shown. (default: false)
     pub quiet: Option<bool>,
+    /// Skip the confirmation prompt at startup (default: false).
+    /// Equivalent to always passing --yes on the command line.
+    pub yes: Option<bool>,
     /// Enable the gh CLI proxy that blocks destructive GitHub operations (default: false).
     /// When enabled, a wrapper script intercepts `gh` commands and applies a policy that
     /// blocks destructive write operations (delete repo, merge PR, etc.) while allowing
@@ -406,6 +409,7 @@ pub struct Resolved {
     pub allow_browser: bool,
     pub scratch_dir: bool,
     pub quiet: bool,
+    pub yes: bool,
     pub gh_guard: GhGuardPolicy,
     pub git_guard: GitGuardPolicy,
     /// Preferred agent from config (None = auto-detect).
@@ -447,6 +451,7 @@ pub struct CliFlags {
     pub allow_browser: bool,
     pub scratch: FeatureToggle,
     pub quiet: FeatureToggle,
+    pub yes: FeatureToggle,
     pub gh_guard: FeatureToggle,
     pub git_push_prevention: FeatureToggle,
 }
