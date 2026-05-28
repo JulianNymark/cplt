@@ -489,6 +489,21 @@ fn gh_gate_blocks_graphql_with_slash() {
 }
 
 #[test]
+fn gh_gate_blocks_graphql_trailing_slash() {
+    // Trailing slash should not bypass the graphql block
+    let (_, _, ok) = gh_gate(&["api", "graphql/"]);
+    assert!(!ok, "gh api graphql/ must be blocked");
+    let (_, _, ok) = gh_gate(&["api", "/graphql/"]);
+    assert!(!ok, "gh api /graphql/ must be blocked");
+}
+
+#[test]
+fn gh_gate_blocks_graphql_with_query_params() {
+    let (_, _, ok) = gh_gate(&["api", "graphql?foo=bar"]);
+    assert!(!ok, "gh api graphql?foo=bar must be blocked");
+}
+
+#[test]
 fn gh_gate_blocks_graphql_with_method() {
     // Even explicit GET to graphql should be blocked (mutations can be sent as GET with query param)
     let (_, _, ok) = gh_gate(&["api", "-XGET", "graphql"]);
@@ -802,6 +817,56 @@ fn git_gate_protect_default_allows_refspec_to_feature() {
 fn git_gate_protect_default_blocks_origin_slash_main() {
     let (_, _, ok) = git_gate_protect_default(&["push", "origin", "origin/main"]);
     assert!(!ok, "push to origin/main should be blocked");
+}
+
+// ── Security hardening tests ────────────────────────────────────
+
+#[test]
+fn git_gate_blocks_alias_via_dash_c() {
+    // `-c alias.p=push` must be caught to prevent bypass
+    let (_, stderr, ok) = git_gate(&["-c", "alias.p=push", "p", "origin", "main"], true, true);
+    assert!(!ok, "git -c alias.p=push should be blocked: {stderr}");
+}
+
+#[test]
+fn git_gate_blocks_unknown_subcommand_when_push_prevented() {
+    // Unknown subcommands blocked to prevent alias-based bypass
+    let (_, _, ok) = git_gate(
+        &["subtree", "push", "--prefix=lib", "origin", "main"],
+        true,
+        true,
+    );
+    assert!(!ok, "git subtree push should be blocked");
+    let (_, _, ok) = git_gate(&["random-extension"], true, true);
+    assert!(
+        !ok,
+        "unknown git subcommand should be blocked when push prevented"
+    );
+}
+
+#[test]
+fn git_gate_protect_default_blocks_force_push_to_feature() {
+    // Force push to feature branch must be blocked when prevent_force_push=true
+    let (_, _, ok) = git_gate_protect_default(&["push", "--force", "origin", "feature-branch"]);
+    assert!(!ok, "force push to feature branch should be blocked");
+    let (_, _, ok) = git_gate_protect_default(&["push", "-f", "origin", "my-feature"]);
+    assert!(!ok, "-f to feature branch should be blocked");
+    let (_, _, ok) = git_gate_protect_default(&["push", "--force-with-lease", "origin", "feature"]);
+    assert!(!ok, "--force-with-lease to feature should be blocked");
+}
+
+#[test]
+fn git_gate_protect_default_blocks_multi_refspec_with_main() {
+    // `git push origin feature main` should be blocked (main is a default branch)
+    let (_, _, ok) = git_gate_protect_default(&["push", "origin", "feature", "main"]);
+    assert!(!ok, "multi-refspec including main should be blocked");
+    let (_, _, ok) = git_gate_protect_default(&[
+        "push",
+        "origin",
+        "HEAD:refs/heads/feature",
+        "HEAD:refs/heads/master",
+    ]);
+    assert!(!ok, "multi-refspec including master should be blocked");
 }
 
 // ============================================================

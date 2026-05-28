@@ -53,6 +53,9 @@ cplt assumes the sandboxed agent is **untrusted** — executing arbitrary code s
 | **Secret file access** | Read `~/.netrc`, `~/.npmrc`, `~/.vault-token` | Seatbelt deny rules (macOS) / Landlock deny (Linux) |
 | **Destructive GitHub ops** | `gh repo delete`, `gh pr merge`, `gh release create` | gh guard command interception (opt-in) |
 | **Unreviewed code push** | `git push origin main` | git guard command interception (opt-in) |
+| **Git alias push bypass** | `git -c alias.p=push p origin main` | git guard blocks `-c alias.*` + denies unknown subcommands |
+| **Git subtree push bypass** | `git subtree push --prefix=lib origin main` | `subtree` in explicit block list + deny-unknown policy |
+| **Multi-refspec bypass** | `git push origin feature main` | git guard checks ALL refspecs, not just first |
 | **Token exfiltration via CLI** | `gh auth token` prints raw token | gh guard serves cached token once at startup, deletes file — subprocesses get nothing |
 | **Cross-repo operations** | `gh pr close -R other-org/other-repo` | gh guard scope checking against current repo |
 | **Org/user data enumeration** | `gh api /orgs/.../audit-log` leaks PII | gh guard restricts API to `/repos/{current-repo}/...` endpoints only |

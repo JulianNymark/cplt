@@ -1117,13 +1117,19 @@ pub fn evaluate(cmd: &ParsedCommand) -> PolicyResult {
 fn evaluate_api(cmd: &ParsedCommand) -> PolicyResult {
     // Block GraphQL endpoint — it allows arbitrary mutations via stdin/body
     // that cannot be statically analyzed for scope or intent.
-    if let Some(ref endpoint) = cmd.api_endpoint
-        && (endpoint == "graphql" || endpoint == "/graphql")
-    {
-        return PolicyResult {
-            decision: Decision::Block,
-            reason: "gh api graphql allows arbitrary mutations — use specific REST endpoints instead",
-        };
+    // Normalize: strip trailing slashes and query params before matching.
+    if let Some(ref endpoint) = cmd.api_endpoint {
+        let normalized = endpoint
+            .trim_end_matches('/')
+            .split('?')
+            .next()
+            .unwrap_or(endpoint);
+        if normalized == "graphql" || normalized == "/graphql" {
+            return PolicyResult {
+                decision: Decision::Block,
+                reason: "gh api graphql allows arbitrary mutations — use specific REST endpoints instead",
+            };
+        }
     }
 
     // If input flags are present, it's implicitly a write
@@ -1462,7 +1468,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
 
 /// Git subcommands that perform remote writes.
 /// Blocked by the git wrapper to prevent agents from pushing code.
-const GIT_BLOCKED_SUBCOMMANDS: &[&str] = &["push", "request-pull", "send-pack"];
+const GIT_BLOCKED_SUBCOMMANDS: &[&str] = &["push", "request-pull", "send-pack", "subtree"];
 
 /// Git subcommands that are always allowed (read-only or local-only).
 const GIT_ALLOWED_SUBCOMMANDS: &[&str] = &[
@@ -1601,6 +1607,29 @@ pub fn gate_git(
         break;
     }
 
+    // Defense in depth: block `-c alias.*` arguments that could redefine subcommands.
+    // Even though unknown subcommands are now denied, this prevents confusion if an
+    // alias maps to an allowed subcommand name but actually runs something else.
+    if prevent_push {
+        let mut j = 0;
+        while j < args.len() {
+            if args[j] == "-c" {
+                if let Some(val) = args.get(j + 1) {
+                    let lower = val.to_lowercase();
+                    if lower.starts_with("alias.") {
+                        return Err("⚠️ BLOCKED by sandbox: 'git -c alias.*' is not allowed.\n\
+                             Push prevention is active — git alias definitions via -c are blocked \
+                             to prevent guard bypass."
+                            .to_string());
+                    }
+                }
+                j += 2;
+            } else {
+                j += 1;
+            }
+        }
+    }
+
     let Some(sub) = subcommand else {
         // No subcommand (e.g., `git --version`) — allow
         return Ok(());
@@ -1608,27 +1637,43 @@ pub fn gate_git(
 
     if prevent_push && GIT_BLOCKED_SUBCOMMANDS.contains(&sub) {
         // When protect_default_branch_only is set, only block pushes targeting
-        // the default branch (main/master). Feature branch pushes are allowed.
+        // the default branch (main/master). Feature branch pushes are allowed,
+        // but force push is still checked independently.
         if protect_default_branch_only && sub == "push" {
             let push_args = &args[i + 1..];
             let target_branch = extract_push_target_branch(push_args);
-            if let Some(branch) = target_branch {
-                if !is_default_branch(branch) {
-                    return Ok(());
-                }
+            let is_feature_branch = if let Some(branch) = target_branch {
+                !is_default_branch(branch)
             } else {
                 // No explicit branch: `git push` pushes current branch.
                 // Resolve via real git to determine if we're on a protected branch.
                 let current_branch = real_git.and_then(resolve_current_branch);
                 match current_branch {
-                    Some(ref b) if !is_default_branch(b) => return Ok(()),
-                    Some(_) => {
-                        // On default branch — fall through to block
-                    }
-                    None => {
-                        // Can't determine branch — fail closed for safety
+                    Some(ref b) if !is_default_branch(b) => true,
+                    Some(_) => false, // On default branch — fall through to block
+                    None => false,    // Can't determine branch — fail closed for safety
+                }
+            };
+
+            if is_feature_branch {
+                // Feature branch push allowed, but still enforce force-push prevention
+                if prevent_force_push {
+                    let has_force = push_args.iter().any(|a| {
+                        *a == "--force"
+                            || *a == "-f"
+                            || a.starts_with("--force-with-lease")
+                            || a.starts_with("--force-if-includes")
+                    });
+                    if has_force {
+                        return Err(
+                            "⚠️ BLOCKED by sandbox: 'git push --force' is not allowed in this environment.\n\
+                             Force push prevention is enabled — regular push to feature branches is allowed but force push is blocked.\n\
+                             Please make a note of this for the human operator and continue with your remaining work."
+                                .to_string(),
+                        );
                     }
                 }
+                return Ok(());
             }
         }
 
@@ -1685,11 +1730,19 @@ pub fn gate_git(
         return Ok(());
     }
 
-    // Unknown git subcommand — allow by default.
-    // Git's subcommand space is enormous (plumbing, aliases, extensions).
-    // Unlike gh where unknown = likely new destructive feature,
-    // unknown git commands are usually safe plumbing or aliases.
-    // The explicit block list is sufficient for push prevention.
+    // Unknown git subcommand — block when push prevention is active.
+    // An agent can define aliases (via `git config` or `-c alias.x=push`) that resolve
+    // to blocked subcommands. Since alias expansion happens inside the real git binary
+    // (after the guard has already approved), unknown subcommands must be blocked
+    // to prevent bypass via `git -c alias.p=push p origin main` or similar.
+    if prevent_push {
+        return Err(format!(
+            "⚠️ BLOCKED by sandbox: 'git {sub}' is not a recognized subcommand.\n\
+             Push prevention is active — only known git subcommands are allowed.\n\
+             If this is a legitimate command, please ask the human operator to allow it."
+        ));
+    }
+
     Ok(())
 }
 
@@ -1761,7 +1814,17 @@ fn extract_push_target_branch<'a>(push_args: &[&'a str]) -> Option<&'a str> {
             }
         }
         _ => {
-            // positionals[0] = remote, positionals[1] = first refspec
+            // positionals[0] = remote, positionals[1+] = refspecs
+            // Check ALL refspecs — return first that is a default branch (most restrictive).
+            // This prevents bypass via `git push origin feature main` where "main" is the
+            // second refspec and would be missed if we only check the first.
+            for refspec in &positionals[1..] {
+                let branch = extract_branch_from_refspec(refspec).unwrap_or(refspec);
+                if is_default_branch(branch) {
+                    return Some(branch);
+                }
+            }
+            // No default branch found — return first refspec for caller context
             let refspec = positionals[1];
             if let Some(dst) = extract_branch_from_refspec(refspec) {
                 Some(dst)
@@ -2516,9 +2579,14 @@ mod tests {
     }
 
     #[test]
-    fn git_unknown_subcommand_allowed() {
-        // Unknown git commands default to allow (unlike gh which defaults to block)
-        assert!(gate_git(&["some-custom-alias"], true, true, false, &[], None).is_ok());
+    fn git_unknown_subcommand_blocked_when_push_prevention_active() {
+        // Unknown git commands are blocked when push prevention is active
+        // to prevent alias-based bypass (e.g., `git -c alias.p=push p`)
+        assert!(gate_git(&["some-custom-alias"], true, true, false, &[], None).is_err());
+        // But allowed when push prevention is disabled
+        assert!(gate_git(&["some-custom-alias"], false, false, false, &[], None).is_ok());
+        // Also allowed when only force push prevention (no regular push block)
+        assert!(gate_git(&["some-custom-alias"], false, true, false, &[], None).is_ok());
     }
 
     #[test]
@@ -2832,6 +2900,163 @@ mod tests {
                 true,
                 false,
                 &rules,
+                None
+            )
+            .is_err()
+        );
+    }
+
+    // ── Security fix tests ──────────────────────────────────────────
+
+    #[test]
+    fn git_alias_bypass_blocked() {
+        // `-c alias.p=push` should be blocked when push prevention is active
+        assert!(
+            gate_git(
+                &["-c", "alias.p=push", "p", "origin", "main"],
+                true,
+                true,
+                false,
+                &[],
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            gate_git(
+                &["-c", "alias.x=send-pack", "x"],
+                true,
+                true,
+                false,
+                &[],
+                None
+            )
+            .is_err()
+        );
+        // Case insensitive check
+        assert!(gate_git(&["-c", "ALIAS.p=push", "p"], true, true, false, &[], None).is_err());
+        // Not blocked when push prevention is disabled
+        assert!(gate_git(&["-c", "alias.p=push", "p"], false, false, false, &[], None).is_ok());
+    }
+
+    #[test]
+    fn git_subtree_push_blocked() {
+        // `git subtree push` is now explicitly blocked
+        assert!(
+            gate_git(
+                &["subtree", "push", "--prefix=lib", "origin", "main"],
+                true,
+                true,
+                false,
+                &[],
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn git_force_push_to_feature_branch_blocked() {
+        // Even with protect_default_branch_only=true, force push to feature branch
+        // should be blocked when prevent_force_push=true
+        assert!(
+            gate_git(
+                &["push", "--force", "origin", "feature-branch"],
+                true,
+                true,
+                true,
+                &[],
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            gate_git(
+                &["push", "-f", "origin", "my-feature"],
+                true,
+                true,
+                true,
+                &[],
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            gate_git(
+                &["push", "--force-with-lease", "origin", "feature"],
+                true,
+                true,
+                true,
+                &[],
+                None
+            )
+            .is_err()
+        );
+        // But regular push to feature branch is still allowed
+        assert!(
+            gate_git(
+                &["push", "origin", "feature-branch"],
+                true,
+                true,
+                true,
+                &[],
+                None
+            )
+            .is_ok()
+        );
+        // Force push to feature branch allowed when prevent_force_push=false
+        assert!(
+            gate_git(
+                &["push", "--force", "origin", "feature-branch"],
+                true,
+                false,
+                true,
+                &[],
+                None
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn git_multiple_refspecs_checked() {
+        // `git push origin feature main` should be blocked because "main" is a default branch
+        assert!(
+            gate_git(
+                &["push", "origin", "feature", "main"],
+                true,
+                true,
+                true,
+                &[],
+                None
+            )
+            .is_err()
+        );
+        // `git push origin feature develop` — neither is default, should be allowed
+        assert!(
+            gate_git(
+                &["push", "origin", "feature", "develop"],
+                true,
+                true,
+                true,
+                &[],
+                None
+            )
+            .is_ok()
+        );
+        // `git push origin HEAD:refs/heads/feature HEAD:refs/heads/master` — master is default
+        assert!(
+            gate_git(
+                &[
+                    "push",
+                    "origin",
+                    "HEAD:refs/heads/feature",
+                    "HEAD:refs/heads/master"
+                ],
+                true,
+                true,
+                true,
+                &[],
                 None
             )
             .is_err()
