@@ -643,18 +643,16 @@ fn run_codesign(path: &Path) -> Result<(), UpdateError> {
 
 /// Check if the target path (or its parent directory) is writable by the current user.
 fn is_writable(path: &Path) -> bool {
-    if path.exists() {
-        // Try opening for write to check permission
-        std::fs::OpenOptions::new().write(true).open(path).is_ok()
-    } else {
-        // Check if parent directory is writable
-        path.parent().is_some_and(|p| {
-            let probe = p.join(".cplt_write_probe");
-            let ok = std::fs::File::create(&probe).is_ok();
-            let _ = std::fs::remove_file(&probe);
-            ok
-        })
-    }
+    // Check if the parent directory is writable (can we create/replace a file here?)
+    // We probe the directory rather than opening the target file because on Linux,
+    // opening a running binary for write returns ETXTBSY ("text file busy"), which
+    // would incorrectly trigger the sudo path for user-owned paths like ~/.local/bin/.
+    path.parent().is_some_and(|p| {
+        let probe = p.join(".cplt_write_probe");
+        let ok = std::fs::File::create(&probe).is_ok();
+        let _ = std::fs::remove_file(&probe);
+        ok
+    })
 }
 
 /// Install binary using sudo for the final copy + permission step.
