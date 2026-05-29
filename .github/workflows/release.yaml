@@ -18,11 +18,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build (${{ matrix.target }})
+  version:
+    name: Determine version
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      title: ${{ steps.ver.outputs.title }}
+      sha: ${{ steps.ver.outputs.sha }}
+    steps:
+      - name: Compute version
+        id: ver
+        run: |
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          VERSION="$(date -u +%Y.%m.%d-%H%M%S)-${SHORT_SHA}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "title=cplt ${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -63,10 +84,7 @@ jobs:
 
       - name: Build release binary
         run: |
-          COMMIT_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
-          SHORT_SHA="${COMMIT_SHA:0:7}"
-          VERSION="$(date -u +%Y.%m.%d-%H%M%S)-${SHORT_SHA}"
-          CPLT_LONG_VERSION="$VERSION" cargo build --release --target ${{ matrix.target }}
+          CPLT_LONG_VERSION="${{ needs.version.outputs.version }}" cargo build --release --target ${{ matrix.target }}
 
       - name: Package
         run: |
@@ -85,7 +103,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -106,20 +124,11 @@ jobs:
           sha256sum cplt-* > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Determine version
-        id: version
-        run: |
-          COMMIT_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
-          SHORT_SHA="${COMMIT_SHA:0:7}"
-          DATE=$(date -u +%Y.%m.%d-%H%M%S)
-          echo "tag=${DATE}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "title=cplt ${DATE} (${SHORT_SHA})" >> "$GITHUB_OUTPUT"
-          echo "sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: Generate release notes
         id: notes
         run: |
           PREV_TAG=$(git tag --sort=-version:refname | head -1 || echo "")
+          TAG="${{ needs.version.outputs.tag }}"
           {
             echo "body<<RELEASE_EOF"
             echo "## cplt"
@@ -133,16 +142,16 @@ jobs:
             echo ""
             echo '```bash'
             echo "# macOS — Apple Silicon (M1/M2/M3/M4)"
-            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${{ steps.version.outputs.tag }}/cplt-aarch64-apple-darwin.tar.gz | tar xz"
+            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${TAG}/cplt-aarch64-apple-darwin.tar.gz | tar xz"
             echo ""
             echo "# macOS — Intel"
-            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${{ steps.version.outputs.tag }}/cplt-x86_64-apple-darwin.tar.gz | tar xz"
+            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${TAG}/cplt-x86_64-apple-darwin.tar.gz | tar xz"
             echo ""
             echo "# Linux — x86_64"
-            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${{ steps.version.outputs.tag }}/cplt-x86_64-unknown-linux-gnu.tar.gz | tar xz"
+            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${TAG}/cplt-x86_64-unknown-linux-gnu.tar.gz | tar xz"
             echo ""
             echo "# Linux — ARM64"
-            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${{ steps.version.outputs.tag }}/cplt-aarch64-unknown-linux-gnu.tar.gz | tar xz"
+            echo "curl -fsSL https://github.com/navikt/cplt/releases/download/${TAG}/cplt-aarch64-unknown-linux-gnu.tar.gz | tar xz"
             echo '```'
             echo ""
             if [ -n "$PREV_TAG" ]; then
@@ -159,9 +168,9 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # ratchet:softprops/action-gh-release@v3.0.0
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          target_commitish: ${{ steps.version.outputs.sha }}
-          name: ${{ steps.version.outputs.title }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ needs.version.outputs.sha }}
+          name: ${{ needs.version.outputs.title }}
           body: ${{ steps.notes.outputs.body }}
           make_latest: true
           files: |

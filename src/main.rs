@@ -3124,7 +3124,7 @@ fn run_update(check_only: bool, force: bool) -> ExitCode {
             if check_only {
                 return ExitCode::SUCCESS;
             }
-            do_update(&tag)
+            do_update(&tag, &latest_ver)
         }
         update::VersionStatus::SameDateDifferentBuild {
             current,
@@ -3141,7 +3141,7 @@ fn run_update(check_only: bool, force: bool) -> ExitCode {
                 ui::warn("Same-date build. Use --force to reinstall.");
                 return ExitCode::SUCCESS;
             }
-            do_update(&tag)
+            do_update(&tag, &latest_ver)
         }
         update::VersionStatus::DevBuild {
             latest: latest_ver,
@@ -3157,7 +3157,7 @@ fn run_update(check_only: bool, force: bool) -> ExitCode {
                 ui::warn("Use --force to replace dev build with release.");
                 return ExitCode::SUCCESS;
             }
-            do_update(&tag)
+            do_update(&tag, &latest_ver)
         }
         _ => {
             ui::info(&format!("✓ cplt is up to date ({LONG_VERSION})"));
@@ -3166,8 +3166,8 @@ fn run_update(check_only: bool, force: bool) -> ExitCode {
     }
 }
 
-fn do_update(tag: &str) -> ExitCode {
-    match update::perform_update(tag, LONG_VERSION) {
+fn do_update(tag: &str, expected_version: &str) -> ExitCode {
+    match update::perform_update(tag, LONG_VERSION, expected_version) {
         Ok(path) => {
             ui::info(&format!("✓ Updated successfully → {path}"));
             ExitCode::SUCCESS

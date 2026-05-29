@@ -90,6 +90,11 @@ pub enum UpdateError {
 
     #[error("codesign failed")]
     CodesignFailed,
+
+    #[error(
+        "Version mismatch: binary reports '{got}' but release tag expects '{expected}'.\n  This is a release pipeline bug — the binary was built with a different version than the tag."
+    )]
+    VersionMismatch { expected: String, got: String },
 }
 
 /// A parsed GitHub release.
@@ -196,7 +201,11 @@ pub fn check_version(current: &str, latest: &Release) -> VersionStatus {
 }
 
 /// Download, verify, and install the update.
-pub fn perform_update(tag: &str, current_version: &str) -> Result<String, UpdateError> {
+pub fn perform_update(
+    tag: &str,
+    current_version: &str,
+    expected_version: &str,
+) -> Result<String, UpdateError> {
     let arch = std::env::consts::ARCH;
     let asset = asset_name(arch);
     let asset_url = format!("{DOWNLOAD_BASE}/{tag}/{asset}");
@@ -249,6 +258,11 @@ pub fn perform_update(tag: &str, current_version: &str) -> Result<String, Update
     eprintln!("  Preparing binary...");
     set_executable(&new_binary)?;
     postprocess_binary(&new_binary);
+
+    // 5b. Verify the binary reports the expected version.
+    // Catches release pipeline bugs where the tag and binary version diverge
+    // (e.g., version timestamp generated twice → infinite update loop).
+    verify_binary_version(&new_binary, expected_version, &tmp_dir)?;
 
     // 6. Install to target path — use sudo if direct write fails
     let needs_sudo = !is_writable(&target_path);
@@ -592,6 +606,37 @@ fn set_executable(path: &Path) -> Result<(), UpdateError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
         .map_err(|e| UpdateError::Io(format!("Cannot set permissions: {e}")))
+}
+
+/// Verify the extracted binary reports the expected version.
+///
+/// Runs `<binary> --version` and checks the output contains the expected version
+/// string. This is a defense-in-depth check against release pipeline bugs where
+/// the tag version and the binary's embedded version diverge (which would cause
+/// an infinite update loop).
+fn verify_binary_version(
+    binary: &Path,
+    expected_version: &str,
+    tmp_dir: &Path,
+) -> Result<(), UpdateError> {
+    let output = Command::new(binary)
+        .arg("--version")
+        .output()
+        .map_err(|e| UpdateError::Io(format!("Cannot run extracted binary: {e}")))?;
+
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    // --version output is like "cplt 2026.05.29-080706-abc1234"
+    let reported = version_output.trim();
+
+    if !reported.contains(expected_version) {
+        let _ = std::fs::remove_dir_all(tmp_dir);
+        return Err(UpdateError::VersionMismatch {
+            expected: expected_version.to_string(),
+            got: reported.to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 /// Apply platform-specific binary postprocessing after download.
