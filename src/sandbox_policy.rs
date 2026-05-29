@@ -111,6 +111,10 @@ pub(super) const TOOL_READ_DIRS: &[&str] = &[
     "/usr/local",
     "/opt/homebrew",
     "/Library/Developer/CommandLineTools",
+    // Xcode.app developer tools — needed when xcode-select points to the full
+    // Xcode install instead of standalone CommandLineTools. /usr/bin/git and
+    // other shims load libxcrun.dylib from this path.
+    "/Applications/Xcode.app/Contents/Developer",
     "/Library/Java/JavaVirtualMachines",
 ];
 
