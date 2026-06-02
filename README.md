@@ -318,7 +318,7 @@ By default, `cplt` sanitizes the child environment — only safe variables pass 
 | Auth tokens       | `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN`                         | Passed only if already set by user; gh guard uses one-time file instead |
 | Copilot config    | `COPILOT_DEBUG`, `COPILOT_*`                                               | Prefix allowlist                        |
 | Language runtimes | `NODE_*`, `GOPATH`, `CARGO_HOME`, `JAVA_HOME`, `VIRTUAL_ENV`, `PYTHONPATH` | Explicit allowlist                      |
-| Tool managers     | `NVM_*`, `PYENV_*`, `MISE_*`, `SDKMAN_*`, `COREPACK_*`, `YARN_*`           | Prefix allowlist                        |
+| Tool managers     | `NVM_*`, `FNM_*`, `PYENV_*`, `MISE_*`, `SDKMAN_*`, `COREPACK_*`, `YARN_*`  | Prefix allowlist                        |
 | XDG dirs          | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`     | Explicit allowlist                      |
 
 **Prefix allowlist with secret-suffix protection:** Variables matching allowed prefixes (e.g. `COPILOT_*`, `YARN_*`) are passed through *unless* they end with a secret-bearing suffix: `_TOKEN`, `_AUTH`, `_SECRET`, `_SECRET_KEY`, `_KEY`, `_PASSWORD`, or `_CREDENTIALS`. For example, `COPILOT_DEBUG` passes through but `COPILOT_API_KEY` is blocked.
@@ -348,7 +348,7 @@ On Linux it is not possible to allow write to a non-existent path, so creation m
 
 | Runtime | Home dirs                            | Env vars / prefixes | Discovery |
 |---|--------------------------------------|---|---|
-| **Node.js** | `.nvm`, `.local/bin`                 | `NODE_*`, `NPM_*`, `NVM_*` | `node` |
+| **Node.js** | `.nvm`, `.local/share/fnm`, `.local/bin` | `NODE_*`, `NPM_*`, `NVM_*`, `FNM_*` | `node` |
 | **Rust** | `.cargo`, `.rustup`                  | `CARGO_HOME`, `RUSTUP_HOME` | `cargo` |
 | **Go** | `go/bin`, `go/pkg`                   | `GOPATH`, `GOROOT`, `GOCACHE`, etc. | `go` |
 | **Java/Kotlin (JVM)** | `.sdkman`, `.jenv`, `.gradle`, `.m2` | `JAVA_HOME`, `JAVA_TOOL_OPTIONS`, `GRADLE_*`, `MAVEN_*`, `SDKMAN_*`, `JENV_*` | `java`, `gradle` |

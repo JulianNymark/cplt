@@ -41,6 +41,8 @@ cplt --gh-guard          # enable gh guard
 cplt --no-gh-guard       # disable gh guard
 cplt --git-guard         # enable git push prevention
 cplt --no-git-guard      # disable git push prevention
+cplt --allow-api-write   # allow gh api write operations to current repo (overrides config)
+cplt --no-allow-api-write # deny gh api write operations (overrides config)
 ```
 </details>
 
@@ -56,6 +58,7 @@ scope_check = true          # enforce repo-scoping on write commands
 block_auth_token = true     # deny "gh auth token" exfiltration
 inject_token = false        # inject GH_TOKEN into sandbox (opt-in)
 unknown_command = "block"   # block|allow unrecognized gh commands
+allow_api_write = false     # allow gh api write (POST/PUT/PATCH) to current repo (opt-in)
 
 [git_guard]
 enabled = true              # blocks git push
@@ -74,10 +77,11 @@ git_push_prevention = true   # maps to [git_guard] enabled=true with defaults
 
 ### Security: Policy baked at launch
 
-Policy flags are baked into the wrapper script at sandbox launch time.
+The policy flags are baked into the wrapper script at sandbox launch time.
 The `gh-gate` subcommand receives `--scope-check`, `--block-auth-token`,
-`--unknown-command=block` as CLI flags, preventing the agent from
-influencing policy by editing config files inside the sandbox.
+`--unknown-command=block`, and `--allow-api-write`/`--no-allow-api-write` as
+CLI flags, preventing the agent from influencing policy by editing config files
+inside the sandbox.
 
 ## How it works
 
@@ -112,7 +116,7 @@ Agent calls gh → wrapper script (in PATH) → cplt gh-gate → policy check
 - **Reads are safe**: All read operations (`list`, `view`, `status`, `diff`) are allowed
 - **Writes are scoped**: Operations that modify state are checked against the current repo
 - **Destructive ops need humans**: Merging, deleting, releasing — these require human judgment
-- **`gh api` is special**: GET requests are scope-checked; all other methods are blocked
+- **`gh api` is special**: GET requests are scope-checked; write methods are blocked by default (opt-in with `allow_api_write = true`; GraphQL always blocked)
 
 ## Scope checking
 
@@ -224,13 +228,31 @@ inject_token = true   # injects GH_TOKEN env var (visible to all subprocesses)
 
 The `gh api` command provides raw API access and requires special treatment:
 
-| Condition | Decision | Reason |
-|-----------|----------|--------|
-| No method flag (implicit GET) | ScopeCheck | Read operations — must target current repo |
-| `-X GET` | ScopeCheck | Explicit read — must target current repo |
-| `-X POST/PUT/PATCH/DELETE` | Block | Write operations |
-| `-f`, `-F`, or `--input` present | Block | Input implies write |
-| `graphql` endpoint | Block | Arbitrary mutations possible |
+| Condition | Default | With `allow_api_write = true` | Reason |
+|-----------|---------|-------------------------------|--------|
+| No method flag (implicit GET) | ScopeCheck | ScopeCheck | Read operations — must target current repo |
+| `-X GET` | ScopeCheck | ScopeCheck | Explicit read — must target current repo |
+| `-X POST/PUT/PATCH/DELETE` | Block | ScopeCheck | Write operations — opt-in required |
+| `-f`, `-F`, or `--input` present | Block | ScopeCheck | Input implies write — opt-in required |
+| `graphql` endpoint | Block | Block | Arbitrary mutations possible — always blocked |
+
+When `allow_api_write = true`, write requests are **scope-checked** (not freely allowed):
+they must target the current repository. Cross-repo writes are still denied.
+
+**Enable in config:**
+```toml
+[gh_guard]
+enabled = true
+allow_api_write = true
+```
+
+**Or for a single run:**
+```bash
+cplt --allow-api-write -- -p "post review comment replies"
+```
+
+> **Note:** `gh api graphql` remains unconditionally blocked even with `allow_api_write = true`
+> because GraphQL mutations are specified via stdin and cannot be statically scope-checked.
 
 ### API scope enforcement
 
@@ -353,8 +375,8 @@ This section is explicit about what the gh/git guard protects against and what i
 | Agent modifies secrets/variables | `gh secret set/delete`, `gh variable set/delete` blocked |
 | Agent installs malicious gh extensions | `gh extension install/remove` blocked |
 | Agent operates on other repositories | `-R other/repo` checked via ScopeCheck |
-| Agent uses `gh api` POST to mutate state | Presence of `-f`, `-F`, `--input`, or non-GET method → blocked |
-| Agent uses `gh api graphql` for mutations | `graphql` endpoint unconditionally blocked (mutations via stdin not parseable) |
+| Agent uses `gh api` POST to mutate state | Presence of `-f`, `-F`, `--input`, or non-GET method → blocked by default; opt-in with `allow_api_write = true` (scope-checked to current repo) |
+| Agent uses `gh api graphql` for mutations | `graphql` endpoint unconditionally blocked even with `allow_api_write = true` (mutations via stdin not parseable) |
 
 ### What it does NOT protect against
 
