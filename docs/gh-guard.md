@@ -232,7 +232,8 @@ The `gh api` command provides raw API access and requires special treatment:
 |-----------|---------|-------------------------------|--------|
 | No method flag (implicit GET) | ScopeCheck | ScopeCheck | Read operations — must target current repo |
 | `-X GET` | ScopeCheck | ScopeCheck | Explicit read — must target current repo |
-| `-X POST/PUT/PATCH/DELETE` | Block | ScopeCheck | Write operations — opt-in required |
+| `-X POST/PUT/PATCH` | Block | ScopeCheck | Write operations — opt-in required |
+| `-X DELETE` | Block | Block | Destructive — always blocked |
 | `-f`, `-F`, or `--input` present | Block | ScopeCheck | Input implies write — opt-in required |
 | `graphql` endpoint | Block | Block | Arbitrary mutations possible — always blocked |
 

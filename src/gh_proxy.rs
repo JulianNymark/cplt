@@ -1159,6 +1159,11 @@ fn evaluate_api(cmd: &ParsedCommand, allow_api_write: bool) -> PolicyResult {
             decision: Decision::ScopeCheck,
             reason: "gh api GET — scope-checked",
         },
+        // DELETE is destructive regardless of allow_api_write
+        Some("DELETE") => PolicyResult {
+            decision: Decision::Block,
+            reason: "gh api DELETE is destructive — not permitted even with allow_api_write",
+        },
         Some(_) => {
             if allow_api_write {
                 PolicyResult {
@@ -2602,6 +2607,23 @@ mod tests {
             evaluate_with_policy(&cmd, true).decision,
             Decision::Block,
             "GraphQL must be blocked even when allow_api_write=true"
+        );
+    }
+
+    #[test]
+    fn api_delete_blocked_even_with_allow_api_write() {
+        let cmd = ParsedCommand {
+            command: "api".to_string(),
+            subcommand: None,
+            repo_flag: None,
+            method: Some("DELETE".to_string()),
+            has_input_flags: false,
+            api_endpoint: Some("repos/navikt/cplt/issues/1/labels/bug".to_string()),
+        };
+        assert_eq!(
+            evaluate_with_policy(&cmd, true).decision,
+            Decision::Block,
+            "DELETE must be blocked even when allow_api_write=true"
         );
     }
 

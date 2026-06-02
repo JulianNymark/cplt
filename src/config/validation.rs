@@ -44,6 +44,7 @@ const VALID_GH_GUARD_KEYS: &[&str] = &[
     "block_auth_token",
     "inject_token",
     "unknown_command",
+    "allow_api_write",
 ];
 const VALID_GIT_GUARD_KEYS: &[&str] = &[
     "enabled",
