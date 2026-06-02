@@ -1928,6 +1928,7 @@ fn env_allowlist_includes_new_runtime_vars() {
     assert!(ENV_PREFIX_ALLOWLIST.contains(&"PYENV_"));
     assert!(ENV_PREFIX_ALLOWLIST.contains(&"YARN_"));
     assert!(ENV_PREFIX_ALLOWLIST.contains(&"COREPACK_"));
+    assert!(ENV_PREFIX_ALLOWLIST.contains(&"FNM_"));
 }
 
 #[test]
@@ -2636,6 +2637,22 @@ fn profile_nvm_has_exec() {
     assert!(
         p.contains("(allow process-exec (subpath \"/Users/test/.nvm\"))"),
         ".nvm should have process-exec for node, npm shims"
+    );
+}
+
+#[test]
+fn profile_fnm_has_exec() {
+    // fnm (Fast Node Manager) stores Node.js at ~/.local/share/fnm/node-versions/.
+    // Node binaries and bundled JS modules (corepack/yarn/npm) must be executable
+    // inside the sandbox — regression for EPERM on corepack/yarn.js.
+    let p = default_profile();
+    assert!(
+        p.contains("(allow process-exec (subpath \"/Users/test/.local/share/fnm\"))"),
+        "fnm node-versions dir should have process-exec so `yarn`/`node` can be launched"
+    );
+    assert!(
+        p.contains("(allow file-map-executable (subpath \"/Users/test/.local/share/fnm\"))"),
+        "fnm dir should have file-map-executable for native addons"
     );
 }
 

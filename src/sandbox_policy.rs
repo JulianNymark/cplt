@@ -248,6 +248,7 @@ pub const ENV_PREFIX_ALLOWLIST: &[&str] = &[
     "JENV_",           // jenv (Java version manager)
     "ASDF_",           // asdf version manager
     "MISE_",           // mise tool manager
+    "FNM_",            // fnm (Fast Node Manager)
     "NVM_",            // nvm
     "PYENV_",          // pyenv (Python version manager)
     "SDKMAN_",         // SDKMAN (Java version manager)
@@ -599,6 +600,21 @@ pub const APP_DIRS: &[AppDir] = &[
         map_exec: &[AppDirKind::Cache, AppDirKind::Data, AppDirKind::DataLocal],
         write: &[AppDirKind::Cache, AppDirKind::Data, AppDirKind::DataLocal],
         read: &[AppDirKind::Cache, AppDirKind::Data, AppDirKind::DataLocal],
+    },
+    // fnm (Fast Node Manager) stores Node.js versions at ~/.local/share/fnm/node-versions/.
+    // Node binaries and their bundled JS modules (corepack, yarn, npm) must be readable
+    // and executable from inside the sandbox.
+    // No write: fnm installs are managed outside the sandbox; write access would allow a
+    // rogue agent to overwrite node-versions/ binaries that run unsandboxed on the user's
+    // PATH — same trojan-persistence risk that drives write:false on the .nvm HomeToolDir.
+    AppDir {
+        qualifier: "",
+        organization: "",
+        application: "fnm",
+        process_exec: &[AppDirKind::Data, AppDirKind::DataLocal],
+        map_exec: &[AppDirKind::Data, AppDirKind::DataLocal],
+        write: &[],
+        read: DEFAULT_READ_APP_DIRS,
     },
 ];
 
