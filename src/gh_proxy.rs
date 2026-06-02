@@ -1187,6 +1187,11 @@ fn evaluate_api(cmd: &ParsedCommand, allow_api_write: bool) -> PolicyResult {
 /// For `gh api` commands, also checks the endpoint URL path for /repos/{owner}/{repo}/.
 /// Non-repo API endpoints (orgs, users) are NOT implicitly allowed — they require
 /// explicit -R or a matching /repos/ path.
+///
+/// Security: write operations (`has_input_flags` or non-GET method) never use the
+/// relative-path fallback — they require an explicit /repos/{owner}/{repo}/... match.
+/// This prevents scope-check bypass via top-level endpoints (e.g. `gists`, `app/...`)
+/// that don't start with a deny-listed prefix.
 pub fn is_repo_in_scope(cmd: &ParsedCommand, current_repo: &str) -> bool {
     // Check -R/--repo flag first
     if let Some(target) = &cmd.repo_flag {
@@ -1202,8 +1207,17 @@ pub fn is_repo_in_scope(cmd: &ParsedCommand, current_repo: &str) -> bool {
                 let current_clean = current_repo.to_lowercase();
                 return endpoint_repo.to_lowercase() == current_clean;
             }
-            // Check if this is a relative path (no leading /) — gh resolves these
-            // to the current repo automatically (e.g., `gh api pulls/67/comments`).
+            // Write operations (input flags or non-GET method) require an explicit
+            // /repos/{owner}/{repo}/... path — no relative-path fallback.
+            // This prevents top-level API endpoints (gists, app/installations, teams, etc.)
+            // from being treated as in-scope just because they don't match a deny-list.
+            let is_write =
+                cmd.has_input_flags || matches!(cmd.method.as_deref(), Some(m) if m != "GET");
+            if is_write {
+                return false;
+            }
+            // For reads: check if this looks like a relative path (no leading absolute prefix)
+            // that gh CLI resolves to the current repo (e.g., `gh api pulls/67/comments`).
             let path = endpoint.strip_prefix('/').unwrap_or(endpoint);
             let path = path.split('?').next().unwrap_or(path);
             if !path.starts_with("repos/")
@@ -1213,7 +1227,7 @@ pub fn is_repo_in_scope(cmd: &ParsedCommand, current_repo: &str) -> bool {
                 && !path.starts_with("notifications")
                 && !path.starts_with("graphql")
             {
-                // Relative endpoint — gh CLI resolves to current repo. Allow.
+                // Relative read endpoint — gh CLI resolves to current repo. Allow.
                 return true;
             }
             // Absolute non-repo endpoint (e.g., /orgs/..., /user/...) — not in scope.
@@ -2625,6 +2639,32 @@ mod tests {
             Decision::Block,
             "DELETE must be blocked even when allow_api_write=true"
         );
+    }
+
+    #[test]
+    fn api_write_to_top_level_endpoint_not_in_scope() {
+        // gists, app/installations, projects, notifications — top-level endpoints that are
+        // NOT repo-relative. is_repo_in_scope must reject them for write operations,
+        // preventing the relative-path fallback from granting access to the full GitHub API.
+        for endpoint in &[
+            "gists",
+            "app/installations/123/access_tokens",
+            "projects/456",
+            "notifications/threads/789/subscription",
+        ] {
+            let cmd = ParsedCommand {
+                command: "api".to_string(),
+                subcommand: None,
+                repo_flag: None,
+                method: Some("POST".to_string()),
+                has_input_flags: true,
+                api_endpoint: Some(endpoint.to_string()),
+            };
+            assert!(
+                !is_repo_in_scope(&cmd, "navikt/cplt"),
+                "write to top-level endpoint '{endpoint}' must not be in scope",
+            );
+        }
     }
 
     // ── project group specific ordering ──
