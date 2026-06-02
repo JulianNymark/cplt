@@ -348,6 +348,14 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         default_display: "block",
         description: "Policy for commands not in the classification table: \"block\" (default-deny) or \"allow\" (permissive).",
     },
+    ConfigKeyInfo {
+        section: "gh_guard",
+        key: "allow_api_write",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Allow 'gh api' write operations (POST/PATCH/PUT and input flags). Writes are scope-checked to the current repo. GraphQL is always blocked.",
+    },
     // [git_guard]
     ConfigKeyInfo {
         section: "git_guard",

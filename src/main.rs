@@ -553,6 +553,14 @@ enum Command {
         #[arg(long, default_value = "block")]
         unknown_command: String,
 
+        /// Allow `gh api` write operations (POST/PATCH/PUT and input flags), scope-checked.
+        #[arg(long, default_value_t = false)]
+        allow_api_write: bool,
+
+        /// Block `gh api` write operations (override for --allow-api-write).
+        #[arg(long, conflicts_with = "allow_api_write")]
+        no_allow_api_write: bool,
+
         /// gh arguments to evaluate and potentially pass through.
         #[arg(last = true)]
         args: Vec<String>,
@@ -1265,6 +1273,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 block_auth_token,
                 no_block_auth_token,
                 unknown_command,
+                allow_api_write,
+                no_allow_api_write,
                 args,
             } => {
                 let policy = gh_proxy::GatePolicy {
@@ -1280,6 +1290,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     } else {
                         gh_proxy::UnknownCommandDecision::Block
                     },
+                    allow_api_write: allow_api_write && !no_allow_api_write,
                 };
                 run_gh_gate(&real_gh, &args, &policy)
             }

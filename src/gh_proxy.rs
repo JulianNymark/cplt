@@ -1076,9 +1076,14 @@ pub fn parse_command(args: &[&str]) -> Option<ParsedCommand> {
 
 /// Look up the policy decision for a parsed command.
 pub fn evaluate(cmd: &ParsedCommand) -> PolicyResult {
+    evaluate_with_policy(cmd, false)
+}
+
+/// Look up the policy decision for a parsed command, respecting policy flags.
+pub fn evaluate_with_policy(cmd: &ParsedCommand, allow_api_write: bool) -> PolicyResult {
     // Special handling for `gh api`
     if cmd.command == "api" {
-        return evaluate_api(cmd);
+        return evaluate_api(cmd, allow_api_write);
     }
 
     let sub = cmd.subcommand.as_deref().unwrap_or("");
@@ -1113,8 +1118,10 @@ pub fn evaluate(cmd: &ParsedCommand) -> PolicyResult {
 /// Special policy evaluation for `gh api`.
 ///
 /// GET requests are scope-checked. Any other method (or presence of input
-/// flags that imply a write) is blocked.
-fn evaluate_api(cmd: &ParsedCommand) -> PolicyResult {
+/// flags that imply a write) is blocked by default. When `allow_api_write`
+/// is true, writes are scope-checked instead of blocked. GraphQL is always
+/// blocked regardless (arbitrary mutations can't be statically scope-checked).
+fn evaluate_api(cmd: &ParsedCommand, allow_api_write: bool) -> PolicyResult {
     // Block GraphQL endpoint — it allows arbitrary mutations via stdin/body
     // that cannot be statically analyzed for scope or intent.
     // Normalize: strip trailing slashes and query params before matching.
@@ -1134,9 +1141,16 @@ fn evaluate_api(cmd: &ParsedCommand) -> PolicyResult {
 
     // If input flags are present, it's implicitly a write
     if cmd.has_input_flags {
-        return PolicyResult {
-            decision: Decision::Block,
-            reason: "gh api with input flags implies write operation",
+        return if allow_api_write {
+            PolicyResult {
+                decision: Decision::ScopeCheck,
+                reason: "gh api write (input flags) — scope-checked (allow_api_write=true)",
+            }
+        } else {
+            PolicyResult {
+                decision: Decision::Block,
+                reason: "gh api with input flags implies write operation",
+            }
         };
     }
 
@@ -1145,10 +1159,19 @@ fn evaluate_api(cmd: &ParsedCommand) -> PolicyResult {
             decision: Decision::ScopeCheck,
             reason: "gh api GET — scope-checked",
         },
-        Some(_) => PolicyResult {
-            decision: Decision::Block,
-            reason: "gh api with non-GET method",
-        },
+        Some(_) => {
+            if allow_api_write {
+                PolicyResult {
+                    decision: Decision::ScopeCheck,
+                    reason: "gh api write method — scope-checked (allow_api_write=true)",
+                }
+            } else {
+                PolicyResult {
+                    decision: Decision::Block,
+                    reason: "gh api with non-GET method",
+                }
+            }
+        }
     }
 }
 
@@ -1317,12 +1340,17 @@ pub fn generate_wrapper_script(
         crate::config::UnknownCommandPolicy::Block => "--unknown-command=block",
         crate::config::UnknownCommandPolicy::Allow => "--unknown-command=allow",
     };
+    let api_write_flag = if policy.allow_api_write {
+        "--allow-api-write"
+    } else {
+        "--no-allow-api-write"
+    };
     format!(
         r#"#!/bin/sh
 # cplt gh proxy — blocks destructive gh operations in sandboxed agents.
 # This wrapper is auto-generated. Do not edit.
 
-exec {cplt_escaped} gh-gate --real-gh {gh_escaped} {mode_flag} {scope_flag} {auth_flag} {unknown_flag} -- "$@"
+exec {cplt_escaped} gh-gate --real-gh {gh_escaped} {mode_flag} {scope_flag} {auth_flag} {unknown_flag} {api_write_flag} -- "$@"
 "#
     )
 }
@@ -1339,6 +1367,9 @@ pub struct GatePolicy {
     pub block_auth_token: bool,
     /// Policy for commands not in the classification table.
     pub unknown_command: UnknownCommandDecision,
+    /// Allow `gh api` write operations (POST/PATCH/PUT and input flags),
+    /// scope-checked to the current repo. GraphQL remains blocked.
+    pub allow_api_write: bool,
 }
 
 /// What to do with commands not in the policy table.
@@ -1355,6 +1386,7 @@ impl Default for GatePolicy {
             scope_check: true,
             block_auth_token: true,
             unknown_command: UnknownCommandDecision::Block,
+            allow_api_write: false,
         }
     }
 }
@@ -1384,7 +1416,7 @@ pub fn gate(args: &[&str], project_dir: &Path, policy: &GatePolicy) -> Result<()
         );
     }
 
-    let result = evaluate(&cmd);
+    let result = evaluate_with_policy(&cmd, policy.allow_api_write);
 
     match result.decision {
         Decision::Allow => Ok(()),
@@ -2494,6 +2526,83 @@ mod tests {
         assert!(script.contains("--scope-check"));
         assert!(script.contains("--block-auth-token"));
         assert!(script.contains("--unknown-command=block"));
+        assert!(script.contains("--no-allow-api-write"));
+    }
+
+    #[test]
+    fn wrapper_script_includes_allow_api_write_flag() {
+        let policy = crate::config::GhGuardPolicy {
+            allow_api_write: true,
+            ..Default::default()
+        };
+        let script = generate_wrapper_script("/usr/bin/gh", "/usr/local/bin/cplt", &policy);
+        assert!(
+            script.contains("--allow-api-write"),
+            "wrapper must bake in --allow-api-write when policy has allow_api_write=true"
+        );
+    }
+
+    #[test]
+    fn api_write_allowed_when_policy_set() {
+        let cmd = ParsedCommand {
+            command: "api".to_string(),
+            subcommand: None,
+            repo_flag: None,
+            method: Some("POST".to_string()),
+            has_input_flags: false,
+            api_endpoint: Some("repos/navikt/cplt/pulls/comments/123/replies".to_string()),
+        };
+        // Default policy: write should be blocked
+        assert_eq!(
+            evaluate_with_policy(&cmd, false).decision,
+            Decision::Block,
+            "gh api POST must be blocked by default"
+        );
+        // With allow_api_write: write should be scope-checked
+        assert_eq!(
+            evaluate_with_policy(&cmd, true).decision,
+            Decision::ScopeCheck,
+            "gh api POST must be ScopeCheck when allow_api_write=true"
+        );
+    }
+
+    #[test]
+    fn api_write_with_input_flags_allowed_when_policy_set() {
+        let cmd = ParsedCommand {
+            command: "api".to_string(),
+            subcommand: None,
+            repo_flag: None,
+            method: None,
+            has_input_flags: true,
+            api_endpoint: Some("repos/navikt/cplt/pulls/comments/123/replies".to_string()),
+        };
+        assert_eq!(
+            evaluate_with_policy(&cmd, false).decision,
+            Decision::Block,
+            "gh api with input flags must be blocked by default"
+        );
+        assert_eq!(
+            evaluate_with_policy(&cmd, true).decision,
+            Decision::ScopeCheck,
+            "gh api with input flags must be ScopeCheck when allow_api_write=true"
+        );
+    }
+
+    #[test]
+    fn graphql_blocked_even_with_allow_api_write() {
+        let cmd = ParsedCommand {
+            command: "api".to_string(),
+            subcommand: None,
+            repo_flag: None,
+            method: Some("POST".to_string()),
+            has_input_flags: false,
+            api_endpoint: Some("graphql".to_string()),
+        };
+        assert_eq!(
+            evaluate_with_policy(&cmd, true).decision,
+            Decision::Block,
+            "GraphQL must be blocked even when allow_api_write=true"
+        );
     }
 
     // ── project group specific ordering ──

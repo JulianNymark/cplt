@@ -158,6 +158,10 @@ pub struct GhGuardConfig {
     /// Policy for commands not in the classification table (default: "block").
     /// "block" = secure default-deny; "allow" = permissive pass-through.
     pub unknown_command: Option<UnknownCommandPolicy>,
+    /// Allow `gh api` write operations (POST/PATCH/PUT/DELETE and input flags).
+    /// When true, write requests are scope-checked to the current repo.
+    /// GraphQL is always blocked regardless of this setting (default: false).
+    pub allow_api_write: Option<bool>,
 }
 
 /// `[git_guard]` — git command prevention for sandboxed agents.
@@ -331,6 +335,9 @@ pub struct GhGuardPolicy {
     pub block_auth_token: bool,
     pub inject_token: bool,
     pub unknown_command: UnknownCommandPolicy,
+    /// Allow `gh api` write operations (POST/PATCH/PUT and input flags),
+    /// scope-checked to the current repo. GraphQL remains blocked.
+    pub allow_api_write: bool,
 }
 
 impl Default for GhGuardPolicy {
@@ -342,6 +349,7 @@ impl Default for GhGuardPolicy {
             block_auth_token: true,
             inject_token: false,
             unknown_command: UnknownCommandPolicy::Block,
+            allow_api_write: false,
         }
     }
 }

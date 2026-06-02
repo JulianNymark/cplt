@@ -367,6 +367,11 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
         c.gh_guard.unknown_command.unwrap_or_default(),
         src(c.gh_guard.unknown_command.is_some())
     );
+    println!(
+        "{blue}[cplt]{nc}    allow_api_write       = {}{}",
+        c.gh_guard.allow_api_write.unwrap_or(false),
+        src(c.gh_guard.allow_api_write.is_some())
+    );
 
     // [git_guard] section
     println!("{blue}[cplt]{nc}");

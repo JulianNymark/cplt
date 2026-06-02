@@ -277,6 +277,7 @@ impl Config {
                 .gh_guard
                 .unknown_command
                 .unwrap_or(UnknownCommandPolicy::Block),
+            allow_api_write: self.gh_guard.allow_api_write.unwrap_or(false),
         };
 
         // git-guard: CLI flag overrides enabled. Backward compat from sandbox.git_push_prevention.

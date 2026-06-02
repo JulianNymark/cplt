@@ -396,8 +396,77 @@ fn gh_gate_blocks_api_with_input_flags() {
 }
 
 // ============================================================
-// gh-gate: Bypass attempts (security regression tests)
+// gh-gate: allow_api_write opt-in
 // ============================================================
+
+#[test]
+fn gh_gate_allow_api_write_permits_post_in_scope() {
+    // With --allow-api-write, POST to current repo's PR comment replies should be allowed.
+    // This is the real-world use case: agent posts inline review comment replies.
+    let (_, stderr, ok) = gh_gate_with_opts(
+        &[
+            "api",
+            "repos/navikt/cplt/pulls/comments/3333053793/replies",
+            "--method",
+            "POST",
+            "--field",
+            "body=Fixed in abc123",
+        ],
+        &["--allow-api-write"],
+    );
+    assert!(
+        ok,
+        "gh api POST to current repo's PR comment replies should be allowed with allow_api_write: {stderr}"
+    );
+}
+
+#[test]
+fn gh_gate_allow_api_write_still_blocks_graphql() {
+    // GraphQL must remain blocked even with --allow-api-write — arbitrary mutations
+    // cannot be statically scope-checked.
+    let (_, _, ok) = gh_gate_with_opts(&["api", "graphql"], &["--allow-api-write"]);
+    assert!(
+        !ok,
+        "gh api graphql must be blocked even with allow_api_write"
+    );
+}
+
+#[test]
+fn gh_gate_allow_api_write_blocks_cross_repo_post() {
+    // Scope check must still apply: POST to another repo is blocked.
+    let (_, _, ok) = gh_gate_with_opts(
+        &[
+            "api",
+            "repos/evil-org/other-repo/issues",
+            "--method",
+            "POST",
+            "--field",
+            "title=pwned",
+        ],
+        &["--allow-api-write"],
+    );
+    assert!(
+        !ok,
+        "gh api POST to a different repo must still be blocked by scope check"
+    );
+}
+
+#[test]
+fn gh_gate_default_still_blocks_api_post() {
+    // Regression: default (no --allow-api-write) must still block writes.
+    let (_, _, ok) = gh_gate(&[
+        "api",
+        "repos/navikt/cplt/pulls/comments/123/replies",
+        "--method",
+        "POST",
+        "--field",
+        "body=test",
+    ]);
+    assert!(
+        !ok,
+        "gh api POST must be blocked by default (no allow_api_write)"
+    );
+}
 
 #[test]
 fn gh_gate_allows_empty_args() {
