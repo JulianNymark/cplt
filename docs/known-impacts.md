@@ -458,16 +458,16 @@ Tools continue to work normally — these are non-essential telemetry endpoints.
 
 ## AI agent telemetry
 
-AI agents and their third-party packages often send usage analytics and crash reports to external services (PostHog, Sentry, etc.). Inside the cplt proxy, these calls are **blocked by default** — `posthog.com` is in `blocked-domains.txt`.
+AI agents and their third-party packages often send usage analytics and crash reports to external services (PostHog, Sentry, etc.). cplt blocks these at two layers:
 
-This produces visible but harmless errors in the agent UI, for example in OpenCode:
+1. **Env var injection** — cplt injects `OMO_DISABLE_POSTHOG=1` and `DO_NOT_TRACK=1` so agents opt out before making any network call.
+2. **Proxy blocklist** — `posthog.com` is in `blocked-domains.txt` as a fallback for tools that ignore env vars.
 
-```
-Error while flushing PostHog: message=HTTP error while fetching PostHog: status=403
-Domain not in allowlist
-```
+For the `oh-my-openagent` OpenCode plugin specifically, `OMO_DISABLE_POSTHOG=1` prevents PostHog from being initialised, so no network calls are made and no errors appear.
 
-**Impact:** Cosmetic only — the agent continues to function normally. Telemetry is non-essential.
+**If you use `allowed_domains` (allowlist mode):** The proxy blocklist is not consulted in this mode — the env var injection still suppresses telemetry silently.
+
+**Impact:** None — telemetry is non-essential and the agent functions normally without it.
 
 **Why blocked?** Analytics events may include code context, prompt fragments, or usage patterns that constitute unintended data exfiltration from inside the sandbox.
 
@@ -475,8 +475,9 @@ Domain not in allowlist
 
 ```toml
 # .cplt.toml
+[hardening]
+disabled_categories = ["telemetry_opt_out"]
+
 [proxy]
 blocked_domains = "none"   # disable the default blocklist entirely
 ```
-
-Or add a custom blocklist that omits `posthog.com`.

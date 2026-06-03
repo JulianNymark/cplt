@@ -2803,6 +2803,7 @@ fn env_sanitized_injects_telemetry_opt_out_vars() {
         ("TURBO_TELEMETRY_DISABLED", "1"),
         ("CHECKPOINT_DISABLE", "1"),
         ("GATSBY_TELEMETRY_DISABLED", "1"),
+        ("OMO_DISABLE_POSTHOG", "1"),
     ] {
         let found = env.vars.iter().find(|(k, _)| k == name);
         assert!(found.is_some(), "should inject {name}");
@@ -2829,6 +2830,7 @@ fn env_sanitized_telemetry_opt_out_can_be_disabled() {
         "TURBO_TELEMETRY_DISABLED",
         "CHECKPOINT_DISABLE",
         "GATSBY_TELEMETRY_DISABLED",
+        "OMO_DISABLE_POSTHOG",
     ] {
         assert!(
             !env.vars.iter().any(|(k, _)| k == name),

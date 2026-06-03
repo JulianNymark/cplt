@@ -406,6 +406,12 @@ pub const HARDENING_ENV_VARS: &[HardeningEnvVar] = &[
         category: HardeningCategory::TelemetryOptOut,
         description: "Disable Gatsby build telemetry",
     },
+    HardeningEnvVar {
+        name: "OMO_DISABLE_POSTHOG",
+        value: "1",
+        category: HardeningCategory::TelemetryOptOut,
+        description: "Disable oh-my-openagent PostHog telemetry (OpenCode plugin)",
+    },
 ];
 
 /// Files within `~/.gnupg/` that are safe to expose read-only for GPG signing.
