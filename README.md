@@ -306,7 +306,7 @@ The project directory is the primary writable workspace, plus a narrow allowlist
 
 ### Environment variables
 
-By default, `cplt` sanitizes the child environment — only safe variables pass through. Cloud credentials, database URLs, and package tokens are stripped. Additionally, security hardening variables are injected to block npm/yarn/pnpm lifecycle scripts (postinstall hooks) — the #1 supply chain attack vector — and disable git commit/tag signing (since `~/.ssh` and `~/.gnupg` are inaccessible inside the sandbox).
+By default, `cplt` sanitizes the child environment — only safe variables pass through. Cloud credentials, database URLs, and package tokens are stripped. Additionally, security hardening variables are injected to block npm/yarn/pnpm lifecycle scripts (postinstall hooks) — the #1 supply chain attack vector — disable git commit/tag signing (since `~/.ssh` and `~/.gnupg` are inaccessible inside the sandbox), and opt out of developer tooling telemetry (`DO_NOT_TRACK=1`, `NEXT_TELEMETRY_DISABLED=1`, `TURBO_TELEMETRY_DISABLED=1`, `CHECKPOINT_DISABLE=1`, etc.).
 
 **What passes through:**
 

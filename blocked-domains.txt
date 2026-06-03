@@ -95,6 +95,27 @@ myexternalip.com
 # workers.dev
 # herokuapp.com
 
+# ── Developer tooling telemetry ──────────────────────────────────
+# Build tools, framework CLIs, and language toolchains that send default-on
+# usage analytics. These are not malicious, but represent unnecessary data
+# collection from inside the sandbox. Tools continue to work normally.
+# See also: HARDENING_ENV_VARS in sandbox_policy.rs (env-level opt-outs).
+
+# HashiCorp tools (terraform, vault, packer, nomad) — version-check + usage pings
+checkpoint.hashicorp.com
+
+# Next.js — build telemetry (see also NEXT_TELEMETRY_DISABLED env var)
+telemetry.nextjs.org
+
+# VS Code extensions — Microsoft 1DS / OneCollector SDK used by all MS-authored
+# extensions (Copilot, ESLint, GitLens variants, etc.) and VS Code itself
+mobile.events.data.microsoft.com
+dc.services.visualstudio.com
+
+# Go toolchain — telemetry upload target (default is local-only, but block the
+# upload endpoint to prevent accidental activation via `go telemetry on`)
+telemetry.go.dev
+
 # ── AI agent telemetry / analytics ───────────────────────────────
 # AI coding agents send usage analytics and crash reports to third-party
 # services. These are not malicious, but they represent unintended data

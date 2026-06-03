@@ -429,6 +429,33 @@ Even with `allow.read`, the agent **cannot execute** binaries inside these direc
 
 > **Design principle:** `allow.read` grants read access to credential *files* so SDKs can authenticate. It does not grant execute permission because executing cloud CLIs would bypass the sandbox's network and filesystem restrictions.
 
+## Developer tooling telemetry
+
+Many developer tools — build systems, framework CLIs, language toolchains — send default-on usage analytics to external services. cplt uses two complementary layers to prevent this:
+
+**Layer 1 — env var opt-outs** (injected unconditionally via `HARDENING_ENV_VARS`):
+
+| Variable | Affects |
+|----------|---------|
+| `DO_NOT_TRACK=1` | Cross-tool standard signal ([consoledonottrack.com](https://consoledonottrack.com/)) |
+| `NEXT_TELEMETRY_DISABLED=1` | Next.js build telemetry |
+| `TURBO_TELEMETRY_DISABLED=1` | Turborepo usage telemetry |
+| `CHECKPOINT_DISABLE=1` | HashiCorp tools (terraform, vault, packer, nomad) |
+| `GATSBY_TELEMETRY_DISABLED=1` | Gatsby build telemetry |
+
+**Layer 2 — proxy domain blocks** (in `blocked-domains.txt`):
+
+| Domain | Blocks |
+|--------|--------|
+| `checkpoint.hashicorp.com` | HashiCorp version/update pings |
+| `telemetry.nextjs.org` | Next.js telemetry fallback |
+| `mobile.events.data.microsoft.com` | VS Code + all Microsoft extensions (1DS SDK) |
+| `dc.services.visualstudio.com` | Older VS Code / App Insights |
+| `telemetry.go.dev` | Go toolchain upload endpoint |
+| `posthog.com` | AI agent analytics (PostHog — all subdomains) |
+
+Tools continue to work normally — these are non-essential telemetry endpoints.
+
 ## AI agent telemetry
 
 AI agents and their third-party packages often send usage analytics and crash reports to external services (PostHog, Sentry, etc.). Inside the cplt proxy, these calls are **blocked by default** — `posthog.com` is in `blocked-domains.txt`.

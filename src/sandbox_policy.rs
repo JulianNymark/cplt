@@ -292,6 +292,10 @@ pub enum HardeningCategory {
     GitSigning,
     /// Always-on markers that signal "you're inside the sandbox". Never disabled.
     SandboxMarker,
+    /// Opt-out signals for developer tooling telemetry (build tools, CLIs, editors).
+    /// These prevent analytics beacons from reaching external services. Tools still
+    /// function normally — only non-essential telemetry collection is disabled.
+    TelemetryOptOut,
 }
 
 /// A security-hardening environment variable injected into the sandbox.
@@ -365,6 +369,42 @@ pub const HARDENING_ENV_VARS: &[HardeningEnvVar] = &[
         value: "1",
         category: HardeningCategory::SandboxMarker,
         description: "Block cplt trust commands inside sandbox",
+    },
+    // Telemetry opt-out — many build tools and CLIs send default-on usage analytics.
+    // These env vars instruct tools to disable telemetry collection. They have no
+    // effect on tools that don't recognise them and do not affect functionality.
+    //
+    // DO_NOT_TRACK is a cross-tool standard (https://consoledonottrack.com/).
+    // Tool-specific vars cover frameworks that predate or ignore the standard.
+    HardeningEnvVar {
+        name: "DO_NOT_TRACK",
+        value: "1",
+        category: HardeningCategory::TelemetryOptOut,
+        description: "Cross-tool telemetry disable signal (consoledonottrack.com)",
+    },
+    HardeningEnvVar {
+        name: "NEXT_TELEMETRY_DISABLED",
+        value: "1",
+        category: HardeningCategory::TelemetryOptOut,
+        description: "Disable Next.js build telemetry (telemetry.nextjs.org)",
+    },
+    HardeningEnvVar {
+        name: "TURBO_TELEMETRY_DISABLED",
+        value: "1",
+        category: HardeningCategory::TelemetryOptOut,
+        description: "Disable Turborepo usage telemetry",
+    },
+    HardeningEnvVar {
+        name: "CHECKPOINT_DISABLE",
+        value: "1",
+        category: HardeningCategory::TelemetryOptOut,
+        description: "Disable HashiCorp checkpoint (terraform, vault, packer, nomad)",
+    },
+    HardeningEnvVar {
+        name: "GATSBY_TELEMETRY_DISABLED",
+        value: "1",
+        category: HardeningCategory::TelemetryOptOut,
+        description: "Disable Gatsby build telemetry",
     },
 ];
 

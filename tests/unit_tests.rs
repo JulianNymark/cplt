@@ -2793,6 +2793,62 @@ fn env_sanitized_injects_hardening_vars() {
 }
 
 #[test]
+fn env_sanitized_injects_telemetry_opt_out_vars() {
+    let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+
+    for (name, expected) in &[
+        ("DO_NOT_TRACK", "1"),
+        ("NEXT_TELEMETRY_DISABLED", "1"),
+        ("TURBO_TELEMETRY_DISABLED", "1"),
+        ("CHECKPOINT_DISABLE", "1"),
+        ("GATSBY_TELEMETRY_DISABLED", "1"),
+    ] {
+        let found = env.vars.iter().find(|(k, _)| k == name);
+        assert!(found.is_some(), "should inject {name}");
+        assert_eq!(found.unwrap().1, *expected, "{name} should be {expected}");
+    }
+}
+
+#[test]
+fn env_sanitized_telemetry_opt_out_can_be_disabled() {
+    let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
+    let disabled = vec![HardeningCategory::TelemetryOptOut];
+    let env = build_sandbox_env(
+        &parent,
+        &[],
+        false,
+        &disabled,
+        None,
+        cplt::agent::Agent::Copilot,
+    );
+
+    for name in &[
+        "DO_NOT_TRACK",
+        "NEXT_TELEMETRY_DISABLED",
+        "TURBO_TELEMETRY_DISABLED",
+        "CHECKPOINT_DISABLE",
+        "GATSBY_TELEMETRY_DISABLED",
+    ] {
+        assert!(
+            !env.vars.iter().any(|(k, _)| k == name),
+            "{name} should not be injected when TelemetryOptOut is disabled"
+        );
+    }
+    // Other categories should still be active
+    assert!(
+        env.vars.iter().any(|(k, _)| k == "GIT_TERMINAL_PROMPT"),
+        "git hardening should remain active when telemetry opt-out is disabled"
+    );
+    assert!(
+        env.vars
+            .iter()
+            .any(|(k, _)| k == "npm_config_ignore_scripts"),
+        "lifecycle scripts hardening should remain active"
+    );
+}
+
+#[test]
 fn env_sanitized_lifecycle_opt_out_skips_npm_yarn() {
     let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
     let disabled = vec![HardeningCategory::LifecycleScripts];
