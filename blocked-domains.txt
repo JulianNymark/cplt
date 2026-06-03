@@ -94,3 +94,13 @@ myexternalip.com
 #
 # workers.dev
 # herokuapp.com
+
+# ── AI agent telemetry / analytics ───────────────────────────────
+# AI coding agents send usage analytics and crash reports to third-party
+# services. These are not malicious, but they represent unintended data
+# exfiltration from inside the sandbox (code context, prompts, usage patterns).
+#
+# Blocked by default for privacy. Agents continue to function normally —
+# these endpoints are non-essential telemetry.
+posthog.com
+# sentry.io           # uncomment to block Sentry crash reporting

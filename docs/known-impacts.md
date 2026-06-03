@@ -428,3 +428,28 @@ Even with `allow.read`, the agent **cannot execute** binaries inside these direc
 | CI/CD with cloud access | Use project-level service account keys or workload identity (not user credentials) |
 
 > **Design principle:** `allow.read` grants read access to credential *files* so SDKs can authenticate. It does not grant execute permission because executing cloud CLIs would bypass the sandbox's network and filesystem restrictions.
+
+## AI agent telemetry
+
+AI agents and their third-party packages often send usage analytics and crash reports to external services (PostHog, Sentry, etc.). Inside the cplt proxy, these calls are **blocked by default** — `posthog.com` is in `blocked-domains.txt`.
+
+This produces visible but harmless errors in the agent UI, for example in OpenCode:
+
+```
+Error while flushing PostHog: message=HTTP error while fetching PostHog: status=403
+Domain not in allowlist
+```
+
+**Impact:** Cosmetic only — the agent continues to function normally. Telemetry is non-essential.
+
+**Why blocked?** Analytics events may include code context, prompt fragments, or usage patterns that constitute unintended data exfiltration from inside the sandbox.
+
+**If you want to allow telemetry** (not recommended):
+
+```toml
+# .cplt.toml
+[proxy]
+blocked_domains = "none"   # disable the default blocklist entirely
+```
+
+Or add a custom blocklist that omits `posthog.com`.
