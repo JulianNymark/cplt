@@ -896,7 +896,7 @@ fn build_seccomp_filter() -> Vec<BpfInstruction> {
 
     // Blocked syscall numbers — privilege escalation and system modification
     // syscalls that a sandboxed code assistant should never need.
-    let mut blocked: Vec<u32> = vec![
+    let blocked: Vec<u32> = vec![
         libc::SYS_ptrace as u32,
         libc::SYS_process_vm_readv as u32,
         libc::SYS_process_vm_writev as u32,
