@@ -244,6 +244,18 @@ Or with [mise](https://mise.jdx.dev):
 mise run install
 ```
 
+**Note on PATH:** `mise run install` and manual builds install cplt to `/usr/local/bin/cplt`. If you also have cplt installed via Homebrew (at `/opt/homebrew/bin/cplt`), ensure `/usr/local/bin` comes first in your `PATH` so the latest development version is used:
+
+```bash
+# Check which cplt is active
+which cplt
+
+# If it shows /opt/homebrew/bin/cplt, reorder your PATH:
+export PATH="/usr/local/bin:$PATH"
+```
+
+Alternatively, run `/usr/local/bin/cplt` explicitly to bypass PATH resolution.
+
 ### Shell setup (recommended)
 
 By default, you run the sandboxed version with `cplt`. To make `copilot` run the sandboxed version too, use the one-command installer:
