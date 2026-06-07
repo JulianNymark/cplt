@@ -387,6 +387,7 @@ mod macos_tests {
             git_hooks_path: None,
             git_common_dir: None,
             allow_gpg_signing: false,
+            deny_clipboard: false,
             allow_jvm_attach: false,
             allow_docker: false,
             electron_app_dir: None,
@@ -1244,6 +1245,86 @@ finally:
         assert!(
             output.contains("BLOCKED"),
             "Arbitrary unix sockets in /tmp must be blocked, got: {output}"
+        );
+    }
+
+    // ── Clipboard (pasteboard) access control ─────────────────────
+
+    /// Verify `--deny-clipboard` kernel enforcement via `pbpaste`.
+    ///
+    /// `pbpaste` communicates with the pasteboard server via the Mach service
+    /// `com.apple.pasteboard.1`. The profile emits a targeted `(deny mach-lookup …)`
+    /// immediately after `(allow mach-lookup)` so last-match-wins in SBPL blocks
+    /// only the pasteboard Mach service while leaving DNS, Keychain, and all
+    /// other Mach services intact.
+    #[test]
+    fn real_profile_deny_clipboard_blocks_pbpaste() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let mut opts = default_opts(&project, &home);
+        opts.deny_clipboard = true;
+        let profile = write_real_profile(&opts);
+
+        // pbpaste connects to com.apple.pasteboard.1 via mach-lookup.
+        // With deny_clipboard the Mach lookup is denied, so pbpaste exits non-zero.
+        let cmd = "pbpaste 2>&1; echo EXIT:$?";
+        let (output, _) = run_sandboxed(&profile, cmd);
+
+        fs::remove_file(&profile).ok();
+
+        // pbpaste must fail when the pasteboard service is denied. Assert a
+        // non-zero exit (the paired allow-by-default test confirms it exits 0
+        // otherwise) rather than matching a specific code or localized text.
+        assert!(
+            !output.contains("EXIT:0"),
+            "pbpaste should be blocked when deny_clipboard is set, got: {output}"
+        );
+    }
+
+    /// Verify `--deny-clipboard` also blocks clipboard writes via `pbcopy`.
+    ///
+    /// This complements the `pbpaste` read test so both read and write
+    /// operations are covered against the same pasteboard Mach deny.
+    #[test]
+    fn real_profile_deny_clipboard_blocks_pbcopy() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let mut opts = default_opts(&project, &home);
+        opts.deny_clipboard = true;
+        let profile = write_real_profile(&opts);
+
+        let cmd = "echo cplt-test | pbcopy 2>&1; echo EXIT:$?";
+        let (output, _) = run_sandboxed(&profile, cmd);
+
+        fs::remove_file(&profile).ok();
+        assert!(
+            !output.contains("EXIT:0"),
+            "pbcopy should be blocked when deny_clipboard is set, got: {output}"
+        );
+    }
+
+    /// Without `--deny-clipboard`, `pbpaste` must still exit successfully.
+    ///
+    /// This guards against accidentally breaking the pasteboard in the default
+    /// profile — the clipboard must remain accessible unless the user opts out.
+    #[test]
+    fn real_profile_allows_pbpaste_by_default() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let opts = default_opts(&project, &home);
+        let profile = write_real_profile(&opts);
+
+        // pbpaste may output nothing if the clipboard is empty, but exit 0.
+        let cmd = "pbpaste > /dev/null 2>&1 && echo EXIT:0 || echo EXIT:1";
+        let (output, _) = run_sandboxed(&profile, cmd);
+
+        fs::remove_file(&profile).ok();
+        assert!(
+            output.contains("EXIT:0"),
+            "pbpaste should succeed by default (clipboard open), got: {output}"
         );
     }
 
