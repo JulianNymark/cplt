@@ -269,18 +269,20 @@ impl Agent {
                 "GEMINI_API_KEY",
                 "OPENROUTER_API_KEY",
                 "GROQ_API_KEY",
+                "AWS_BEARER_TOKEN_BEDROCK",
             ],
             // Gemini uses Google OAuth by default (browser flow, stored in ~/.gemini/).
             // API key or Vertex AI project are alternatives.
             Agent::Gemini => &["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT"],
             // Antigravity uses Google OAuth with keychain/session storage.
             Agent::Antigravity => &[],
-            // Pi supports multiple LLM providers via API keys.
+            // Pi supports multiple LLM providers via API keys, including AWS Bedrock.
             Agent::Pi => &[
                 "ANTHROPIC_API_KEY",
                 "OPENAI_API_KEY",
                 "GEMINI_API_KEY",
                 "OPENROUTER_API_KEY",
+                "AWS_BEARER_TOKEN_BEDROCK",
             ],
             Agent::Shell => &[],
         }
@@ -760,6 +762,7 @@ mod tests {
         let hints = Agent::OpenCode.auth_env_hint();
         assert!(hints.contains(&"ANTHROPIC_API_KEY"));
         assert!(hints.contains(&"OPENAI_API_KEY"));
+        assert!(hints.contains(&"AWS_BEARER_TOKEN_BEDROCK"));
     }
 
     #[test]
@@ -840,6 +843,7 @@ mod tests {
         assert!(hints.contains(&"OPENAI_API_KEY"));
         assert!(hints.contains(&"GEMINI_API_KEY"));
         assert!(hints.contains(&"OPENROUTER_API_KEY"));
+        assert!(hints.contains(&"AWS_BEARER_TOKEN_BEDROCK"));
     }
 
     #[test]
