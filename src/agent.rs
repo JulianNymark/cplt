@@ -263,26 +263,61 @@ impl Agent {
             Agent::Copilot => &[],
             // OpenCode third-party provider API keys — user must opt in.
             // Copilot provider uses device flow + auth.json, no env var needed.
+            // Source of truth: https://opencode.ai/docs/providers/
             Agent::OpenCode => &[
+                // Anthropic
                 "ANTHROPIC_API_KEY",
+                // OpenAI + Azure OpenAI
                 "OPENAI_API_KEY",
-                "GEMINI_API_KEY",
-                "OPENROUTER_API_KEY",
-                "GROQ_API_KEY",
+                "AZURE_OPENAI_API_KEY",
+                // AWS Bedrock (bearer token auth — SigV4 via AWS_ACCESS_KEY_ID requires --pass-env per-var)
                 "AWS_BEARER_TOKEN_BEDROCK",
+                // Google
+                "GEMINI_API_KEY",
+                // Popular API providers
+                "XAI_API_KEY",
+                "MISTRAL_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "GROQ_API_KEY",
+                "CEREBRAS_API_KEY",
+                "NVIDIA_API_KEY",
+                "OPENROUTER_API_KEY",
+                "TOGETHER_API_KEY",
+                "FIREWORKS_API_KEY",
+                "CLOUDFLARE_API_TOKEN",
+                "GITLAB_TOKEN",
             ],
             // Gemini uses Google OAuth by default (browser flow, stored in ~/.gemini/).
             // API key or Vertex AI project are alternatives.
             Agent::Gemini => &["GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT"],
             // Antigravity uses Google OAuth with keychain/session storage.
             Agent::Antigravity => &[],
-            // Pi supports multiple LLM providers via API keys, including AWS Bedrock.
+            // Pi supports many LLM providers via API keys.
+            // Source of truth: https://github.com/earendil-works/pi/blob/main/packages/ai/src/env-api-keys.ts
             Agent::Pi => &[
+                // Anthropic (classic key + OAuth token)
                 "ANTHROPIC_API_KEY",
+                "ANTHROPIC_OAUTH_TOKEN",
+                // OpenAI + Azure OpenAI
                 "OPENAI_API_KEY",
-                "GEMINI_API_KEY",
-                "OPENROUTER_API_KEY",
+                "AZURE_OPENAI_API_KEY",
+                // AWS Bedrock (bearer token auth — SigV4 via AWS_ACCESS_KEY_ID requires --pass-env per-var)
                 "AWS_BEARER_TOKEN_BEDROCK",
+                // Google
+                "GEMINI_API_KEY",
+                // Popular API providers
+                "XAI_API_KEY",
+                "MISTRAL_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "GROQ_API_KEY",
+                "CEREBRAS_API_KEY",
+                "NVIDIA_API_KEY",
+                "OPENROUTER_API_KEY",
+                "TOGETHER_API_KEY",
+                "FIREWORKS_API_KEY",
+                "HF_TOKEN",
+                "CLOUDFLARE_API_KEY",
+                "OPENCODE_API_KEY",
             ],
             Agent::Shell => &[],
         }
@@ -763,6 +798,12 @@ mod tests {
         assert!(hints.contains(&"ANTHROPIC_API_KEY"));
         assert!(hints.contains(&"OPENAI_API_KEY"));
         assert!(hints.contains(&"AWS_BEARER_TOKEN_BEDROCK"));
+        assert!(hints.contains(&"XAI_API_KEY"));
+        assert!(hints.contains(&"MISTRAL_API_KEY"));
+        assert!(hints.contains(&"DEEPSEEK_API_KEY"));
+        assert!(hints.contains(&"GROQ_API_KEY"));
+        assert!(hints.contains(&"CLOUDFLARE_API_TOKEN"));
+        assert!(hints.contains(&"GITLAB_TOKEN"));
     }
 
     #[test]
@@ -840,10 +881,16 @@ mod tests {
     fn pi_auth_env_hints() {
         let hints = Agent::Pi.auth_env_hint();
         assert!(hints.contains(&"ANTHROPIC_API_KEY"));
+        assert!(hints.contains(&"ANTHROPIC_OAUTH_TOKEN"));
         assert!(hints.contains(&"OPENAI_API_KEY"));
-        assert!(hints.contains(&"GEMINI_API_KEY"));
-        assert!(hints.contains(&"OPENROUTER_API_KEY"));
         assert!(hints.contains(&"AWS_BEARER_TOKEN_BEDROCK"));
+        assert!(hints.contains(&"GEMINI_API_KEY"));
+        assert!(hints.contains(&"XAI_API_KEY"));
+        assert!(hints.contains(&"MISTRAL_API_KEY"));
+        assert!(hints.contains(&"DEEPSEEK_API_KEY"));
+        assert!(hints.contains(&"GROQ_API_KEY"));
+        assert!(hints.contains(&"HF_TOKEN"));
+        assert!(hints.contains(&"OPENROUTER_API_KEY"));
     }
 
     #[test]

@@ -1092,10 +1092,17 @@ fn resolve_context(cli: &Cli) -> anyhow::Result<ResolvedContext> {
                 "No API keys passed. {} needs auth — either:",
                 active_agent.display_name()
             ));
+            // Prefer showing a hint for a key that's already in the parent env
+            // (user has it set but forgot --pass-env). Fall back to the first hint.
+            let hint_to_show = hints
+                .iter()
+                .find(|key| parent_env.iter().any(|(k, _)| k == *key))
+                .copied()
+                .unwrap_or(hints[0]);
             ui::warn(&format!(
                 "  cplt --agent {} --pass-env {}",
                 active_agent.binary_name(),
-                hints[0]
+                hint_to_show
             ));
             if active_agent == agent::Agent::OpenCode {
                 ui::warn("  or use /connect in OpenCode with your GitHub Copilot subscription");
