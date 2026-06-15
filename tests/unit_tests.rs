@@ -1917,6 +1917,7 @@ fn env_allowlist_includes_essential_vars() {
     assert!(ENV_PREFIX_ALLOWLIST.contains(&"LC_"));
     assert!(ENV_PREFIX_ALLOWLIST.contains(&"COPILOT_"));
     assert!(ENV_PREFIX_ALLOWLIST.contains(&"MISE_"));
+    assert!(ENV_PREFIX_ALLOWLIST.contains(&"OTEL_"));
 }
 
 #[test]
@@ -3197,6 +3198,41 @@ fn env_explicit_allowlist_bypasses_suffix_deny() {
     assert!(
         env.vars.iter().any(|(k, _)| k == "COPILOT_GITHUB_TOKEN"),
         "COPILOT_GITHUB_TOKEN is explicitly allowlisted and must pass through"
+    );
+}
+
+#[test]
+fn env_otel_prefix_passthrough_and_secret_suffix_strip() {
+    // a) OTEL_EXPORTER_OTLP_ENDPOINT passes through in sanitized (non-inherit) mode.
+    // b) COPILOT_OTEL_ENABLED passes through (covered by the COPILOT_ prefix).
+    // c) OTEL_FOO_TOKEN is stripped — deny-suffix wins over the OTEL_ prefix.
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        ("PATH", "/usr/bin"),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+        ("OTEL_SERVICE_NAME", "my-service"),
+        ("COPILOT_OTEL_ENABLED", "true"),
+        ("OTEL_FOO_TOKEN", "secret-otel-token"),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+
+    assert!(
+        env.vars
+            .iter()
+            .any(|(k, _)| k == "OTEL_EXPORTER_OTLP_ENDPOINT"),
+        "OTEL_EXPORTER_OTLP_ENDPOINT should pass through via OTEL_ prefix"
+    );
+    assert!(
+        env.vars.iter().any(|(k, _)| k == "OTEL_SERVICE_NAME"),
+        "OTEL_SERVICE_NAME should pass through via OTEL_ prefix"
+    );
+    assert!(
+        env.vars.iter().any(|(k, _)| k == "COPILOT_OTEL_ENABLED"),
+        "COPILOT_OTEL_ENABLED should pass through via COPILOT_ prefix"
+    );
+    assert!(
+        !env.vars.iter().any(|(k, _)| k == "OTEL_FOO_TOKEN"),
+        "OTEL_FOO_TOKEN must be stripped by the _TOKEN deny-suffix despite OTEL_ prefix"
     );
 }
 

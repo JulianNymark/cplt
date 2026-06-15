@@ -334,6 +334,7 @@ By default, `cplt` sanitizes the child environment — only safe variables pass 
 | Copilot config    | `COPILOT_DEBUG`, `COPILOT_*`                                               | Prefix allowlist                        |
 | Language runtimes | `NODE_*`, `GOPATH`, `CARGO_HOME`, `JAVA_HOME`, `VIRTUAL_ENV`, `PYTHONPATH` | Explicit allowlist                      |
 | Tool managers     | `NVM_*`, `FNM_*`, `PYENV_*`, `MISE_*`, `SDKMAN_*`, `COREPACK_*`, `YARN_*`  | Prefix allowlist                        |
+| OpenTelemetry     | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_*` | Prefix allowlist (`OTEL_EXPORTER_OTLP_HEADERS` may carry opt-in auth) |
 | XDG dirs          | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`     | Explicit allowlist                      |
 
 **Prefix allowlist with secret-suffix protection:** Variables matching allowed prefixes (e.g. `COPILOT_*`, `YARN_*`) are passed through *unless* they end with a secret-bearing suffix: `_TOKEN`, `_AUTH`, `_SECRET`, `_SECRET_KEY`, `_KEY`, `_PASSWORD`, or `_CREDENTIALS`. For example, `COPILOT_DEBUG` passes through but `COPILOT_API_KEY` is blocked.

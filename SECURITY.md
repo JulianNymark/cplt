@@ -230,11 +230,13 @@ By default, `cplt` clears the child process environment and re-adds only safe va
 **How it works:**
 1. `cmd.env_clear()` removes all environment variables
 2. Variables matching `ENV_ALLOWLIST` (49 safe vars) are re-added from the parent process
-3. Variables matching `ENV_PREFIX_ALLOWLIST` (8 prefixes: `LC_*`, `COPILOT_*`, `COREPACK_*`, `MISE_*`, `NVM_*`, `PYENV_*`, `SDKMAN_*`, `YARN_*`) are re-added
+3. Variables matching `ENV_PREFIX_ALLOWLIST` (9 prefixes: `LC_*`, `COPILOT_*`, `COREPACK_*`, `MISE_*`, `NVM_*`, `PYENV_*`, `SDKMAN_*`, `YARN_*`, `OTEL_*`) are re-added
 4. `--pass-env VAR` adds explicit vars (repeatable)
 5. `ENV_ALWAYS_DENY` vars (`NO_COLOR`, `FORCE_COLOR`, `SSH_AUTH_SOCK`, `SSH_AGENT_PID`) are always stripped
 
 **Deliberately allowed:** `GH_TOKEN`, `GITHUB_TOKEN`, `COPILOT_GITHUB_TOKEN` — Copilot needs a GitHub token to function. This is an accepted trade-off.
+
+**OpenTelemetry (`OTEL_*`):** OTel configuration vars (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`) are allowed via the `OTEL_` prefix. `OTEL_EXPORTER_OTLP_HEADERS` may carry opt-in auth headers (e.g. `Authorization=Bearer <token>`) — this is an accepted trade-off in the same class as `GH_TOKEN`, only present when the user has configured an exporter. The `is_secret_suffix` deny-list still strips any `OTEL_*_TOKEN` / `_AUTH` / `_SECRET` / `_KEY` / `_PASSWORD` / `_CREDENTIALS` vars.
 
 **Deliberately blocked:** `AWS_*`, `AZURE_*`, `NPM_TOKEN`, `DATABASE_URL`, `VAULT_TOKEN`, `SSH_AUTH_SOCK`, Docker vars, CI tokens.
 

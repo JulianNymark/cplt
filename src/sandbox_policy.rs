@@ -262,6 +262,13 @@ pub const ENV_PREFIX_ALLOWLIST: &[&str] = &[
     "TESTCONTAINERS_", // Testcontainers configuration
     "YARN_",           // Yarn Berry config (hardening injection overrides YARN_ENABLE_SCRIPTS)
     "AGY_",            // Antigravity CLI runtime configuration
+    // OpenTelemetry vendor-neutral configuration (OTEL_SERVICE_NAME, OTEL_EXPORTER_OTLP_ENDPOINT,
+    // OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_RESOURCE_ATTRIBUTES, OTEL_LOG_LEVEL, etc.).
+    // OTEL_EXPORTER_OTLP_HEADERS may carry opt-in auth headers (e.g. "Authorization=Bearer
+    // <token>"); this is an accepted trade-off in the same class as GH_TOKEN — only present
+    // when the user has explicitly configured an exporter. The is_secret_suffix deny-list
+    // still strips any OTEL_*_TOKEN / _AUTH / _SECRET / _KEY / _PASSWORD / _CREDENTIALS vars.
+    "OTEL_",
 ];
 
 /// Environment variables always stripped, even with --inherit-env.
