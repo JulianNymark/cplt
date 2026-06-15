@@ -104,6 +104,12 @@ impl DomainCache {
     }
 }
 
+/// DNS resolver override used in tests to inject fake DNS responses.
+/// Receives (hostname, port) and returns a resolved `SocketAddr`, or `None`
+/// to simulate a DNS failure. Never used in production builds.
+#[cfg(test)]
+pub type ResolverFn = Arc<dyn Fn(&str, u16) -> Option<std::net::SocketAddr> + Send + Sync>;
+
 /// Shared proxy state holding cached domain lists and config paths.
 /// Wrapped in `Arc` and shared across connection threads.
 pub struct ProxyState {
@@ -123,10 +129,19 @@ pub struct ProxyState {
     // Ports: frozen at startup (kernel Seatbelt profile is immutable)
     allowed_ports: Vec<u16>,
 
+    // Localhost: ports (or all) explicitly opened via --allow-localhost[/-any].
+    // The proxy bypasses its private-IP block for CONNECT to these.
+    allow_localhost_ports: Vec<u16>,
+    allow_localhost_any: bool,
+
     // Audit log
     log_file: Option<PathBuf>,
     // Verbosity level for stderr output
     log_level: ProxyLogLevel,
+
+    // Test-only: injectable DNS resolver to simulate fake DNS responses.
+    #[cfg(test)]
+    resolver: Option<ResolverFn>,
 }
 
 impl ProxyState {
@@ -300,6 +315,11 @@ pub struct ProxyOptions {
     pub port: u16,
     pub blocked_file: PathBuf,
     pub allowed_ports: Vec<u16>,
+    /// Specific localhost ports explicitly opened by `--allow-localhost`.
+    /// The proxy bypasses its private-IP block for CONNECT to these ports.
+    pub allow_localhost_ports: Vec<u16>,
+    /// Whether all localhost ports are open (`--allow-localhost-any`).
+    pub allow_localhost_any: bool,
     /// Path to an allowlist file (one domain per line). When set, only
     /// matching domains pass. The file is re-read every RELOAD_TTL seconds.
     pub allowed_domains_file: Option<PathBuf>,
@@ -316,6 +336,11 @@ pub struct ProxyOptions {
     pub log_file: Option<PathBuf>,
     /// Verbosity level for proxy stderr output.
     pub log_level: ProxyLogLevel,
+
+    /// Test-only: injectable DNS resolver. Pass a closure to override DNS
+    /// resolution in proxy tests (e.g. to simulate DNS rebinding).
+    #[cfg(test)]
+    pub resolver: Option<ResolverFn>,
 }
 
 /// Start the proxy on a background thread. Returns a handle for shutdown.
@@ -382,8 +407,12 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         config_file: opts.config_file,
         private_domains_cache: Mutex::new(DomainCache::new(opts.config_private_domains)),
         allowed_ports: ports,
+        allow_localhost_ports: opts.allow_localhost_ports,
+        allow_localhost_any: opts.allow_localhost_any,
         log_file: opts.log_file,
         log_level: opts.log_level,
+        #[cfg(test)]
+        resolver: opts.resolver,
     });
 
     listener
@@ -527,10 +556,26 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     let log_file = state.log_file.as_deref();
     let log_level = state.log_level;
 
+    // Compute localhost bypass before the port check: --allow-localhost <PORT> must
+    // also exempt that port from the general port policy (which only lists remote ports
+    // like 443/80). Without this, allow_localhost_ports would be silently ignored —
+    // the port check would fire first and return 403 before the localhost logic ran.
+    let localhost_connect_allowed = {
+        let h = host.trim_start_matches('[').trim_end_matches(']');
+        let is_loopback = h == "localhost"
+            || h.ends_with(".localhost")
+            || h.parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        is_loopback && (state.allow_localhost_any || state.allow_localhost_ports.contains(&port))
+    };
+
     // Enforce port policy — only allow ports matching the sandbox network rules.
     // Without this, the proxy would let sandboxed processes tunnel to arbitrary
     // remote ports, bypassing the sandbox's port restrictions.
-    if !state.allowed_ports.contains(&port) {
+    // Exception: explicitly-opened localhost ports bypass this check; the user's
+    // intent with --allow-localhost <PORT> is to reach that port regardless of
+    // whether it appears in the general allowed_ports list.
+    if !localhost_connect_allowed && !state.allowed_ports.contains(&port) {
         log_connection("CONNECT", target, "BLOCKED-PORT", log_file, log_level);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nPort not allowed\r\n");
         return;
@@ -552,35 +597,81 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBlocked by cplt\r\n");
         return;
     }
-
     // Reject hostname patterns that are known private (fast path before DNS)
-    if is_private_hostname(&host) {
+    if !localhost_connect_allowed && is_private_hostname(&host) {
         log_connection("CONNECT", target, "BLOCKED-PRIVATE", log_file, log_level);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nPrivate target blocked\r\n");
         return;
     }
 
     // Resolve DNS FIRST, then check the resolved IP
-    let addr = format!("{host}:{port}");
-    let socket_addr = if let Ok(mut addrs) = addr.to_socket_addrs() {
-        if let Some(a) = addrs.next() {
+    let addr_str = format!("{host}:{port}");
+    #[cfg(test)]
+    let socket_addr = {
+        // In tests, an injected resolver can fake DNS responses (e.g. to simulate
+        // DNS rebinding where evil.localhost → 169.254.169.254).
+        if let Some(ref resolver) = state.resolver {
+            if let Some(a) = resolver(&host, port) {
+                a
+            } else {
+                log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
+                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+                return;
+            }
+        } else if let Some(a) = addr_str.to_socket_addrs().ok().and_then(|mut a| a.next()) {
             a
         } else {
             log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
             let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
             return;
         }
-    } else {
-        log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
-        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-        return;
     };
+    #[cfg(not(test))]
+    let socket_addr = {
+        if let Some(a) = addr_str.to_socket_addrs().ok().and_then(|mut a| a.next()) {
+            a
+        } else {
+            log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
+            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            return;
+        }
+    };
+
+    // Hard requirement for the localhost carve-out: a target that was only
+    // permitted because of --allow-localhost(-any) MUST resolve to a loopback
+    // address. `*.localhost` is supposed to map to 127.0.0.1/::1, but a hostile
+    // resolver or /etc/hosts entry could point `evil.localhost` at a public or
+    // private non-loopback IP. Without this check the carve-out (which already
+    // bypassed the port policy and private-hostname block) would tunnel to an
+    // arbitrary port on an arbitrary host — an SSRF / egress-widening vector.
+    // The earlier is_private_ip guard below only catches *private* IPs; this also
+    // closes the *public* non-loopback case.
+    if localhost_connect_allowed && !socket_addr.ip().is_loopback() {
+        log_connection(
+            "CONNECT",
+            target,
+            "BLOCKED-PRIVATE-RESOLVED",
+            log_file,
+            log_level,
+        );
+        let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nResolved to non-loopback IP\r\n");
+        return;
+    }
 
     // Check the RESOLVED IP address (prevents DNS rebinding attacks).
     // Domains in allow_private_domains are explicitly trusted to resolve to private IPs
     // (e.g. corporate internal services). All other checks still apply.
+    //
+    // For --allow-localhost: we use the *resolved* IP to confirm loopback, not the
+    // hostname. `*.localhost` in DNS is supposed to resolve to 127.0.0.1, but a
+    // compromised DNS or /etc/hosts entry could make `evil.localhost` resolve to
+    // 169.254.169.254 (cloud IMDS) or an internal host. Using the hostname pattern
+    // alone would bypass this check entirely, enabling SSRF to cloud metadata.
     let private_domains = state.get_private_domains();
-    if is_private_ip(&socket_addr.ip()) && !is_domain_match(&host, &private_domains) {
+    if is_private_ip(&socket_addr.ip())
+        && !is_domain_match(&host, &private_domains)
+        && !socket_addr.ip().is_loopback()
+    {
         log_connection(
             "CONNECT",
             target,
@@ -1059,8 +1150,11 @@ mod tests {
                 "config.example.com".to_string(),
             ])),
             allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         };
 
         let domains = state.get_private_domains();
@@ -1079,8 +1173,11 @@ mod tests {
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(vec!["shared.com".to_string()])),
             allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         };
 
         let domains = state.get_private_domains();
@@ -1104,8 +1201,11 @@ mod tests {
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         };
 
         let domains = state.get_allowed_domains();
@@ -1132,8 +1232,11 @@ mod tests {
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         };
 
         let blocked = state.get_blocked_domains();
@@ -1166,8 +1269,11 @@ mod tests {
                     .unwrap(),
             }),
             allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         };
 
         // First read: picks up "old.nav.no" from cache reload + "cli.nav.no"
@@ -1217,6 +1323,8 @@ mod tests {
             port: 0,
             blocked_file: blocked,
             allowed_ports: vec![],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
             cli_private_domains: Vec::new(),
@@ -1224,6 +1332,7 @@ mod tests {
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         });
         assert!(result.is_ok());
         result.unwrap().shutdown();
@@ -1245,6 +1354,8 @@ mod tests {
             port: 0,
             blocked_file: blocked,
             allowed_ports: vec![],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             allowed_domains_file: Some(allowlist_path),
             allowed_domains_initial: Vec::new(),
             cli_private_domains: Vec::new(),
@@ -1252,6 +1363,7 @@ mod tests {
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         });
         assert!(result.is_err(), "should fail when allowlist is unreadable");
 
@@ -1278,8 +1390,11 @@ mod tests {
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            resolver: None,
         };
 
         // Initial read picks up github.com from stale cache (triggers reload)
@@ -1296,5 +1411,295 @@ mod tests {
         assert!(domains.contains(&"npm.pkg.github.com".to_string()));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Skip guard for tests that make real TCP connections.
+    /// These tests require localhost TCP access, which is blocked inside the cplt sandbox.
+    macro_rules! require_localhost_tcp {
+        () => {
+            if std::env::var("__CPLT_WRAPPED").is_ok() {
+                eprintln!("SKIPPED: proxy CONNECT tests require localhost TCP (blocked inside cplt sandbox)");
+                return;
+            }
+        };
+    }
+
+    /// Helper: make a raw CONNECT request through the proxy and return the status line.
+    fn proxy_connect(proxy_port: u16, target: &str) -> String {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let mut conn = std::net::TcpStream::connect(format!("127.0.0.1:{proxy_port}")).unwrap();
+        write!(conn, "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").unwrap();
+        let mut reader = BufReader::new(conn);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        line.trim().to_string()
+    }
+
+    fn make_proxy(allow_localhost_ports: Vec<u16>, allow_localhost_any: bool) -> ProxyHandle {
+        make_proxy_with_resolver(allow_localhost_ports, allow_localhost_any, None)
+    }
+
+    /// Start a proxy with an optional injected DNS resolver.
+    /// Pass `Some(f)` to override DNS resolution in tests (e.g. to simulate
+    /// DNS rebinding where `evil.localhost` resolves to `169.254.169.254`).
+    fn make_proxy_with_resolver(
+        allow_localhost_ports: Vec<u16>,
+        allow_localhost_any: bool,
+        resolver: Option<ResolverFn>,
+    ) -> ProxyHandle {
+        let blocked = PathBuf::from("/dev/null");
+        start(ProxyOptions {
+            port: 0,
+            blocked_file: blocked,
+            allowed_ports: vec![443, 80],
+            allow_localhost_ports,
+            allow_localhost_any,
+            allowed_domains_file: None,
+            allowed_domains_initial: Vec::new(),
+            cli_private_domains: Vec::new(),
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            resolver,
+        })
+        .expect("proxy start failed")
+    }
+
+    #[test]
+    fn proxy_connect_localhost_blocked_without_allow() {
+        require_localhost_tcp!();
+        // Start a real listener so the proxy can actually resolve the target.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let proxy = make_proxy(vec![], false);
+        let status = proxy_connect(proxy.port, &format!("localhost:{port}"));
+        proxy.shutdown();
+        drop(listener);
+
+        assert!(
+            status.contains("403"),
+            "CONNECT to localhost should be blocked without --allow-localhost; got: {status}"
+        );
+    }
+
+    #[test]
+    fn proxy_connect_localhost_allowed_with_specific_port() {
+        require_localhost_tcp!();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Accept the one connection so CONNECT doesn't hang waiting for TCP handshake.
+        let handle = std::thread::spawn(move || {
+            listener.accept().ok();
+        });
+
+        // Force IPv4 resolution: on macOS, `localhost` may resolve to ::1 first,
+        // which fails to connect to our IPv4-only listener. The injected resolver
+        // pins localhost → 127.0.0.1 so we test proxy allow-logic, not DNS order.
+        let loopback_v4: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let resolver: ResolverFn =
+            Arc::new(move |_host: &str, p: u16| Some(std::net::SocketAddr::new(loopback_v4, p)));
+        let proxy = make_proxy_with_resolver(vec![port], false, Some(resolver));
+        let status = proxy_connect(proxy.port, &format!("localhost:{port}"));
+        proxy.shutdown();
+        // Fallback connect so the accept thread unblocks if proxy didn't reach it.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        handle.join().ok();
+
+        assert!(
+            status.contains("200"),
+            "CONNECT to localhost:{port} should succeed with --allow-localhost {port}; got: {status}"
+        );
+    }
+
+    #[test]
+    fn proxy_connect_localhost_other_port_still_blocked() {
+        require_localhost_tcp!();
+        let listener1 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let allowed_port = listener1.local_addr().unwrap().port();
+        let listener2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let blocked_port = listener2.local_addr().unwrap().port();
+
+        let proxy = make_proxy(vec![allowed_port], false);
+        let status = proxy_connect(proxy.port, &format!("localhost:{blocked_port}"));
+        proxy.shutdown();
+        drop(listener1);
+        drop(listener2);
+
+        assert!(
+            status.contains("403"),
+            "CONNECT to localhost:{blocked_port} should be blocked when only {allowed_port} is allowed; got: {status}"
+        );
+    }
+
+    #[test]
+    fn proxy_connect_localhost_any_opens_all_ports() {
+        require_localhost_tcp!();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = std::thread::spawn(move || {
+            listener.accept().ok();
+        });
+
+        // Force IPv4 resolution (same macOS ::1-first issue as the test above).
+        let loopback_v4: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let resolver: ResolverFn =
+            Arc::new(move |_host: &str, p: u16| Some(std::net::SocketAddr::new(loopback_v4, p)));
+        let proxy = make_proxy_with_resolver(vec![], true, Some(resolver));
+        let status = proxy_connect(proxy.port, &format!("localhost:{port}"));
+        proxy.shutdown();
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        handle.join().ok();
+
+        assert!(
+            status.contains("200"),
+            "CONNECT to localhost:{port} should succeed with --allow-localhost-any; got: {status}"
+        );
+    }
+
+    /// Regression guard for the DNS rebinding fix:
+    /// The post-DNS private-IP check must use `socket_addr.ip().is_loopback()`, NOT
+    /// `localhost_connect_allowed` (which is derived from the hostname pre-DNS).
+    ///
+    /// Attack: `CONNECT evil.localhost:PORT` where `evil.localhost` resolves to
+    /// `169.254.169.254` (cloud IMDS) or `10.x.x.x` (internal).  The hostname
+    /// `*.localhost` would set `localhost_connect_allowed = true`, bypassing the
+    /// guard entirely with the old condition `&& !localhost_connect_allowed`.
+    ///
+    /// With the fix (`&& !socket_addr.ip().is_loopback()`), the resolved IP is
+    /// always verified — a private non-loopback IP is blocked regardless of hostname.
+    ///
+    /// We can't fake DNS in a unit test, but we can assert the IP-level invariants
+    /// that the fix relies on.
+    ///
+    /// With the injectable resolver (`make_proxy_with_resolver`), we CAN now simulate
+    /// the full DNS rebinding path: the proxy receives `CONNECT evil.localhost:8080`,
+    /// the injected resolver returns `169.254.169.254`, and we verify the proxy blocks it.
+    #[test]
+    fn post_dns_check_uses_is_loopback_not_hostname_pattern() {
+        // cloud IMDS and internal IPs are private but NOT loopback
+        let imds: std::net::IpAddr = "169.254.169.254".parse().unwrap();
+        let internal: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let loopback6: std::net::IpAddr = "::1".parse().unwrap();
+
+        // All four are caught by is_private_ip (the outer condition)
+        assert!(is_private_ip(&imds), "IMDS must be private");
+        assert!(is_private_ip(&internal), "RFC1918 must be private");
+        assert!(is_private_ip(&loopback), "loopback must be private");
+        assert!(is_private_ip(&loopback6), "IPv6 loopback must be private");
+
+        // Only true loopback passes is_loopback() — the guard the fix uses
+        assert!(!imds.is_loopback(), "IMDS must not be loopback");
+        assert!(!internal.is_loopback(), "RFC1918 must not be loopback");
+        assert!(loopback.is_loopback(), "127.0.0.1 must be loopback");
+        assert!(loopback6.is_loopback(), "::1 must be loopback");
+    }
+
+    /// Full proxy-level DNS rebinding test using the injectable resolver.
+    ///
+    /// This test WOULD HAVE FAILED with the old `&& !localhost_connect_allowed`
+    /// condition and PASSES with the fixed `&& !socket_addr.ip().is_loopback()`.
+    ///
+    /// Scenario: agent sends `CONNECT evil.localhost:8080` to the proxy.
+    /// The hostname matches `*.localhost`, so `localhost_connect_allowed = true`.
+    /// The injected resolver returns `169.254.169.254` (cloud IMDS).
+    /// The proxy must block this despite `localhost_connect_allowed` being set,
+    /// because the resolved IP is not loopback.
+    #[test]
+    fn proxy_blocks_dns_rebinding_evil_localhost_to_imds() {
+        require_localhost_tcp!();
+
+        let imds_addr: std::net::IpAddr = "169.254.169.254".parse().unwrap();
+
+        // Inject a resolver that maps evil.localhost → 169.254.169.254 (cloud IMDS)
+        let resolver: ResolverFn = Arc::new(move |host: &str, port: u16| {
+            if host == "evil.localhost" {
+                Some(std::net::SocketAddr::new(imds_addr, port))
+            } else {
+                // Fall back to real resolution for other hosts
+                format!("{host}:{port}")
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+            }
+        });
+
+        // Port 8080 is explicitly "opened" via allow_localhost_ports.
+        // With the old code, this would cause the proxy to forward CONNECT to IMDS.
+        let proxy = make_proxy_with_resolver(vec![8080], false, Some(resolver));
+        let status = proxy_connect(proxy.port, "evil.localhost:8080");
+        proxy.shutdown();
+
+        assert!(
+            status.contains("403"),
+            "DNS rebinding: evil.localhost:8080 resolves to 169.254.169.254 — must block even though port 8080 is in allow_localhost_ports; got: {status}"
+        );
+    }
+
+    /// Verify that legitimate localhost still works when --allow-localhost is set.
+    /// This is the positive counterpart to proxy_blocks_dns_rebinding_evil_localhost_to_imds:
+    /// real localhost resolves to 127.0.0.1, which is_loopback() = true → allowed.
+    ///
+    /// Uses an injected resolver to pin localhost → 127.0.0.1 so the test is stable
+    /// on macOS where getaddrinfo("localhost") returns ::1 first.
+    #[test]
+    fn proxy_allows_real_localhost_with_allow_localhost() {
+        require_localhost_tcp!();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = std::thread::spawn(move || {
+            listener.accept().ok();
+        });
+
+        let loopback_v4: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let resolver: ResolverFn =
+            Arc::new(move |_host: &str, p: u16| Some(std::net::SocketAddr::new(loopback_v4, p)));
+        let proxy = make_proxy_with_resolver(vec![port], false, Some(resolver));
+        let status = proxy_connect(proxy.port, &format!("localhost:{port}"));
+        proxy.shutdown();
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        handle.join().ok();
+
+        assert!(
+            status.contains("200"),
+            "localhost:{port} with allow_localhost must succeed (resolves to 127.0.0.1); got: {status}"
+        );
+    }
+
+    /// Regression test for the *public-IP* DNS-rebinding variant of the localhost
+    /// carve-out. The private-IP path is covered by the IMDS test above; this one
+    /// pins `evil.localhost` to a public address (which `is_private_ip` does NOT
+    /// catch) and asserts the loopback requirement still blocks it.
+    #[test]
+    fn proxy_blocks_localhost_carveout_to_public_ip() {
+        require_localhost_tcp!();
+
+        // 93.184.216.34 (example.com) — a routable public IP, not private/loopback.
+        let public_addr: std::net::IpAddr = "93.184.216.34".parse().unwrap();
+        let resolver: ResolverFn = Arc::new(move |host: &str, port: u16| {
+            if host == "evil.localhost" {
+                Some(std::net::SocketAddr::new(public_addr, port))
+            } else {
+                format!("{host}:{port}")
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+            }
+        });
+
+        let proxy = make_proxy_with_resolver(vec![8080], false, Some(resolver));
+        let status = proxy_connect(proxy.port, "evil.localhost:8080");
+        proxy.shutdown();
+
+        assert!(
+            status.contains("403"),
+            "carve-out: evil.localhost:8080 resolving to a public IP must be blocked (resolved IP is not loopback); got: {status}"
+        );
     }
 }
