@@ -3236,6 +3236,37 @@ fn env_otel_prefix_passthrough_and_secret_suffix_strip() {
     );
 }
 
+#[test]
+fn env_otel_passes_through_for_opencode_agent() {
+    // OpenCode has native OpenTelemetry support. OTEL_* vars are not Copilot-specific,
+    // so they must pass through for non-Copilot agents (only COPILOT_* and the GitHub
+    // tokens are suppressed for non-Copilot agents). COPILOT_OTEL_* is suppressed here.
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        ("PATH", "/usr/bin"),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.example.com"),
+        ("OTEL_EXPORTER_OTLP_HEADERS", "Authorization=Bearer abc123"),
+        ("OTEL_RESOURCE_ATTRIBUTES", "user.name=test"),
+        ("COPILOT_OTEL_ENABLED", "true"),
+    ]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::OpenCode);
+
+    for var in [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_RESOURCE_ATTRIBUTES",
+    ] {
+        assert!(
+            env.vars.iter().any(|(k, _)| k == var),
+            "{var} should pass through to OpenCode via OTEL_ prefix"
+        );
+    }
+    assert!(
+        !env.vars.iter().any(|(k, _)| k == "COPILOT_OTEL_ENABLED"),
+        "COPILOT_OTEL_ENABLED must be suppressed for non-Copilot agents"
+    );
+}
+
 // ============================================================
 // Scratch dir SBPL rules
 // ============================================================
