@@ -447,9 +447,9 @@ cplt config set proxy.log_file "~/.config/cplt/proxy.log"
 | `--no-quiet`      | Override `sandbox.quiet = true` — show the startup summary even when quiet is configured.                                                              |
 | `--init-config`   | Create a starter config file at `~/.config/cplt/config.toml` and exit.                                                                                 |
 
-### Copilot session flags
+### Session flags
 
-These flags are forwarded directly to the copilot process for convenience — no `--` separator needed.
+These flags are translated into the agent's native session flags for convenience — no `--` separator needed.
 
 | Flag                 | What it does                                                                                      |
 | -------------------- | ------------------------------------------------------------------------------------------------- |
@@ -457,6 +457,18 @@ These flags are forwarded directly to the copilot process for convenience — no
 | `--continue`         | Resume the most recent session in the current directory.                                          |
 | `--remote`           | Enable remote control — monitor and steer the session from GitHub.com or mobile.                  |
 | `--name SESSION`     | Name the session for later resumption with `--resume=NAME`.                                       |
+
+`--continue` and `--resume` are also mapped for OpenCode and Antigravity:
+
+| cplt flag       | Copilot         | OpenCode         | Antigravity (`agy`)     |
+| --------------- | --------------- | ---------------- | ----------------------- |
+| `--continue`    | `--continue`    | `--continue`     | `--continue`            |
+| `--resume`      | `--resume`      | `--continue`¹    | `--continue`¹           |
+| `--resume=ID`   | `--resume=ID`   | `--session ID`   | `--conversation ID`     |
+| `--remote`      | `--remote`      | — (ignored)      | — (ignored)             |
+| `--name NAME`   | `--name NAME`   | — (ignored)      | — (ignored)             |
+
+¹ OpenCode and Antigravity have no interactive session picker, so a bare `--resume` maps to "continue last session". Auto-resume (injecting a session flag when invoked with no args) applies only to Copilot and Gemini.
 
 You can combine these with cplt sandbox flags and `--` pass-through args:
 
@@ -492,7 +504,7 @@ cplt --agent opencode --pass-env OPENAI_API_KEY --pass-env OPENAI_ORG_ID
 - OpenCode config (`~/.config/opencode/`) is read-only in the sandbox
 - OpenCode data (`~/.local/share/opencode/`) is writable but execution is denied (write+exec prevention)
 - Keychain access is disabled (OpenCode uses its own auth file, not macOS Keychain)
-- `--resume`, `--continue`, `--remote`, `--name` flags are Copilot-specific and ignored for OpenCode
+- `--continue` and `--resume[=ID]` are mapped to OpenCode's `--continue` / `--session ID`; `--remote` and `--name` are ignored
 
 ### Gemini CLI support
 
@@ -528,7 +540,7 @@ cplt config set sandbox.agent antigravity
 - Antigravity config (`~/.gemini/config/`) and runtime data (`~/.gemini/antigravity-cli/`) are writable in the sandbox
 - Keychain access is enabled (used by OAuth/keyring-based auth)
 - OAuth browser flow requires `--allow-browser` for first-time login
-- `--resume`, `--continue`, `--remote`, `--name` flags are Copilot-specific and ignored for Antigravity
+- `--continue` and `--resume[=ID]` are mapped to Antigravity's `--continue` / `--conversation ID`; `--remote` and `--name` are ignored
 
 ### Pi agent support
 

@@ -67,6 +67,86 @@ impl Agent {
         }
     }
 
+    /// Translate cplt's session-management convenience flags into this agent's
+    /// native CLI flags.
+    ///
+    /// cplt exposes `--resume`, `--continue`, `--remote`, and `--name` for
+    /// convenience. Each agent spells these differently (or not at all):
+    /// - Copilot: `--resume[=ID]`, `--continue`, `--remote`, `--name NAME`
+    /// - OpenCode: `--continue`, `--session ID` (no remote/name)
+    /// - Antigravity (`agy`): `--continue`, `--conversation ID` (no remote/name)
+    ///
+    /// Flags an agent doesn't support are silently dropped (documented in the
+    /// CLI help as "ignored for other agents"). A bare `--resume` (interactive
+    /// session picker) maps to "continue last session" for agents that lack an
+    /// interactive picker, which is the closest equivalent.
+    pub fn session_args(
+        &self,
+        resume: Option<&str>,
+        continue_session: bool,
+        session_name: Option<&str>,
+        remote: bool,
+    ) -> Vec<String> {
+        let mut args = Vec::new();
+        match self {
+            Agent::Copilot => {
+                if remote {
+                    args.push("--remote".to_string());
+                }
+                if let Some(session) = resume {
+                    if session.is_empty() {
+                        args.push("--resume".to_string());
+                    } else {
+                        args.push(format!("--resume={session}"));
+                    }
+                }
+                if continue_session {
+                    args.push("--continue".to_string());
+                }
+                if let Some(name) = session_name {
+                    args.push("--name".to_string());
+                    args.push(name.to_string());
+                }
+            }
+            Agent::OpenCode => {
+                // opencode: -c/--continue continues the last session;
+                // -s/--session <id> resumes a specific session by id.
+                if continue_session {
+                    args.push("--continue".to_string());
+                }
+                if let Some(session) = resume {
+                    if session.is_empty() {
+                        args.push("--continue".to_string());
+                    } else {
+                        args.push("--session".to_string());
+                        args.push(session.to_string());
+                    }
+                }
+                // --remote and --name have no opencode equivalent; dropped.
+            }
+            Agent::Antigravity => {
+                // agy: --continue continues the most recent conversation;
+                // --conversation <id> resumes a specific conversation by id.
+                if continue_session {
+                    args.push("--continue".to_string());
+                }
+                if let Some(session) = resume {
+                    if session.is_empty() {
+                        args.push("--continue".to_string());
+                    } else {
+                        args.push("--conversation".to_string());
+                        args.push(session.to_string());
+                    }
+                }
+                // --remote and --name have no agy equivalent; dropped.
+            }
+            // Gemini still receives auto-resume handling in main.rs; Pi and Shell
+            // have no recognized session flags. None get explicit translation here.
+            Agent::Gemini | Agent::Pi | Agent::Shell => {}
+        }
+        args
+    }
+
     /// Whether this agent needs macOS Keychain access for auth tokens.
     /// Copilot stores GitHub auth tokens in the Keychain.
     /// Gemini uses Keychain for extension integrity verification.
@@ -690,6 +770,88 @@ mod tests {
         assert!(Agent::OpenCode.extra_args().is_empty());
         assert!(Agent::Gemini.extra_args().is_empty());
         assert!(Agent::Antigravity.extra_args().is_empty());
+    }
+
+    #[test]
+    fn session_args_copilot() {
+        assert_eq!(
+            Agent::Copilot.session_args(Some(""), false, None, false),
+            vec!["--resume"]
+        );
+        assert_eq!(
+            Agent::Copilot.session_args(Some("task1"), false, None, false),
+            vec!["--resume=task1"]
+        );
+        assert_eq!(
+            Agent::Copilot.session_args(None, true, None, false),
+            vec!["--continue"]
+        );
+        assert_eq!(
+            Agent::Copilot.session_args(None, false, Some("my-task"), true),
+            vec!["--remote", "--name", "my-task"]
+        );
+    }
+
+    #[test]
+    fn session_args_opencode() {
+        // --continue maps to opencode's --continue.
+        assert_eq!(
+            Agent::OpenCode.session_args(None, true, None, false),
+            vec!["--continue"]
+        );
+        // --resume=ID maps to opencode's --session ID.
+        assert_eq!(
+            Agent::OpenCode.session_args(Some("abc123"), false, None, false),
+            vec!["--session", "abc123"]
+        );
+        // Bare --resume (no picker in opencode) maps to --continue.
+        assert_eq!(
+            Agent::OpenCode.session_args(Some(""), false, None, false),
+            vec!["--continue"]
+        );
+        // --remote and --name are dropped (no opencode equivalent).
+        assert!(
+            Agent::OpenCode
+                .session_args(None, false, Some("x"), true)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn session_args_antigravity() {
+        // --continue maps to agy's --continue.
+        assert_eq!(
+            Agent::Antigravity.session_args(None, true, None, false),
+            vec!["--continue"]
+        );
+        // --resume=ID maps to agy's --conversation ID.
+        assert_eq!(
+            Agent::Antigravity.session_args(Some("conv42"), false, None, false),
+            vec!["--conversation", "conv42"]
+        );
+        // Bare --resume maps to --continue.
+        assert_eq!(
+            Agent::Antigravity.session_args(Some(""), false, None, false),
+            vec!["--continue"]
+        );
+        // --remote and --name are dropped (no agy equivalent).
+        assert!(
+            Agent::Antigravity
+                .session_args(None, false, Some("x"), true)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn session_args_unsupported_agents_drop_all() {
+        for agent in [Agent::Gemini, Agent::Pi, Agent::Shell] {
+            assert!(
+                agent
+                    .session_args(Some("id"), true, Some("name"), true)
+                    .is_empty(),
+                "{agent:?} should not translate any session flags"
+            );
+        }
     }
 
     #[test]

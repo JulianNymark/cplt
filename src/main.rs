@@ -427,14 +427,16 @@ the attack surface. Prefer --allow-cache-exec with specific subdirs (e.g.,
     // These are forwarded directly to the copilot process for convenience,
     // avoiding the need for -- when using common session-level flags.
     // Ignored when --agent is anything except Copilot.
-    /// Resume a previous Copilot session. Use --resume to pick interactively,
+    /// Resume a previous session. Use --resume to pick interactively,
     /// or --resume=NAME to resume a specific session by name or ID.
-    /// Copilot-only (ignored for other agents).
+    /// Supported for Copilot (--resume), OpenCode (maps to --session),
+    /// and Antigravity (maps to --conversation). Ignored for other agents.
     #[arg(long, value_name = "SESSION", num_args = 0..=1, require_equals = true, default_missing_value = "")]
     resume: Option<String>,
 
-    /// Resume the most recent Copilot session in this directory.
-    /// Copilot-only (ignored for other agents).
+    /// Resume the most recent session in this directory.
+    /// Supported for Copilot, OpenCode, and Antigravity (--continue).
+    /// Ignored for other agents.
     #[arg(long = "continue", conflicts_with = "resume")]
     continue_session: bool,
 
@@ -1733,26 +1735,15 @@ fn build_copilot_args(cli: &Cli, agent: &agent::Agent) -> Vec<String> {
         args.push((*extra).to_string());
     }
 
-    // Copilot-specific convenience flags (only forward when using Copilot)
-    if matches!(agent, agent::Agent::Copilot) {
-        if cli.remote {
-            args.push("--remote".into());
-        }
-        if let Some(ref session) = cli.resume {
-            if session.is_empty() {
-                args.push("--resume".into());
-            } else {
-                args.push(format!("--resume={session}"));
-            }
-        }
-        if cli.continue_session {
-            args.push("--continue".into());
-        }
-        if let Some(ref name) = cli.session_name {
-            args.push("--name".into());
-            args.push(name.clone());
-        }
-    }
+    // Translate cplt's session-management convenience flags (--resume,
+    // --continue, --remote, --name) into the agent's native flags. Unsupported
+    // flags are dropped per agent (see Agent::session_args).
+    args.extend(agent.session_args(
+        cli.resume.as_deref(),
+        cli.continue_session,
+        cli.session_name.as_deref(),
+        cli.remote,
+    ));
 
     // Auto-resume: when no explicit args are given and no session flags are set,
     // default to --resume so the agent continues the previous session.
@@ -4309,11 +4300,41 @@ mod tests {
     }
 
     #[test]
-    fn opencode_no_copilot_flags() {
+    fn opencode_maps_session_flags() {
+        // Bare --resume maps to opencode's --continue; --remote is dropped.
         let cli = parse(&["--resume", "--remote", "--", "-p", "fix"]);
         let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
-        // OpenCode has no extra args and doesn't forward copilot flags
-        assert_eq!(args, vec!["-p", "fix"]);
+        assert_eq!(args, vec!["--continue", "-p", "fix"]);
+    }
+
+    #[test]
+    fn opencode_continue_and_session() {
+        let cli = parse(&["--continue"]);
+        let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
+        assert_eq!(args, vec!["--continue"]);
+
+        let cli = parse(&["--resume=sess-7"]);
+        let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
+        assert_eq!(args, vec!["--session", "sess-7"]);
+    }
+
+    #[test]
+    fn antigravity_maps_session_flags() {
+        let cli = parse(&["--continue"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Antigravity);
+        assert_eq!(args, vec!["--continue"]);
+
+        let cli = parse(&["--resume=conv-9", "--", "-p", "fix"]);
+        let args = build_copilot_args(&cli, &agent::Agent::Antigravity);
+        assert_eq!(args, vec!["--conversation", "conv-9", "-p", "fix"]);
+    }
+
+    #[test]
+    fn opencode_no_auto_resume() {
+        // OpenCode is not in the auto-resume set: no args means no injected flags.
+        let cli = parse(&[]);
+        let args = build_copilot_args(&cli, &agent::Agent::OpenCode);
+        assert!(args.is_empty());
     }
 
     #[test]
