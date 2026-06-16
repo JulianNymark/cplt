@@ -3721,11 +3721,16 @@ fn start_denial_stream() -> Option<std::process::Child> {
 /// an update. Writes to that directory are denied inside the sandbox to prevent
 /// write-then-exec attacks, so the extraction must happen outside.
 ///
-/// Uses the binary's identity (path + inode + size + mtime) as a cache key
-/// rather than `--version` output, because pre-release builds can report a
-/// base version (e.g. `1.0.32`) while the SEA loader extracts to a different
-/// directory (e.g. `1.0.32-1-73748`). After extraction, we discover the actual
-/// directory created and verify its `.extraction-complete` marker.
+/// The fast-path cache key is the binary's identity (path + inode + size +
+/// mtime). When that misses, we run `copilot --version` to trigger extraction
+/// and detect the newly created directory by its `.extraction-complete` marker.
+/// If no new directory appears, we accept a pre-existing extraction only when it
+/// matches the version copilot reports (exact or `"{version}-"` prefix, since
+/// pre-release builds may report `1.0.32` while extracting to `1.0.32-1-73748`).
+/// A stale OLD-version directory is never accepted — otherwise the sandboxed
+/// session would re-extract the current version and hit EPERM on the write-
+/// denied cache.
+///
 /// Returns Ok(()) if extraction is confirmed or not needed, Err(message) if it
 /// failed and entering the sandbox would cause EPERM on copilot/pkg writes.
 #[cfg(target_os = "macos")]
@@ -3798,10 +3803,12 @@ fn ensure_copilot_extracted(
     // during Node.js startup, before any CLI logic. We use `--version` which
     // triggers extraction then exits cleanly (more reliable than `-p ""`
     // which may hang waiting for input in newer versions).
+    // stdout is piped (not null) so we can read the reported version string,
+    // used below to verify the CURRENT version is extracted (not a stale one).
     let child = std::process::Command::new(copilot_bin)
         .args(["--no-auto-update", "--version"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn();
 
@@ -3814,6 +3821,7 @@ fn ensure_copilot_extracted(
             ));
         }
     };
+    let mut child_stdout = child.stdout.take();
 
     // Poll for extraction completion. We check for both:
     // 1. A new directory with `.extraction-complete` marker (normal success)
@@ -3853,20 +3861,51 @@ fn ensure_copilot_extracted(
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
+    // If extraction is still in flight when the poll loop ends, give it time to
+    // finish instead of killing it. Interrupting a legitimate extraction leaves
+    // a partial (marker-less) dir, which forces the sandboxed session to
+    // re-extract — and that write is denied inside the sandbox (EPERM).
+    if extracted_dir_name.is_none() && has_extracting_dir(&pkg_base) {
+        for _ in 0..240 {
+            if let Some(name) = find_new_extracted_dir(&pkg_base, &dirs_before) {
+                extracted_dir_name = Some(name);
+                break;
+            }
+            if !has_extracting_dir(&pkg_base) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+
     let _ = child.kill();
     let _ = child.wait();
+
+    // Read the version copilot reported (printed during the same startup that
+    // performs extraction). Used to verify the CURRENT version is extracted.
+    let reported_version = child_stdout.take().and_then(|mut out| {
+        use std::io::Read;
+        let mut s = String::new();
+        out.read_to_string(&mut s).ok()?;
+        parse_copilot_version(&s)
+    });
 
     // Final check after process exit
     if extracted_dir_name.is_none() {
         extracted_dir_name = find_new_extracted_dir(&pkg_base, &dirs_before);
     }
 
-    // If --version didn't produce a new dir, check if copilot already has a
-    // valid extraction on disk. This handles two cases:
-    //   1. Migration: first cplt run on a system with pre-existing extraction
-    //   2. Lazy SEA: newer copilot versions may not extract on --version alone
+    // If --version didn't produce a new dir, check whether the CURRENT version
+    // is already extracted on disk. This handles the migration case (first cplt
+    // run on a system with a pre-existing extraction). When the version is
+    // known we MUST match it — a stale old-version dir is not proof that the
+    // current version is extracted (otherwise the sandboxed session re-extracts
+    // and hits EPERM). Fall back to any-complete only when version is unknown.
     if extracted_dir_name.is_none() {
-        extracted_dir_name = find_any_complete_dir(&pkg_base);
+        extracted_dir_name = match reported_version {
+            Some(ref v) => find_complete_dir_for_version(&pkg_base, v),
+            None => find_any_complete_dir(&pkg_base),
+        };
     }
 
     // If no extraction dir exists anywhere, this copilot doesn't use SEA
@@ -3880,9 +3919,12 @@ fn ensure_copilot_extracted(
     // startup (and thus extraction) in case --version uses a lazy code path.
     if extracted_dir_name.is_none() {
         extracted_dir_name = try_extraction_fallback(copilot_bin, &pkg_base, &dirs_before);
-        // Check again for any complete dir after fallback
+        // Check again for the current version's complete dir after fallback.
         if extracted_dir_name.is_none() {
-            extracted_dir_name = find_any_complete_dir(&pkg_base);
+            extracted_dir_name = match reported_version {
+                Some(ref v) => find_complete_dir_for_version(&pkg_base, v),
+                None => find_any_complete_dir(&pkg_base),
+            };
         }
     }
 
@@ -3973,11 +4015,12 @@ fn ensure_copilot_extracted_linux(
     // Snapshot existing extraction dirs so we can detect the new one.
     let dirs_before = extraction_dirs(&pkg_base);
 
-    // Run copilot briefly to trigger SEA extraction.
+    // Run copilot briefly to trigger SEA extraction. stdout is piped so we can
+    // read the reported version and verify the CURRENT version is extracted.
     let child = std::process::Command::new(copilot_bin)
         .args(["--no-auto-update", "--version"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn();
 
@@ -3990,6 +4033,7 @@ fn ensure_copilot_extracted_linux(
             ));
         }
     };
+    let mut child_stdout = child.stdout.take();
 
     // Poll for extraction completion.
     let mut extracted_dir_name: Option<String> = None;
@@ -4021,17 +4065,45 @@ fn ensure_copilot_extracted_linux(
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 
+    // If extraction is still in flight when the poll loop ends, give it time to
+    // finish instead of killing it (interrupting forces an in-sandbox re-extract
+    // that hits EPERM on the write-denied cache).
+    if extracted_dir_name.is_none() && has_extracting_dir(&pkg_base) {
+        for _ in 0..240 {
+            if let Some(name) = find_new_extracted_dir(&pkg_base, &dirs_before) {
+                extracted_dir_name = Some(name);
+                break;
+            }
+            if !has_extracting_dir(&pkg_base) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+
     let _ = child.kill();
     let _ = child.wait();
+
+    let reported_version = child_stdout.take().and_then(|mut out| {
+        use std::io::Read;
+        let mut s = String::new();
+        out.read_to_string(&mut s).ok()?;
+        parse_copilot_version(&s)
+    });
 
     // Final check after process exit
     if extracted_dir_name.is_none() {
         extracted_dir_name = find_new_extracted_dir(&pkg_base, &dirs_before);
     }
 
-    // Check if copilot already has a valid extraction on disk (migration case).
+    // Migration case: a pre-existing extraction. When the version is known we
+    // MUST match it — a stale old-version dir is not proof the current version
+    // is extracted (otherwise the sandboxed session re-extracts → EPERM).
     if extracted_dir_name.is_none() {
-        extracted_dir_name = find_any_complete_dir(&pkg_base);
+        extracted_dir_name = match reported_version {
+            Some(ref v) => find_complete_dir_for_version(&pkg_base, v),
+            None => find_any_complete_dir(&pkg_base),
+        };
     }
 
     // If no extraction dir exists anywhere, this copilot doesn't use SEA.
@@ -4043,7 +4115,10 @@ fn ensure_copilot_extracted_linux(
     if extracted_dir_name.is_none() {
         extracted_dir_name = try_extraction_fallback(copilot_bin, &pkg_base, &dirs_before);
         if extracted_dir_name.is_none() {
-            extracted_dir_name = find_any_complete_dir(&pkg_base);
+            extracted_dir_name = match reported_version {
+                Some(ref v) => find_complete_dir_for_version(&pkg_base, v),
+                None => find_any_complete_dir(&pkg_base),
+            };
         }
     }
 
@@ -4206,6 +4281,62 @@ fn find_any_complete_dir(pkg_base: &Path) -> Option<String> {
     dirs.into_iter().next().map(|(name, _)| name)
 }
 
+/// Parse the semantic version from `copilot --version` output.
+///
+/// e.g. `"GitHub Copilot CLI 1.0.63."` -> `Some("1.0.63")`. Accepts an optional
+/// pre-release suffix (`1.0.63-2`). Returns `None` if no version token is found.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn parse_copilot_version(output: &str) -> Option<String> {
+    output.split_whitespace().find_map(|tok| {
+        let v = tok.trim_end_matches('.');
+        let mut parts = v.splitn(3, '.');
+        let major = parts.next()?;
+        let minor = parts.next()?;
+        let patch = parts.next()?;
+        let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+        // major.minor must be fully numeric; patch must START numeric so that a
+        // pre-release suffix like "63-2" is still accepted.
+        if numeric(major)
+            && numeric(minor)
+            && patch.chars().next().is_some_and(|c| c.is_ascii_digit())
+        {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+/// Find a *complete* extraction dir that matches `version`.
+///
+/// Matches the dir named exactly `version` or one prefixed `"{version}-"`
+/// (pre-release builds may report a base version while extracting to a suffixed
+/// directory, e.g. version `1.0.32` -> dir `1.0.32-1-73748`).
+///
+/// Security: this prevents a STALE old-version extraction (e.g. `1.0.62`) from
+/// being accepted as proof that the CURRENT version is extracted. Accepting a
+/// stale dir would let the preflight return success while the sandboxed session
+/// re-extracts the current version and hits EPERM on the write-denied cache.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn find_complete_dir_for_version(pkg_base: &Path, version: &str) -> Option<String> {
+    let prefix = format!("{version}-");
+    std::fs::read_dir(pkg_base)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || (name != version && !name.starts_with(&prefix)) {
+                return None;
+            }
+            if pkg_base.join(&name).join(".extraction-complete").exists() {
+                Some(name)
+            } else {
+                None
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4356,5 +4487,70 @@ mod tests {
         let cli = parse(&["--", "-p", "fix tests"]);
         let args = build_copilot_args(&cli, &agent::Agent::Gemini);
         assert_eq!(args, vec!["-p", "fix tests"]);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn parse_copilot_version_extracts_from_banner() {
+        assert_eq!(
+            parse_copilot_version("GitHub Copilot CLI 1.0.63."),
+            Some("1.0.63".to_string())
+        );
+        assert_eq!(
+            parse_copilot_version("GitHub Copilot CLI 1.0.63.\nRun 'copilot update'"),
+            Some("1.0.63".to_string())
+        );
+        // Pre-release suffix is preserved.
+        assert_eq!(
+            parse_copilot_version("Copilot 1.0.32-1"),
+            Some("1.0.32-1".to_string())
+        );
+        assert_eq!(parse_copilot_version("no version here"), None);
+        assert_eq!(parse_copilot_version(""), None);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn find_complete_dir_for_version_rejects_stale_old_version() {
+        let tmp = std::env::temp_dir().join(format!("cplt-ver-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Old version is fully extracted, current version is NOT.
+        std::fs::create_dir_all(tmp.join("1.0.62")).unwrap();
+        std::fs::write(tmp.join("1.0.62/.extraction-complete"), "").unwrap();
+        std::fs::create_dir_all(tmp.join("1.0.63")).unwrap(); // present but incomplete
+
+        // Must NOT accept the stale 1.0.62 dir when asking for 1.0.63.
+        assert_eq!(find_complete_dir_for_version(&tmp, "1.0.63"), None);
+        // The old version itself still resolves when explicitly requested.
+        assert_eq!(
+            find_complete_dir_for_version(&tmp, "1.0.62"),
+            Some("1.0.62".to_string())
+        );
+
+        // Once the current version completes, it is accepted.
+        std::fs::write(tmp.join("1.0.63/.extraction-complete"), "").unwrap();
+        assert_eq!(
+            find_complete_dir_for_version(&tmp, "1.0.63"),
+            Some("1.0.63".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn find_complete_dir_for_version_matches_prerelease_suffix() {
+        let tmp = std::env::temp_dir().join(format!("cplt-ver-pre-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("1.0.32-1-73748")).unwrap();
+        std::fs::write(tmp.join("1.0.32-1-73748/.extraction-complete"), "").unwrap();
+
+        // Base version reported by --version matches the suffixed extraction dir.
+        assert_eq!(
+            find_complete_dir_for_version(&tmp, "1.0.32"),
+            Some("1.0.32-1-73748".to_string())
+        );
+        // A shorter prefix must not spuriously match (1.0.3 != 1.0.32).
+        assert_eq!(find_complete_dir_for_version(&tmp, "1.0.3"), None);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
