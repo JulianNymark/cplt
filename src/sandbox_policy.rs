@@ -674,6 +674,19 @@ pub const APP_DIRS: &[AppDir] = &[
         write: &[AppDirKind::Cache, AppDirKind::Data, AppDirKind::DataLocal],
         read: &[AppDirKind::Cache, AppDirKind::Data, AppDirKind::DataLocal],
     },
+    // rtk (token-optimized CLI proxy) stores its tracking database at
+    // ~/Library/Application Support/rtk/history.db (macOS) or
+    // ~/.local/share/rtk/ (Linux/XDG). No executables or native libs — write
+    // access to Data/DataLocal is sufficient.
+    AppDir {
+        qualifier: "",
+        organization: "",
+        application: "rtk",
+        process_exec: &[],
+        map_exec: &[],
+        write: &[AppDirKind::Data, AppDirKind::DataLocal],
+        read: &[AppDirKind::Data, AppDirKind::DataLocal],
+    },
     // fnm (Fast Node Manager) stores Node.js versions at ~/.local/share/fnm/node-versions/.
     // Node binaries and their bundled JS modules (corepack, yarn, npm) must be readable
     // and executable from inside the sandbox.
@@ -927,6 +940,14 @@ pub const HOME_TOOL_DIRS: &[HomeToolDir] = &[
     // macOS-native path
     HomeToolDir {
         path: "Library/Application Support/kotlin",
+        process_exec: false,
+        map_exec: false,
+        write: true,
+    },
+    // rtk (token-optimized CLI proxy): tracking database on macOS-native path.
+    // XDG path (~/.local/share/rtk) is covered by the AppDir entry above.
+    HomeToolDir {
+        path: "Library/Application Support/rtk",
         process_exec: false,
         map_exec: false,
         write: true,
