@@ -309,11 +309,12 @@ impl Agent {
                 ]
             }
             Agent::Pi => {
-                // ~/.pi/agent stores settings, auth, sessions, themes
+                // ~/.pi/agent/ stores all global data: settings.json, trust.json,
+                // sessions/, npm/ packages. Per https://pi.dev/docs/latest/settings
                 // ~/.pi/agent/bin contains managed tool binaries (fd, rg)
                 vec![
                     AgentDir {
-                        path: home.join(".pi"),
+                        path: home.join(".pi/agent"),
                         write: true,
                         map_exec: false,
                         process_exec: false,
@@ -1028,12 +1029,12 @@ mod tests {
     fn pi_config_dirs() {
         let home = Path::new("/Users/test");
         let dirs = Agent::Pi.config_dirs(home);
-        assert_eq!(dirs.len(), 2, "should have ~/.pi and ~/.pi/agent/bin");
-        // Main dir is writable
-        assert_eq!(dirs[0].path, home.join(".pi"));
+        assert_eq!(dirs.len(), 2, "should have ~/.pi/agent and ~/.pi/agent/bin");
+        // Main dir: ~/.pi/agent — all global data (settings, sessions, trust, npm)
+        assert_eq!(dirs[0].path, home.join(".pi/agent"));
         assert!(dirs[0].write);
         assert!(!dirs[0].process_exec);
-        // Bin dir has process_exec for managed binaries
+        // Bin dir has process_exec for managed binaries (fd, rg)
         assert_eq!(dirs[1].path, home.join(".pi/agent/bin"));
         assert!(!dirs[1].write);
         assert!(dirs[1].process_exec);
