@@ -327,12 +327,36 @@ fn emit_home_access(sb: &mut String, home: &str, agent: Agent, agent_dirs: &[Age
                 sbpl!(sb, "(deny file-map-executable (subpath \"{path}\"))");
             }
             // Explicitly deny writes on exec-only dirs (prevents write+exec persistence
-            // even when a parent dir is writable — SBPL uses most-specific match)
+            // even when a parent dir is writable — this deny is emitted after the
+            // parent allow, so SBPL last-match-wins lets it override)
             if !dir.write && dir.process_exec {
                 sbpl!(sb, "(deny file-write* (subpath \"{path}\"))");
             }
         }
         sbpl!(sb);
+    }
+
+    // Claude Code: the config dir is writable (sessions, history, credentials),
+    // but a few artifacts auto-execute on the HOST the next time `claude` runs
+    // outside the sandbox — a persistence vector the agent never needs to write
+    // mid-session. Deny those specifically (emitted after the dir-wide allow
+    // above, so SBPL last-match-wins lets the deny override). settings.json,
+    // commands/, agents/, skills/ stay
+    // writable: Claude legitimately authors them and they require user invocation.
+    // macOS only — Landlock cannot deny a subpath within an allowed dir (see SECURITY.md).
+    //
+    // Apply to every writable grant rather than the first one: the default layout
+    // grants both ~/.claude (the data dir these subpaths live under) and the
+    // ~/.claude.json file, and we must not depend on their ordering. The deny on
+    // a file grant (~/.claude.json/statusline.sh) can never match a real path, so
+    // it is a harmless no-op; the deny on the data dir is the one that matters.
+    if matches!(agent, Agent::Claude) {
+        for cfg in agent_dirs.iter().filter(|d| d.write) {
+            for sub in ["statusline.sh", "plugins"] {
+                let p = cfg.path.join(sub).display().to_string();
+                sbpl!(sb, "(deny file-write* (subpath \"{p}\"))");
+            }
+        }
     }
 
     // GitHub CLI auth — Copilot spawns `gh auth token` which reads these specific files.
