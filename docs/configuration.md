@@ -130,6 +130,7 @@ This creates a commented template at `~/.config/cplt/config.toml`:
 # allowed_domains = "~/.config/cplt/allowed-domains.txt"
 # log_file = "~/.config/cplt/proxy.log"
 # log_level = "none"             # Stderr verbosity: none, error, blocked, all
+# timeout = 60                   # Proxy read/write timeout in seconds
 # allow_private_domains = ["intern.nav.no"]  # Allow internal/intranet domains to resolve to private IPs
 
 [sandbox]

@@ -76,7 +76,6 @@ fn is_blocked_status(status: &str) -> bool {
 }
 
 const MAX_CONNECTIONS: usize = 64;
-const READ_TIMEOUT: Duration = Duration::from_mins(1);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How often file-backed domain lists are re-read from disk.
@@ -138,6 +137,8 @@ pub struct ProxyState {
     log_file: Option<PathBuf>,
     // Verbosity level for stderr output
     log_level: ProxyLogLevel,
+    // Timeout for connection reads/writes
+    timeout: std::time::Duration,
 
     // Test-only: injectable DNS resolver to simulate fake DNS responses.
     #[cfg(test)]
@@ -336,6 +337,8 @@ pub struct ProxyOptions {
     pub log_file: Option<PathBuf>,
     /// Verbosity level for proxy stderr output.
     pub log_level: ProxyLogLevel,
+    /// Timeout for proxy connections.
+    pub timeout: std::time::Duration,
 
     /// Test-only: injectable DNS resolver. Pass a closure to override DNS
     /// resolution in proxy tests (e.g. to simulate DNS rebinding).
@@ -411,6 +414,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         allow_localhost_any: opts.allow_localhost_any,
         log_file: opts.log_file,
         log_level: opts.log_level,
+        timeout: opts.timeout,
         #[cfg(test)]
         resolver: opts.resolver,
     });
@@ -504,8 +508,8 @@ fn accept_loop(
 }
 
 fn handle_connection(mut client: TcpStream, state: &ProxyState) {
-    client.set_read_timeout(Some(READ_TIMEOUT)).ok();
-    client.set_write_timeout(Some(READ_TIMEOUT)).ok();
+    client.set_read_timeout(Some(state.timeout)).ok();
+    client.set_write_timeout(Some(state.timeout)).ok();
 
     // Read the request line
     let mut buf = [0u8; 8192];
@@ -714,10 +718,10 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     }
 
     // Bidirectional relay
-    relay(client, remote);
+    relay(client, remote, state.timeout);
 }
 
-fn relay(client: TcpStream, remote: TcpStream) {
+fn relay(client: TcpStream, remote: TcpStream, timeout: Duration) {
     let Ok(mut client_read) = client.try_clone() else {
         return;
     };
@@ -728,8 +732,8 @@ fn relay(client: TcpStream, remote: TcpStream) {
     let mut client_write = client;
 
     // Set timeouts for relay
-    client_read.set_read_timeout(Some(READ_TIMEOUT)).ok();
-    remote_read.set_read_timeout(Some(READ_TIMEOUT)).ok();
+    client_read.set_read_timeout(Some(timeout)).ok();
+    remote_read.set_read_timeout(Some(timeout)).ok();
 
     // Use Write shutdown (TCP half-close) so the other direction can
     // finish delivering in-flight data. shutdown(Both) would kill the
@@ -1154,6 +1158,7 @@ mod tests {
             allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         };
 
@@ -1177,6 +1182,7 @@ mod tests {
             allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         };
 
@@ -1205,6 +1211,7 @@ mod tests {
             allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         };
 
@@ -1236,6 +1243,7 @@ mod tests {
             allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         };
 
@@ -1273,6 +1281,7 @@ mod tests {
             allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         };
 
@@ -1332,6 +1341,7 @@ mod tests {
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         });
         assert!(result.is_ok());
@@ -1363,6 +1373,7 @@ mod tests {
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         });
         assert!(result.is_err(), "should fail when allowlist is unreadable");
@@ -1394,6 +1405,7 @@ mod tests {
             allow_localhost_any: false,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver: None,
         };
 
@@ -1461,6 +1473,7 @@ mod tests {
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
             resolver,
         })
         .expect("proxy start failed")

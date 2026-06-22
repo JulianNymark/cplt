@@ -152,6 +152,11 @@ struct Cli {
     #[arg(long, value_name = "LEVEL")]
     proxy_log_level: Option<String>,
 
+    /// Timeout for proxy connections in seconds (default: 60).
+    /// Prevents long-running requests (like generating large reports) from hanging.
+    #[arg(long, value_name = "SECONDS")]
+    proxy_timeout: Option<u64>,
+
     /// Allow connections to this domain even if it resolves to a private/internal IP.
     /// Use for corporate intranet services such as internal MCP servers.
     /// Suffix matching: "intern.nav.no" covers all its subdomains.
@@ -955,6 +960,7 @@ fn resolve_context(cli: &Cli) -> anyhow::Result<ResolvedContext> {
             },
             None => None,
         },
+        proxy_timeout: cli.proxy_timeout,
         allow_private_domains: cli.allow_private_domains.clone(),
         allow_read: cli_allow_read,
         allow_write: cli_allow_write,
@@ -1312,6 +1318,7 @@ fn start_proxy_if_enabled(
         config_file: config_path.cloned(),
         log_file: resolved.proxy_log_file.clone(),
         log_level: resolved.proxy_log_level,
+        timeout: resolved.proxy_timeout,
     }) {
         Ok(handle) => {
             resolved.proxy_port = handle.port;

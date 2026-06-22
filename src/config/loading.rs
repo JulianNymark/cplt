@@ -88,6 +88,10 @@ impl Config {
             crate::proxy::ProxyLogLevel::None
         };
 
+        // Proxy timeout: CLI > config > default (60s)
+        let proxy_timeout =
+            std::time::Duration::from_secs(cli.proxy_timeout.or(self.proxy.timeout).unwrap_or(60));
+
         // Allow private domains: merge CLI + config list, sort+dedup.
         // Validates that entries are non-empty (empty string would bypass private IP
         // check for all domains that match is_domain_match("", _), which is none — but
@@ -352,6 +356,7 @@ impl Config {
             allowed_domains,
             proxy_log_file,
             proxy_log_level,
+            proxy_timeout,
             allow_private_domains,
             allow_read,
             allow_write,

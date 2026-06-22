@@ -234,6 +234,8 @@ pub struct ProxyConfig {
     /// For each listed domain, the post-DNS private IP check is skipped.
     /// Use for corporate internal services (e.g. "intern.nav.no").
     pub allow_private_domains: Option<Vec<String>>,
+    /// Proxy read/write timeout in seconds (default: 60).
+    pub timeout: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -396,6 +398,7 @@ pub struct Resolved {
     pub allowed_domains: Option<PathBuf>,
     pub proxy_log_file: Option<PathBuf>,
     pub proxy_log_level: crate::proxy::ProxyLogLevel,
+    pub proxy_timeout: std::time::Duration,
     pub allow_private_domains: Vec<String>,
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
@@ -439,6 +442,7 @@ pub struct CliFlags {
     pub allowed_domains: Option<PathBuf>,
     pub proxy_log_file: Option<PathBuf>,
     pub proxy_log_level: Option<crate::proxy::ProxyLogLevel>,
+    pub proxy_timeout: Option<u64>,
     pub allow_private_domains: Vec<String>,
     pub allow_read: Vec<PathBuf>,
     pub allow_write: Vec<PathBuf>,
