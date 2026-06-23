@@ -599,12 +599,14 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     if is_blocked_in_list(&host, &blocked_domains) {
         log_connection("CONNECT", target, "BLOCKED", log_file, log_level);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBlocked by cplt\r\n");
+        let _ = client.shutdown(std::net::Shutdown::Both);
         return;
     }
     // Reject hostname patterns that are known private (fast path before DNS)
     if !localhost_connect_allowed && is_private_hostname(&host) {
         log_connection("CONNECT", target, "BLOCKED-PRIVATE", log_file, log_level);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nPrivate target blocked\r\n");
+        let _ = client.shutdown(std::net::Shutdown::Both);
         return;
     }
 
@@ -659,6 +661,7 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
             log_level,
         );
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nResolved to non-loopback IP\r\n");
+        let _ = client.shutdown(std::net::Shutdown::Both);
         return;
     }
 
@@ -684,6 +687,7 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
             log_level,
         );
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nResolved to private IP\r\n");
+        let _ = client.shutdown(std::net::Shutdown::Both);
         return;
     }
 
@@ -842,7 +846,27 @@ pub fn parse_domain_file(path: &std::path::Path) -> Result<Vec<String>, String> 
         .map_err(|e| format!("Cannot read domain file {}: {e}", path.display()))?;
     Ok(contents
         .lines()
-        .map(|l| l.trim().to_lowercase().trim_end_matches('.').to_string())
+        .map(|l| {
+            let mut s = l.trim().to_lowercase();
+            // Strip scheme if user pasted a URL
+            if let Some(rest) = s.strip_prefix("https://") {
+                s = rest.to_string();
+            } else if let Some(rest) = s.strip_prefix("http://") {
+                s = rest.to_string();
+            }
+            // Strip path/query if present
+            if let Some(idx) = s.find('/') {
+                s.truncate(idx);
+            }
+            // Strip port if present (search from end to avoid breaking IPv6 like [::1]:8080)
+            if let Some(idx) = s.rfind(':')
+                && s[idx + 1..].chars().all(|c| c.is_ascii_digit())
+                && (s.chars().filter(|&c| c == ':').count() == 1 || s[..idx].ends_with(']'))
+            {
+                s.truncate(idx);
+            }
+            s.trim_end_matches('.').to_string()
+        })
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect())
 }
