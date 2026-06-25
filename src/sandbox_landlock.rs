@@ -1784,7 +1784,7 @@ mod tests {
     fn copilot_install_dir_gets_read_exec() {
         let project = PathBuf::from("/home/user/project");
         let home = PathBuf::from("/home/user");
-        let install_dir = PathBuf::from("/home/user/.cache/copilot/pkg/linux-x64");
+        let install_dir = PathBuf::from("/home/user/.cache/copilot/pkg");
         let mut config = test_config(&project, &home);
         config.copilot_install_dir = Some(&install_dir);
         let policy = generate_policy(&config);

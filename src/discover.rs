@@ -847,17 +847,9 @@ pub fn copilot_pkg_dir(copilot_bin: &Path, home_dir: &Path) -> Option<PathBuf> {
 /// (parent exists). The sandbox needs read+exec access to this directory for
 /// Copilot's re-exec mechanism to work.
 pub fn copilot_sea_cache_dir(home_dir: &Path) -> Option<PathBuf> {
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        _ => return None,
-    };
+    let pkg_base = home_dir.join(".cache/copilot/pkg");
 
-    let pkg_base = home_dir
-        .join(".cache/copilot/pkg")
-        .join(format!("linux-{arch}"));
-
-    // Return the path if it exists OR if the parent (.cache/copilot/pkg) exists
+    // Return the path if it exists OR if the parent (.cache/copilot) exists
     // so that pre-flight extraction can create it.
     if pkg_base.exists() || pkg_base.parent().is_some_and(Path::exists) {
         Some(pkg_base)
@@ -1287,5 +1279,27 @@ ELECTRON_RUN_AS_NODE=1 "/Applications/Visual Studio Code.app/Contents/Frameworks
         let result = discover_electron_app(&tmp);
         std::fs::remove_file(&tmp).ok();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn copilot_sea_cache_dir_returns_none_if_missing() {
+        let tmp = std::env::temp_dir().join("cplt-test-no-cache");
+        assert!(copilot_sea_cache_dir(&tmp).is_none());
+    }
+
+    #[test]
+    fn copilot_sea_cache_dir_returns_some_if_parent_exists() {
+        let tmp = std::env::temp_dir().join("cplt-test-cache-parent");
+        std::fs::create_dir_all(tmp.join(".cache/copilot")).unwrap();
+        let expected = tmp.join(".cache/copilot/pkg");
+        assert_eq!(copilot_sea_cache_dir(&tmp), Some(expected));
+    }
+
+    #[test]
+    fn copilot_sea_cache_dir_returns_some_if_exists() {
+        let tmp = std::env::temp_dir().join("cplt-test-cache-exists");
+        std::fs::create_dir_all(tmp.join(".cache/copilot/pkg")).unwrap();
+        let expected = tmp.join(".cache/copilot/pkg");
+        assert_eq!(copilot_sea_cache_dir(&tmp), Some(expected));
     }
 }
