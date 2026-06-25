@@ -1023,4 +1023,67 @@ else:
             "PATH must be present in sandbox env; got: {stdout}"
         );
     }
+    #[test]
+    fn sandboxed_copilot_can_execute_pkg_binary() {
+        require_landlock!();
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = create_test_project();
+        let home = tempfile::tempdir().expect("Failed to create temp home");
+
+        // 1. Create the fake universal copilot pkg extraction dir
+        let pkg_dir = home.path().join(".cache/copilot/pkg/universal/1.0.63");
+        fs::create_dir_all(&pkg_dir).unwrap();
+
+        // 2. Create the dummy executable (e.g. dummy ripgrep)
+        let dummy_rg = pkg_dir.join("rg");
+        fs::write(
+            &dummy_rg,
+            "#!/bin/sh\necho \"dummy_rg executed successfully\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&dummy_rg, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // 3. Create the fake copilot binary in $PATH (inside project_dir so it gets exec)
+        let bin_dir = project.path().join(".fake-bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let fake_copilot = bin_dir.join("copilot");
+
+        let script = format!("#!/bin/sh\n\"{}\"\n", dummy_rg.display());
+        fs::write(&fake_copilot, script).unwrap();
+        fs::set_permissions(&fake_copilot, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // 4. Run cplt with the fake copilot in PATH
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", bin_dir.display(), current_path);
+
+        let output = Command::new(binary_path())
+            .args([
+                "--yes",
+                "--no-validate",
+                "--quiet",
+                "--agent",
+                "copilot",
+                "-C",
+                &project.path().to_string_lossy(),
+                "--",
+                "--version",
+            ])
+            .env("HOME", home.path())
+            .env("PATH", new_path)
+            .output()
+            .expect("Failed to execute cplt");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success(),
+            "fake copilot should run successfully without EACCES. stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stdout.contains("dummy_rg executed successfully"),
+            "sandbox should allow execution of binaries in copilot pkg dir. stdout: {stdout}"
+        );
+    }
 }
