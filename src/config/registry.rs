@@ -11,6 +11,7 @@ use super::validation::suggest_key;
 pub enum ConfigValueType {
     Bool,
     U16,
+    U64,
     Str,
     U16Array,
     StrArray,
@@ -87,6 +88,14 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         dangerous: false,
         default_display: "none",
         description: "Stderr verbosity for proxy events: \"none\" (silent), \"error\" (DNS/connect failures), \"blocked\" (errors + blocked connections), \"all\" (everything including CONNECTED).",
+    },
+    ConfigKeyInfo {
+        section: "proxy",
+        key: "timeout",
+        value_type: ConfigValueType::U64,
+        dangerous: false,
+        default_display: "60",
+        description: "Proxy read/write timeout in seconds. Increase for slow upstream connections.",
     },
     ConfigKeyInfo {
         section: "proxy",
@@ -440,6 +449,12 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
     },
 ];
 
+/// Returns all registered config keys. Used by tests to ensure every key is
+/// covered by `config show` output and other config commands.
+pub fn all_config_keys() -> &'static [ConfigKeyInfo] {
+    CONFIG_KEYS
+}
+
 /// Look up a config key by "section.key" dotted notation.
 pub fn lookup_key(dotted: &str) -> Result<&'static ConfigKeyInfo, ConfigError> {
     let (section, key) = dotted.split_once('.').ok_or_else(|| {
@@ -473,6 +488,7 @@ pub(super) fn type_label(vt: ConfigValueType) -> &'static str {
     match vt {
         ConfigValueType::Bool => "bool",
         ConfigValueType::U16 => "integer (1-65535)",
+        ConfigValueType::U64 => "integer",
         ConfigValueType::Str => "string",
         ConfigValueType::U16Array => "integer array",
         ConfigValueType::StrArray => "string array",

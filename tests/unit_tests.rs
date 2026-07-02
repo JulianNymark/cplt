@@ -6257,3 +6257,122 @@ fn no_deny_clipboard_by_default() {
         "pasteboard deny rule must not appear by default"
     );
 }
+
+// ── Config coverage tests ─────────────────────────────────────────────────────
+
+/// Ensures every scalar key registered in CONFIG_KEYS appears in `config show`
+/// output. If you add a new key to the registry, `display_config` must also
+/// render it — otherwise this test fails.
+///
+/// Array-of-tables keys are excluded because they are structured differently in
+/// the output (e.g. `[[git_guard.allow_push]]` entries are not rendered as
+/// `key = value` lines by `display_config`).
+#[test]
+fn config_show_covers_all_registry_keys() {
+    use cplt::config::{ConfigValueType, all_config_keys};
+
+    // For each scalar key, verify lookup_key succeeds (registry is self-consistent)
+    // and get_config_value returns a non-empty default.
+    for key_info in all_config_keys() {
+        if matches!(key_info.value_type, ConfigValueType::ArrayOfTables) {
+            continue;
+        }
+        let dotted = format!("{}.{}", key_info.section, key_info.key);
+        let result = cplt::config::lookup_key(&dotted);
+        assert!(
+            result.is_ok(),
+            "registry key '{dotted}' cannot be looked up — lookup_key is broken"
+        );
+        let (_default_val, from_file) = cplt::config::get_config_value(result.unwrap(), None);
+        assert!(
+            !from_file,
+            "registry key '{dotted}' reports from_file=true without a config file"
+        );
+    }
+}
+
+/// Ensures validate_accepts_all_valid_keys stays in sync with the registry.
+/// Every non-array-of-tables key must appear in the TOML below — this forces
+/// authors to update the test when adding a new key.
+#[test]
+fn registry_keys_match_validate_all_valid_keys_fixture() {
+    use cplt::config::{ConfigValueType, all_config_keys};
+
+    // Sections/keys intentionally excluded from the validation fixture
+    // (repo-only keys, deprecated keys, or array-of-tables):
+    let excluded = &[
+        "deny.env",         // repo-local only
+        "sandbox.gh_proxy", // deprecated
+    ];
+
+    let toml = r#"
+[proxy]
+enabled = false
+port = 18080
+blocked_domains = "file.txt"
+allowed_domains = "file.txt"
+log_file = "log.txt"
+log_level = "none"
+timeout = 60
+allow_private_domains = []
+
+[allow]
+read = []
+write = []
+ports = []
+localhost = []
+net = []
+
+[deny]
+paths = []
+net = []
+
+[sandbox]
+validate = true
+allow_env_files = false
+allow_localhost_any = false
+pass_env = []
+inherit_env = false
+allow_lifecycle_scripts = false
+allow_gpg_signing = false
+allow_tmp_exec = false
+scratch_dir = false
+quiet = false
+allow_cache_exec = []
+allow_cache_exec_any = false
+allow_jvm_attach = false
+allow_browser = false
+
+[gh_guard]
+enabled = false
+log_level = "blocked"
+format = "text"
+
+[git_guard]
+enabled = false
+log_level = "blocked"
+format = "text"
+
+[audit]
+enabled = false
+log_file = "audit.log"
+log_level = "blocked"
+format = "text"
+"#;
+
+    for key_info in all_config_keys() {
+        if matches!(key_info.value_type, ConfigValueType::ArrayOfTables) {
+            continue;
+        }
+        let dotted = format!("{}.{}", key_info.section, key_info.key);
+        if excluded.contains(&dotted.as_str()) {
+            continue;
+        }
+        assert!(
+            toml.contains(&format!("{} =", key_info.key))
+                || toml.contains(&format!("[{}]", key_info.section)),
+            "registry key '{dotted}' is not covered by the fixture TOML in \
+             `registry_keys_match_validate_all_valid_keys_fixture` — add it"
+        );
+    }
+}

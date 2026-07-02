@@ -190,6 +190,11 @@ pub fn display_config(loaded: Option<&LoadedConfig>) {
         c.proxy.log_level.as_deref().unwrap_or("none"),
         src(c.proxy.log_level.is_some())
     );
+    println!(
+        "{blue}[cplt]{nc}    timeout          = {}{}",
+        c.proxy.timeout.unwrap_or(60),
+        src(c.proxy.timeout.is_some())
+    );
     println!();
 
     // [allow]

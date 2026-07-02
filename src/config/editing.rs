@@ -35,6 +35,15 @@ fn parse_value_for_key(
             }
             Ok(toml_edit::value(i64::from(n)).into_value().unwrap())
         }
+        ConfigValueType::U64 => {
+            let n: u64 = value.parse().map_err(|_| {
+                ConfigError::Validation(format!(
+                    "invalid value '{value}' for {}.{}: expected a non-negative integer",
+                    key_info.section, key_info.key
+                ))
+            })?;
+            Ok(toml_edit::value(n as i64).into_value().unwrap())
+        }
         ConfigValueType::Str => Ok(toml_edit::value(value).into_value().unwrap()),
         ConfigValueType::U16Array => {
             // Comma-separated: "8080,9090" or single "8080"

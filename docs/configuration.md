@@ -80,6 +80,7 @@ with an explanation — set them in `~/.config/cplt/config.toml` instead:
 | `proxy.port` | port conflicts are machine-specific |
 | `proxy.log_file` | local log path |
 | `proxy.log_level` | local verbosity preference |
+| `proxy.timeout` | local network condition preference |
 | `proxy.blocked_domains` | local path to a blocklist file |
 | `proxy.allowed_domains` | local path to an allowlist file |
 | all `[gh_guard]` keys | guard policy is configured globally, not per-repo |
