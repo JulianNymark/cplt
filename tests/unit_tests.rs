@@ -817,13 +817,7 @@ fn profile_denies_sensitive_files() {
         allow_cache_exec_any: false,
         allow_browser: false,
     });
-    for file in &[
-        ".netrc",
-        ".npmrc",
-        ".pypirc",
-        ".gem/credentials",
-        ".vault-token",
-    ] {
+    for file in &[".netrc", ".pypirc", ".gem/credentials", ".vault-token"] {
         assert!(
             p.contains(&format!(
                 "(deny file-read* (literal \"/Users/test/{file}\"))"
@@ -874,6 +868,7 @@ fn profile_denies_credential_files_in_tool_dirs() {
         ".gradle/gradle.properties",
         ".cargo/credentials",
         ".cargo/credentials.toml",
+        ".npmrc",
     ] {
         assert!(
             p.contains(&format!(
@@ -910,6 +905,7 @@ fn profile_allows_credential_files_when_user_opts_in() {
         extra_read: &[
             PathBuf::from("/Users/test/.m2/settings.xml"),
             PathBuf::from("/Users/test/.gradle/gradle.properties"),
+            PathBuf::from("/Users/test/.npmrc"),
         ],
         extra_write: &[],
         allow_socket: &[],
@@ -967,6 +963,18 @@ fn profile_allows_credential_files_when_user_opts_in() {
     assert!(
         allow_pos > deny_pos,
         "re-allow must come AFTER deny for gradle.properties"
+    );
+
+    // Same for npmrc
+    let deny_pos = p
+        .find("(deny file-read* (literal \"/Users/test/.npmrc\"))")
+        .unwrap();
+    let allow_pos = p
+        .find("(allow file-read* (literal \"/Users/test/.npmrc\"))")
+        .expect("should have a post-deny re-allow for .npmrc");
+    assert!(
+        allow_pos > deny_pos,
+        "re-allow must come AFTER deny for .npmrc"
     );
 
     // Files NOT in extra_read should remain denied without override
