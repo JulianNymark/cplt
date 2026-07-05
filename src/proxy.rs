@@ -1683,6 +1683,121 @@ mod tests {
         );
     }
 
+    // #126 Tier 2: the old `allow_private_domains_bypasses_private_ip_check`
+    // unit test re-implemented the guard's boolean expression with constants and
+    // never drove `handle_connect`, so deleting the real SSRF/private-IP guard
+    // left it green. These two tests exercise the ACTUAL guard end-to-end through
+    // the proxy with an injected resolver that maps a public-looking hostname onto
+    // a private (RFC1918) IP — DNS rebinding — proving the resolved-IP block fires
+    // and that `allow_private_domains` (and only it) is what lifts the block.
+
+    /// A domain that resolves to a private IP and is NOT allow-listed must be
+    /// blocked with 403 "Resolved to private IP". Deleting the `is_private_ip`
+    /// guard makes the proxy forward the CONNECT instead → this turns red.
+    #[test]
+    fn proxy_blocks_private_ip_resolution_when_not_allowlisted() {
+        require_localhost_tcp!();
+
+        let private_addr: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        // `corp.internal` is not an IP literal and not *.localhost/*.local, so it
+        // passes the pre-DNS `is_private_hostname` fast path and reaches the
+        // resolved-IP guard — the code under test.
+        let resolver: ResolverFn = Arc::new(move |host: &str, port: u16| {
+            if host == "corp.internal" {
+                Some(std::net::SocketAddr::new(private_addr, port))
+            } else {
+                None
+            }
+        });
+
+        let proxy = start(ProxyOptions {
+            port: 0,
+            blocked_file: PathBuf::from("/dev/null"),
+            allowed_ports: vec![443, 80],
+            allow_localhost_ports: vec![],
+            allow_localhost_any: false,
+            allowed_domains_file: None,
+            allowed_domains_initial: Vec::new(),
+            cli_private_domains: Vec::new(), // NOT allow-listed
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
+            resolver: Some(resolver),
+        })
+        .expect("proxy start failed");
+
+        let status = proxy_connect(proxy.port, "corp.internal:443");
+        proxy.shutdown();
+
+        assert!(
+            status.contains("403"),
+            "corp.internal resolves to 10.0.0.1 (private) and is not allow-listed — \
+             the resolved-IP guard must block it with 403; got: {status}"
+        );
+    }
+
+    /// The same domain→private-IP mapping, but WITH the domain in
+    /// `allow_private_domains`, must bypass the private-IP block. We resolve to a
+    /// reserved/unroutable private IP so the (now-permitted) upstream connect
+    /// fails fast with 502 rather than the 403 the guard would have produced —
+    /// proving the allow-list, and only the allow-list, changed the decision.
+    #[test]
+    fn proxy_allowlist_bypasses_private_ip_block() {
+        require_localhost_tcp!();
+
+        // 0.0.0.0 is the unspecified address → is_private_ip() == true
+        // (is_unspecified). We assert only that the block was LIFTED (no 403);
+        // we deliberately do NOT assert the downstream connect outcome, because
+        // it is environment-dependent: connect(0.0.0.0) is refused on macOS but
+        // on Linux is treated as 127.0.0.1, which may connect successfully if a
+        // loopback listener happens to be running (the linux CI job runs a
+        // :443 listener for the proxy-forced enforcement test). The security
+        // property under test — allow_private_domains flips the decision — is
+        // proven by "not 403" here paired with the sibling test that returns 403
+        // for the same IP without the allow-list.
+        let private_addr: std::net::IpAddr = "0.0.0.0".parse().unwrap();
+        let resolver: ResolverFn = Arc::new(move |host: &str, port: u16| {
+            if host == "corp.internal" {
+                Some(std::net::SocketAddr::new(private_addr, port))
+            } else {
+                None
+            }
+        });
+
+        let proxy = start(ProxyOptions {
+            port: 0,
+            blocked_file: PathBuf::from("/dev/null"),
+            allowed_ports: vec![443, 80],
+            allow_localhost_ports: vec![],
+            allow_localhost_any: false,
+            allowed_domains_file: None,
+            allowed_domains_initial: Vec::new(),
+            cli_private_domains: vec!["corp.internal".to_string()], // allow-listed
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
+            resolver: Some(resolver),
+        })
+        .expect("proxy start failed");
+
+        let status = proxy_connect(proxy.port, "corp.internal:443");
+        proxy.shutdown();
+
+        // The guard was bypassed: the proxy did NOT return the private-IP 403 and
+        // proceeded past the block. (Sibling test proxy_blocks_private_ip_...
+        // returns 403 for the same IP without the allow-list, so "not 403" is the
+        // differential that proves the allow-list, and only the allow-list,
+        // flipped the decision.)
+        assert!(
+            !status.contains("403"),
+            "allow_private_domains must lift the private-IP block for corp.internal; got: {status}"
+        );
+    }
+
     /// Verify that legitimate localhost still works when --allow-localhost is set.
     /// This is the positive counterpart to proxy_blocks_dns_rebinding_evil_localhost_to_imds:
     /// real localhost resolves to 127.0.0.1, which is_loopback() = true → allowed.
