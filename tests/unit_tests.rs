@@ -388,6 +388,89 @@ fn allow_private_domains_rejects_empty_string() {
 // `src/proxy.rs`: `proxy_blocks_private_ip_resolution_when_not_allowlisted` and
 // `proxy_allowlist_bypasses_private_ip_block`. The `is_domain_match` suffix
 // semantics this test also touched are still covered below.
+#[test]
+fn proxy_upstream_parsed_from_config() {
+    use cplt::config::{CliFlags, Config};
+    let toml = "[proxy]\nupstream = \"http://corp-proxy.example.com:8080\"\n";
+    let resolved = Config::parse(toml)
+        .unwrap()
+        .merge(CliFlags::default())
+        .unwrap();
+    let up = resolved.proxy_upstream.expect("upstream should be set");
+    assert_eq!(up.host, "corp-proxy.example.com");
+    assert_eq!(up.port, 8080);
+}
+
+#[test]
+fn proxy_upstream_cli_overrides_config() {
+    use cplt::config::{CliFlags, Config};
+    let toml = "[proxy]\nupstream = \"http://config-proxy.example.com:8080\"\n";
+    let cli = CliFlags {
+        proxy_upstream: Some("http://cli-proxy.example.com:3128".to_string()),
+        ..Default::default()
+    };
+    let resolved = Config::parse(toml).unwrap().merge(cli).unwrap();
+    let up = resolved.proxy_upstream.expect("upstream should be set");
+    assert_eq!(up.host, "cli-proxy.example.com");
+    assert_eq!(up.port, 3128);
+}
+
+#[test]
+fn proxy_upstream_none_when_unset() {
+    use cplt::config::{CliFlags, Config};
+    let resolved = Config::parse("[proxy]\nenabled = true\n")
+        .unwrap()
+        .merge(CliFlags::default())
+        .unwrap();
+    assert!(resolved.proxy_upstream.is_none());
+}
+
+#[test]
+fn proxy_upstream_invalid_url_rejected() {
+    use cplt::config::{CliFlags, Config};
+    // Missing port and unsupported scheme must both fail config loading (fail-closed).
+    let toml = "[proxy]\nupstream = \"http://corp-proxy.example.com\"\n";
+    assert!(
+        Config::parse(toml)
+            .unwrap()
+            .merge(CliFlags::default())
+            .is_err()
+    );
+    let toml = "[proxy]\nupstream = \"https://corp-proxy.example.com:8080\"\n";
+    assert!(
+        Config::parse(toml)
+            .unwrap()
+            .merge(CliFlags::default())
+            .is_err()
+    );
+}
+
+#[test]
+fn config_show_redacts_upstream_credentials() {
+    // `cplt config show`/`explain` print proxy.upstream through
+    // redact_upstream_url. A URL carrying `user:pass@` must never leak the
+    // password to the terminal (these summaries get pasted into issues/CI),
+    // but the host:port must stay visible so the summary is still useful.
+    let shown = cplt::proxy::redact_upstream_url("http://alice:s3cret@corp.example.com:8080");
+    assert!(
+        !shown.contains("s3cret"),
+        "password leaked in config show: {shown}"
+    );
+    assert!(
+        shown.contains("corp.example.com:8080"),
+        "host should remain visible: {shown}"
+    );
+    assert_eq!(shown, "http://alice:***@corp.example.com:8080");
+}
+
+#[test]
+fn config_show_upstream_without_credentials_unchanged() {
+    // A no-userinfo upstream has no secret, so config show displays it verbatim.
+    assert_eq!(
+        cplt::proxy::redact_upstream_url("http://corp.example.com:8080"),
+        "http://corp.example.com:8080"
+    );
+}
 
 #[test]
 fn allow_private_domains_suffix_match() {
@@ -6603,6 +6686,7 @@ fn registry_keys_match_validate_all_valid_keys_fixture() {
 enabled = false
 forced = false
 port = 18080
+upstream = "http://corp-proxy.example.com:8080"
 blocked_domains = "file.txt"
 allowed_domains = "file.txt"
 log_file = "log.txt"

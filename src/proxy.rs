@@ -109,6 +109,232 @@ impl DomainCache {
 #[cfg(test)]
 pub type ResolverFn = Arc<dyn Fn(&str, u16) -> Option<std::net::SocketAddr> + Send + Sync>;
 
+/// A parsed upstream (corporate) HTTP proxy that cplt forwards CONNECT tunnels
+/// through instead of connecting to targets directly.
+///
+/// When configured, the CONNECT handler establishes the tunnel by connecting to
+/// this proxy and issuing a nested `CONNECT host:port` for the real target — but
+/// only *after* every one of cplt's hostname-based policy checks has passed. The
+/// upstream proxy must never receive a request that cplt's policy would block.
+#[derive(Clone, PartialEq, Eq)]
+pub struct UpstreamProxy {
+    /// Host of the upstream proxy (no scheme, no port).
+    pub host: String,
+    /// Port of the upstream proxy.
+    pub port: u16,
+    /// Pre-computed `Proxy-Authorization: Basic <base64>` credential, i.e. the
+    /// base64 of `user:pass` taken from the URL userinfo. `None` when the URL
+    /// carried no credentials. Held here so the secret is parsed once at
+    /// startup rather than reconstructed per connection.
+    pub proxy_authorization: Option<String>,
+}
+
+/// Manual `Debug` that never prints the credential.
+///
+/// SECURITY: `proxy_authorization` holds base64(`user:pass`). A derived `Debug`
+/// would splice that secret into any `{:?}` log line or panic message, so it is
+/// rendered only as a presence marker (`Some("<redacted>")` / `None`). Host and
+/// port carry no secret and are printed to keep the value useful for
+/// diagnostics.
+impl std::fmt::Debug for UpstreamProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpstreamProxy")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field(
+                "proxy_authorization",
+                &self.proxy_authorization.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+impl UpstreamProxy {
+    /// Parse an upstream-proxy URL such as `http://host:8080` or
+    /// `http://user:pass@host:8080`. Also accepts a bare `host:8080` (no
+    /// scheme). Only the `http` scheme is supported — an `https` upstream would
+    /// require TLS to the proxy itself, which cplt does not implement; such a
+    /// URL is rejected rather than silently downgraded. A port is mandatory so
+    /// the destination is never ambiguous.
+    ///
+    /// The security value of this feature depends on cplt filtering *before*
+    /// forwarding, so parsing is strict: a malformed value fails config loading
+    /// (fail-closed) instead of being ignored.
+    pub fn parse(url: &str) -> Result<Self, String> {
+        let raw = url.trim();
+        if raw.is_empty() {
+            return Err("upstream proxy URL must not be empty".to_string());
+        }
+
+        // Strip and validate the scheme. Bare host:port (no scheme) is allowed.
+        let without_scheme = if let Some(rest) = raw.strip_prefix("http://") {
+            rest
+        } else if raw.contains("://") {
+            let scheme = raw.split("://").next().unwrap_or("");
+            return Err(format!(
+                "unsupported upstream proxy scheme '{scheme}': only http:// (or a bare host:port) is supported"
+            ));
+        } else {
+            raw
+        };
+
+        // A trailing path (e.g. `host:8080/foo`) is meaningless for a CONNECT
+        // proxy — reject it so typos surface instead of being silently dropped.
+        let authority = without_scheme.trim_end_matches('/');
+        if authority.contains('/') {
+            return Err(format!(
+                "upstream proxy URL must be host:port with no path: '{url}'"
+            ));
+        }
+
+        // Split optional userinfo (user:pass@) from the host:port authority.
+        let (userinfo, hostport) = match authority.rsplit_once('@') {
+            Some((u, hp)) => (Some(u), hp),
+            None => (None, authority),
+        };
+
+        // Split host from port. IPv6 literals contain multiple ':' and so must
+        // be bracketed (`[::1]:3128`) to be unambiguous — the brackets are
+        // stripped from the stored host but restored when forming a socket
+        // address (see `socket_addr`). An UNbracketed value with more than one
+        // ':' is an ambiguous IPv6 literal (e.g. `::1:3128`): rather than
+        // mis-splitting on the last ':' and silently connecting somewhere
+        // unintended, reject it as a config error (fail-closed).
+        let (host, port_str) = if let Some(rest) = hostport.strip_prefix('[') {
+            let (h, after) = rest
+                .split_once(']')
+                .ok_or_else(|| format!("upstream proxy URL has an unclosed '[' in '{url}'"))?;
+            let port_str = after.strip_prefix(':').ok_or_else(|| {
+                format!(
+                    "bracketed IPv6 upstream proxy must include a port, e.g. http://[::1]:3128: '{url}'"
+                )
+            })?;
+            (h, port_str)
+        } else if hostport.matches(':').count() > 1 {
+            return Err(format!(
+                "ambiguous IPv6 upstream proxy address '{hostport}' must be bracketed, e.g. http://[::1]:3128: '{url}'"
+            ));
+        } else {
+            hostport.rsplit_once(':').ok_or_else(|| {
+                format!("upstream proxy URL must include a port, e.g. http://host:8080: '{url}'")
+            })?
+        };
+        if host.is_empty() {
+            return Err(format!("upstream proxy URL is missing a host: '{url}'"));
+        }
+        let port: u16 = port_str
+            .parse()
+            .map_err(|_| format!("invalid upstream proxy port '{port_str}' in '{url}'"))?;
+        if port == 0 {
+            return Err(format!("upstream proxy port must not be 0 in '{url}'"));
+        }
+
+        let proxy_authorization = match userinfo {
+            Some(ui) if !ui.is_empty() => Some(base64_encode(ui.as_bytes())),
+            _ => None,
+        };
+
+        Ok(Self {
+            host: host.to_string(),
+            port,
+            proxy_authorization,
+        })
+    }
+
+    /// Build the CONNECT request cplt sends to the upstream proxy to open a
+    /// tunnel to `host:port`. Includes a `Host` header and, when credentials
+    /// were supplied, a `Proxy-Authorization: Basic` header.
+    fn connect_request(&self, host: &str, port: u16) -> String {
+        let mut req = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n");
+        if let Some(ref auth) = self.proxy_authorization {
+            req.push_str("Proxy-Authorization: Basic ");
+            req.push_str(auth);
+            req.push_str("\r\n");
+        }
+        req.push_str("\r\n");
+        req
+    }
+
+    /// The `host:port` string used to open the TCP connection to the upstream
+    /// proxy. An IPv6 literal host (stored without brackets) is wrapped back in
+    /// brackets so the result is a valid socket address (`[::1]:3128`); names
+    /// and IPv4 addresses are used verbatim.
+    fn socket_addr(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+/// Minimal standard base64 encoder (RFC 4648) for building the
+/// `Proxy-Authorization: Basic` credential. Kept local to avoid adding a
+/// dependency for this single, small use.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
+        let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[((triple >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(triple & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Redact the userinfo credentials from an upstream-proxy URL so it is safe to
+/// print in `cplt config show`/`explain` or any log line.
+///
+/// - `http://user:pass@host:8080` → `http://user:***@host:8080` (username kept,
+///   password hidden)
+/// - `http://token@host:8080` → `http://***@host:8080` (a lone userinfo could
+///   itself be a bearer-style secret, so it is hidden whole)
+/// - `http://host:8080` and bare `host:8080` → returned unchanged (no secret)
+///
+/// SECURITY: this is display-only. The real `Proxy-Authorization: Basic` header
+/// sent to the upstream is derived from the untouched URL in
+/// [`UpstreamProxy::parse`] and is never affected by this function — only what
+/// humans see is redacted, so credentials cannot leak into terminals, logs, or
+/// CI artifacts while the tunnel still authenticates correctly.
+pub fn redact_upstream_url(url: &str) -> String {
+    // Only the authority is touched; preserve any `scheme://` prefix verbatim.
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (Some(s), r),
+        None => (None, url),
+    };
+
+    // Userinfo is everything before the last '@' in the authority, matching the
+    // split UpstreamProxy::parse performs. No '@' means there is nothing secret.
+    let redacted_rest = match rest.rsplit_once('@') {
+        Some((userinfo, hostport)) => {
+            let masked = match userinfo.split_once(':') {
+                Some((user, _pass)) => format!("{user}:***"),
+                None => "***".to_string(),
+            };
+            format!("{masked}@{hostport}")
+        }
+        None => rest.to_string(),
+    };
+
+    match scheme {
+        Some(s) => format!("{s}://{redacted_rest}"),
+        None => redacted_rest,
+    }
+}
+
 /// Shared proxy state holding cached domain lists and config paths.
 /// Wrapped in `Arc` and shared across connection threads.
 pub struct ProxyState {
@@ -139,6 +365,11 @@ pub struct ProxyState {
     log_level: ProxyLogLevel,
     // Timeout for connection reads/writes
     timeout: std::time::Duration,
+
+    // Optional upstream (corporate) proxy. When set, CONNECT tunnels are
+    // forwarded through it instead of connecting to targets directly — but only
+    // after all policy checks pass. When None, behavior is a direct connect.
+    upstream: Option<UpstreamProxy>,
 
     // Test-only: injectable DNS resolver to simulate fake DNS responses.
     #[cfg(test)]
@@ -339,6 +570,9 @@ pub struct ProxyOptions {
     pub log_level: ProxyLogLevel,
     /// Timeout for proxy connections.
     pub timeout: std::time::Duration,
+    /// Optional upstream (corporate) proxy to forward CONNECT tunnels through.
+    /// When `None`, cplt connects to targets directly (unchanged behavior).
+    pub upstream: Option<UpstreamProxy>,
 
     /// Test-only: injectable DNS resolver. Pass a closure to override DNS
     /// resolution in proxy tests (e.g. to simulate DNS rebinding).
@@ -415,6 +649,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         log_file: opts.log_file,
         log_level: opts.log_level,
         timeout: opts.timeout,
+        upstream: opts.upstream,
         #[cfg(test)]
         resolver: opts.resolver,
     });
@@ -547,6 +782,36 @@ fn handle_connection(mut client: TcpStream, state: &ProxyState) {
     }
 }
 
+/// Resolve `host:port` to a socket address using the same local DNS path the
+/// direct-connect flow uses, honoring the test-only injected resolver.
+///
+/// Returns `None` when the name does not resolve locally. Callers distinguish
+/// two meanings of `None`: on the direct path it is a hard DNS failure (502);
+/// on the upstream-forward path it means "this host is only resolvable by the
+/// corporate proxy" (split-horizon DNS) and the tunnel is forwarded anyway.
+/// Centralizing resolution here keeps the resolved-IP SSRF guard identical for
+/// both paths.
+#[cfg_attr(not(test), allow(unused_variables))] // `state` only used by the test resolver
+fn resolve_locally(state: &ProxyState, host: &str, port: u16) -> Option<std::net::SocketAddr> {
+    #[cfg(test)]
+    {
+        // In tests, an injected resolver can fake DNS responses (e.g. to
+        // simulate DNS rebinding where evil.example.com → 169.254.169.254).
+        if let Some(ref resolver) = state.resolver {
+            return resolver(host, port);
+        }
+    }
+    let addr_str = format!("{host}:{port}");
+    addr_str.to_socket_addrs().ok().and_then(|mut a| a.next())
+}
+
+/// Apply the resolved-IP SSRF / DNS-rebinding guard.
+///
+/// Returns `true` when the target must be BLOCKED: it resolves to a
+/// private/link-local IP that is neither loopback nor covered by an
+/// `allow_private_domains` entry. This is the exact policy the direct-connect
+/// path enforces inline; the upstream-forward path reuses it so both modes
+/// treat a resolvable host identically.
 fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
     // Parse host:port
     let (host, port) = match target.rsplit_once(':') {
@@ -617,37 +882,66 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
         return;
     }
 
-    // Resolve DNS FIRST, then check the resolved IP
-    let addr_str = format!("{host}:{port}");
-    #[cfg(test)]
-    let socket_addr = {
-        // In tests, an injected resolver can fake DNS responses (e.g. to simulate
-        // DNS rebinding where evil.localhost → 169.254.169.254).
-        if let Some(ref resolver) = state.resolver {
-            if let Some(a) = resolver(&host, port) {
-                a
-            } else {
-                log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
-                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-                return;
-            }
-        } else if let Some(a) = addr_str.to_socket_addrs().ok().and_then(|mut a| a.next()) {
-            a
-        } else {
-            log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
-            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    // ── Upstream (corporate) proxy chaining ──────────────────────────────
+    // If an upstream proxy is configured, forward the tunnel through it rather
+    // than connecting to the target directly. This branch is deliberately placed
+    // AFTER every hostname-based policy gate above — the port check, the
+    // allowlist check, the blocklist check, and the private-hostname check — so
+    // the upstream proxy can NEVER receive a CONNECT that cplt's policy would
+    // block. A blocked/blocklisted/wrong-port target has already returned 403
+    // above and never reaches this code.
+    //
+    // Loopback carve-out (--allow-localhost): a target permitted only because
+    // it is loopback must connect DIRECTLY, never via the upstream. Forwarding
+    // `127.0.0.1`/`localhost` to the corporate proxy is nonsensical — it would
+    // resolve loopback on the UPSTREAM's side, reaching a service on the proxy
+    // host rather than the user's machine. Skipping the branch here keeps every
+    // localhost carve-out local, and the direct path's stricter resolved-IP
+    // loopback check (below) still applies.
+    if !localhost_connect_allowed && let Some(upstream) = state.upstream.as_ref() {
+        // SSRF / DNS-rebinding guard for the forwarded path. We apply the SAME
+        // resolved-IP check the direct path applies below, so upstream and
+        // direct mode treat a *resolvable* host identically: a public name
+        // whose A record points at a private/link-local IP (e.g. an
+        // attacker-registered domain aimed at 10.x or the 169.254.169.254 cloud
+        // metadata endpoint) is BLOCKED, never forwarded. Hosts explicitly
+        // trusted via `allow_private_domains` are forwarded exactly as they are
+        // permitted in direct mode — that is how legitimate corporate-internal
+        // targets that resolve to private IPs keep working.
+        //
+        // Residual, stated honestly: a name that ONLY the corporate proxy can
+        // resolve (split-horizon DNS, not resolvable from this host) yields no
+        // local IP to check, so it is forwarded without a resolved-IP check.
+        // Reaching such names is the intended purpose of upstream mode; the
+        // hostname allow/block/port gates above still constrain it.
+        if let Some(socket_addr) = resolve_locally(state, &host, port)
+            && resolved_ip_is_blocked(
+                &socket_addr.ip(),
+                is_domain_match(&host, &state.get_private_domains()),
+                localhost_opt_in,
+            )
+        {
+            log_connection(
+                "CONNECT",
+                target,
+                "BLOCKED-PRIVATE-RESOLVED",
+                log_file,
+                log_level,
+            );
+            let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nResolved to private IP\r\n");
+            let _ = client.shutdown(std::net::Shutdown::Both);
             return;
         }
-    };
-    #[cfg(not(test))]
-    let socket_addr = {
-        if let Some(a) = addr_str.to_socket_addrs().ok().and_then(|mut a| a.next()) {
-            a
-        } else {
-            log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
-            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-            return;
-        }
+        connect_via_upstream(client, &host, port, target, upstream, state);
+        return;
+    }
+
+    // Resolve DNS FIRST, then check the resolved IP. A local resolution failure
+    // on the direct path is a hard error — there is no upstream to defer to.
+    let Some(socket_addr) = resolve_locally(state, &host, port) else {
+        log_connection("CONNECT", target, "DNS-FAIL", log_file, log_level);
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        return;
     };
 
     // Hard requirement for the localhost carve-out: a target that was only
@@ -740,6 +1034,208 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
 
     // Bidirectional relay
     relay(client, remote, state.timeout);
+}
+
+/// Forward a CONNECT tunnel through the configured upstream (corporate) proxy.
+///
+/// Precondition: every cplt policy check (port, allowlist, blocklist,
+/// private-hostname) has already passed in `handle_connect`. This function must
+/// only ever be reached for a target cplt's policy permits — it performs no
+/// filtering of its own; it just relays the already-approved target to the
+/// upstream and splices bytes.
+fn connect_via_upstream(
+    mut client: TcpStream,
+    host: &str,
+    port: u16,
+    target: &str,
+    upstream: &UpstreamProxy,
+    state: &ProxyState,
+) {
+    let log_file = state.log_file.as_deref();
+    let log_level = state.log_level;
+
+    // Connect to the upstream proxy itself (not the target).
+    let upstream_addr = upstream.socket_addr();
+    let Some(socket_addr) = upstream_addr
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.next())
+    else {
+        log_connection(
+            "CONNECT",
+            target,
+            "CONNECT-FAIL:upstream-dns",
+            log_file,
+            log_level,
+        );
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        return;
+    };
+    let mut remote = match TcpStream::connect_timeout(&socket_addr, CONNECT_TIMEOUT) {
+        Ok(s) => {
+            s.set_nodelay(true).ok();
+            s
+        }
+        Err(e) => {
+            log_connection(
+                "CONNECT",
+                target,
+                &format!("CONNECT-FAIL:upstream:{e}"),
+                log_file,
+                log_level,
+            );
+            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            return;
+        }
+    };
+    remote.set_read_timeout(Some(state.timeout)).ok();
+    remote.set_write_timeout(Some(state.timeout)).ok();
+
+    // Ask the upstream to open a tunnel to the real target.
+    let request = upstream.connect_request(host, port);
+    if remote.write_all(request.as_bytes()).is_err() {
+        log_connection(
+            "CONNECT",
+            target,
+            "CONNECT-FAIL:upstream-write",
+            log_file,
+            log_level,
+        );
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+        return;
+    }
+
+    // Read the upstream's CONNECT response. Anything other than 2xx means the
+    // upstream refused — fail the client's CONNECT cleanly instead of splicing.
+    match read_upstream_connect_status(&mut remote) {
+        Ok(true) => {}
+        Ok(false) => {
+            log_connection(
+                "CONNECT",
+                target,
+                "CONNECT-FAIL:upstream-refused",
+                log_file,
+                log_level,
+            );
+            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            return;
+        }
+        Err(_) => {
+            log_connection(
+                "CONNECT",
+                target,
+                "CONNECT-FAIL:upstream-read",
+                log_file,
+                log_level,
+            );
+            let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            return;
+        }
+    }
+
+    // Log as CONNECTED — identical audit/stats semantics to a direct connect,
+    // so the allowed connection is recorded the same way whether or not an
+    // upstream is in use.
+    log_connection("CONNECT", target, "CONNECTED", log_file, log_level);
+
+    // Tell the client its tunnel is established, then splice bytes as usual.
+    if client
+        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        .is_err()
+    {
+        return;
+    }
+
+    relay(client, remote, state.timeout);
+}
+
+/// Read and interpret the upstream proxy's response to our CONNECT request.
+///
+/// Returns `Ok(true)` for a 2xx status (tunnel established), `Ok(false)` for any
+/// other status (upstream refused), or `Err` on an I/O/protocol error. Reads
+/// byte-by-byte only up to the end of the status line, so the tunnelled TLS
+/// bytes that may follow the header block are not consumed here — the relay
+/// loop reads them from the same socket afterward.
+fn read_upstream_connect_status(remote: &mut TcpStream) -> std::io::Result<bool> {
+    // Read the first line (HTTP status line), terminated by \n. Cap the length
+    // to avoid an unbounded read from a hostile/broken upstream.
+    let mut line = Vec::with_capacity(64);
+    let mut byte = [0u8; 1];
+    loop {
+        if remote.read(&mut byte)? == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "upstream closed before sending a CONNECT response",
+            ));
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        if byte[0] != b'\r' {
+            line.push(byte[0]);
+        }
+        if line.len() > 8192 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "upstream CONNECT status line too long",
+            ));
+        }
+    }
+
+    let status_line = String::from_utf8_lossy(&line);
+    // Expected form: "HTTP/1.1 200 Connection established".
+    let code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse::<u16>().ok());
+    let ok = matches!(code, Some(c) if (200..300).contains(&c));
+
+    if ok {
+        // Consume the remaining response headers up to the blank line so the
+        // relay starts cleanly at the tunnelled payload. A well-behaved proxy
+        // sends CRLFCRLF right after the status line for a 200.
+        consume_until_header_end(remote)?;
+    }
+    Ok(ok)
+}
+
+/// Consume bytes from `remote` until the end of the HTTP header block
+/// (`\r\n\r\n`). Used after a successful upstream CONNECT so the relay begins at
+/// the tunnelled data rather than mid-header.
+fn consume_until_header_end(remote: &mut TcpStream) -> std::io::Result<()> {
+    // We already consumed the status line's trailing \n, so we are sitting at a
+    // line boundary — start the newline counter at 1. If the very next line is
+    // empty (the common `200\r\n\r\n` case with no extra headers), the next \n
+    // takes us to 2 and ends the block. Any header byte resets the counter.
+    // `usize`, not `u8`: a hostile/broken upstream that streams a long run of
+    // newline-ish bytes must never overflow this counter (panic in debug, wrap
+    // in release). The `total` cap below independently bounds the loop so the
+    // read can never be unbounded regardless of the byte pattern.
+    let mut byte = [0u8; 1];
+    let mut consecutive_newlines = 1usize;
+    let mut total = 0usize;
+    loop {
+        if remote.read(&mut byte)? == 0 {
+            return Ok(());
+        }
+        match byte[0] {
+            b'\n' => {
+                consecutive_newlines += 1;
+                if consecutive_newlines >= 2 {
+                    return Ok(());
+                }
+            }
+            b'\r' => { /* ignore, wait for the \n */ }
+            _ => consecutive_newlines = 0,
+        }
+        total += 1;
+        if total > 65536 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "upstream CONNECT headers too long",
+            ));
+        }
+    }
 }
 
 fn relay(client: TcpStream, remote: TcpStream, timeout: Duration) {
@@ -1298,6 +1794,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         };
 
@@ -1322,6 +1819,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         };
 
@@ -1351,6 +1849,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         };
 
@@ -1383,6 +1882,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         };
 
@@ -1421,6 +1921,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         };
 
@@ -1481,6 +1982,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         });
         assert!(result.is_ok());
@@ -1513,6 +2015,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         });
         assert!(result.is_err(), "should fail when allowlist is unreadable");
@@ -1545,6 +2048,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver: None,
         };
 
@@ -1619,6 +2123,7 @@ mod tests {
             log_file: None,
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
+            upstream: None,
             resolver,
         })
         .expect("proxy start failed")
@@ -1840,6 +2345,7 @@ mod tests {
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
             resolver: Some(resolver),
+            upstream: None,
         })
         .expect("proxy start failed");
 
@@ -1896,6 +2402,7 @@ mod tests {
             log_level: ProxyLogLevel::None,
             timeout: Duration::from_secs(60),
             resolver: Some(resolver),
+            upstream: None,
         })
         .expect("proxy start failed");
 
@@ -2101,5 +2608,744 @@ mod tests {
             "corp.internal → 10.0.0.5 (RFC1918, not allow-listed) must stay BLOCKED even with \
              --allow-localhost-any; localhost opt-in must not open private networks; got: {status}"
         );
+    }
+
+    // ── Upstream proxy chaining ──────────────────────────────────────────
+
+    #[test]
+    fn base64_encode_known_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"a"), "YQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+        assert_eq!(base64_encode(b"user:pass"), "dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn upstream_parse_host_and_port_with_scheme() {
+        let up = UpstreamProxy::parse("http://corp-proxy.example.com:8080").unwrap();
+        assert_eq!(up.host, "corp-proxy.example.com");
+        assert_eq!(up.port, 8080);
+        assert_eq!(up.proxy_authorization, None);
+    }
+
+    #[test]
+    fn upstream_parse_host_and_port_without_scheme() {
+        let up = UpstreamProxy::parse("corp-proxy.example.com:3128").unwrap();
+        assert_eq!(up.host, "corp-proxy.example.com");
+        assert_eq!(up.port, 3128);
+        assert_eq!(up.proxy_authorization, None);
+    }
+
+    #[test]
+    fn upstream_parse_with_userinfo_sets_basic_auth() {
+        let up = UpstreamProxy::parse("http://user:pass@proxy.example.com:8080").unwrap();
+        assert_eq!(up.host, "proxy.example.com");
+        assert_eq!(up.port, 8080);
+        // base64("user:pass") == "dXNlcjpwYXNz"
+        assert_eq!(up.proxy_authorization.as_deref(), Some("dXNlcjpwYXNz"));
+    }
+
+    #[test]
+    fn upstream_parse_rejects_https_scheme() {
+        let err = UpstreamProxy::parse("https://proxy.example.com:8080").unwrap_err();
+        assert!(err.contains("unsupported"), "got: {err}");
+    }
+
+    #[test]
+    fn upstream_parse_rejects_missing_port() {
+        assert!(UpstreamProxy::parse("http://proxy.example.com").is_err());
+        assert!(UpstreamProxy::parse("proxy.example.com").is_err());
+    }
+
+    #[test]
+    fn upstream_parse_rejects_path_and_empty_and_zero_port() {
+        assert!(UpstreamProxy::parse("http://proxy.example.com:8080/foo").is_err());
+        assert!(UpstreamProxy::parse("").is_err());
+        assert!(UpstreamProxy::parse("http://proxy.example.com:0").is_err());
+    }
+
+    #[test]
+    fn upstream_debug_redacts_credential() {
+        let up = UpstreamProxy::parse("http://alice:s3cr3tpw@corp.example.com:8080").unwrap();
+        let cred = up
+            .proxy_authorization
+            .clone()
+            .expect("credential should be present");
+        let shown = format!("{up:?}");
+        // Neither the base64 credential nor the raw password may ever appear.
+        assert!(
+            !shown.contains(&cred),
+            "Debug leaked the base64 credential: {shown}"
+        );
+        assert!(
+            !shown.contains("s3cr3tpw"),
+            "Debug leaked the raw password: {shown}"
+        );
+        // The host is safe and useful, and the secret is shown as a marker only.
+        assert!(
+            shown.contains("corp.example.com"),
+            "Debug missing host: {shown}"
+        );
+        assert!(
+            shown.contains("<redacted>"),
+            "Debug should mark the secret: {shown}"
+        );
+        // With no credentials, the field is rendered as None.
+        let noauth = UpstreamProxy::parse("http://corp.example.com:8080").unwrap();
+        assert!(format!("{noauth:?}").contains("proxy_authorization: None"));
+    }
+
+    #[test]
+    fn upstream_parse_bracketed_ipv6_strips_brackets_and_keeps_port() {
+        let up = UpstreamProxy::parse("http://[::1]:3128").unwrap();
+        assert_eq!(up.host, "::1");
+        assert_eq!(up.port, 3128);
+        // The upstream connect target must be a valid socket address, i.e. the
+        // brackets are restored for the IPv6 literal.
+        let addr = up.socket_addr();
+        assert_eq!(addr, "[::1]:3128");
+        assert!(
+            addr.parse::<std::net::SocketAddr>().is_ok(),
+            "connect target must be a valid socket addr: {addr}"
+        );
+    }
+
+    #[test]
+    fn upstream_parse_ipv4_host_and_port_unchanged() {
+        let up = UpstreamProxy::parse("http://host:8080").unwrap();
+        assert_eq!(up.host, "host");
+        assert_eq!(up.port, 8080);
+        assert_eq!(up.socket_addr(), "host:8080");
+    }
+
+    #[test]
+    fn upstream_parse_rejects_unbracketed_ipv6() {
+        // `::1:3128` is ambiguous (host vs. port) — must fail closed rather than
+        // mis-split on the last ':'.
+        assert!(UpstreamProxy::parse("http://::1:3128").is_err());
+        assert!(UpstreamProxy::parse("::1:3128").is_err());
+    }
+
+    #[test]
+    fn upstream_connect_request_has_correct_line_and_host() {
+        let up = UpstreamProxy::parse("http://proxy.example.com:8080").unwrap();
+        let req = up.connect_request("example.com", 443);
+        assert_eq!(
+            req,
+            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+        );
+        // No credentials → no Proxy-Authorization header.
+        assert!(!req.contains("Proxy-Authorization"));
+    }
+
+    #[test]
+    fn upstream_connect_request_includes_proxy_authorization_when_userinfo() {
+        let up = UpstreamProxy::parse("http://user:pass@proxy.example.com:8080").unwrap();
+        let req = up.connect_request("example.com", 443);
+        assert_eq!(
+            req,
+            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\
+             Proxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn consume_until_header_end_handles_many_blank_lines_without_panic() {
+        use std::io::Write as _;
+        require_localhost_tcp!();
+        // A hostile/broken upstream sends thousands of blank lines. This must
+        // not overflow the newline counter or panic; the header block ends at
+        // the first blank line and the call returns cleanly.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let _ = s.write_all("\r\n".repeat(10_000).as_bytes());
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let res = consume_until_header_end(&mut client);
+        assert!(res.is_ok(), "expected clean handling, got {res:?}");
+        writer.join().ok();
+    }
+
+    #[test]
+    fn consume_until_header_end_rejects_oversized_header_block() {
+        use std::io::Write as _;
+        require_localhost_tcp!();
+        // An upstream that streams a header block with no terminating blank
+        // line larger than the cap must be rejected (not read unbounded / hang).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let _ = s.write_all(&vec![b'A'; 70_000]);
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let err = consume_until_header_end(&mut client)
+            .expect_err("oversized header block should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        writer.join().ok();
+    }
+
+    #[test]
+    fn redact_upstream_url_masks_password_keeps_username_and_host() {
+        let shown = redact_upstream_url("http://alice:s3cret@corp.example.com:8080");
+        assert_eq!(shown, "http://alice:***@corp.example.com:8080");
+        // The secret must never survive redaction; the host:port must.
+        assert!(!shown.contains("s3cret"));
+        assert!(shown.contains("corp.example.com:8080"));
+    }
+
+    #[test]
+    fn redact_upstream_url_without_userinfo_is_unchanged() {
+        assert_eq!(
+            redact_upstream_url("http://corp.example.com:8080"),
+            "http://corp.example.com:8080"
+        );
+        // Bare host:port (no scheme, no userinfo) is likewise untouched.
+        assert_eq!(
+            redact_upstream_url("corp.example.com:3128"),
+            "corp.example.com:3128"
+        );
+    }
+
+    #[test]
+    fn redact_upstream_url_hides_lone_userinfo_token() {
+        // A userinfo with no ':' could itself be a bearer-style token, so the
+        // whole thing is hidden rather than shown as a bare "username".
+        assert_eq!(
+            redact_upstream_url("http://tok3n@corp.example.com:8080"),
+            "http://***@corp.example.com:8080"
+        );
+        // Also handled without a scheme.
+        assert_eq!(
+            redact_upstream_url("tok3n@corp.example.com:8080"),
+            "***@corp.example.com:8080"
+        );
+    }
+
+    /// Build a proxy that forwards through `upstream`, optionally with a
+    /// blocklist file. Timeout kept short so the tests fail fast rather than
+    /// hang if something is wrong.
+    fn make_proxy_with_upstream(upstream: UpstreamProxy, blocked_file: PathBuf) -> ProxyHandle {
+        start(ProxyOptions {
+            port: 0,
+            blocked_file,
+            allowed_ports: vec![443, 80],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
+            allowed_domains_file: None,
+            allowed_domains_initial: Vec::new(),
+            cli_private_domains: Vec::new(),
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(5),
+            upstream: Some(upstream),
+            resolver: None,
+        })
+        .expect("proxy start failed")
+    }
+
+    /// A minimal fake upstream CONNECT proxy. Accepts connections, records the
+    /// CONNECT request line it received, replies `200`, and then echoes any
+    /// tunnelled bytes back. `contacted` flips true the moment a connection is
+    /// accepted — used to prove cplt does NOT reach the upstream for a blocked
+    /// target.
+    struct FakeUpstream {
+        port: u16,
+        contacted: Arc<std::sync::atomic::AtomicBool>,
+        last_connect_line: Arc<Mutex<Option<String>>>,
+        shutdown: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    fn spawn_fake_upstream() -> FakeUpstream {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).ok();
+        let port = listener.local_addr().unwrap().port();
+        let contacted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let last_connect_line = Arc::new(Mutex::new(None));
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let c = contacted.clone();
+        let l = last_connect_line.clone();
+        let s = shutdown.clone();
+        std::thread::spawn(move || {
+            loop {
+                if s.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                let stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(_) => continue,
+                };
+                c.store(true, std::sync::atomic::Ordering::SeqCst);
+                let l2 = l.clone();
+                std::thread::spawn(move || {
+                    stream.set_nonblocking(false).ok();
+                    let mut writer = stream.try_clone().unwrap();
+                    let mut reader = BufReader::new(stream);
+                    // Read the request header block, capturing the first line.
+                    let mut first_line = String::new();
+                    reader.read_line(&mut first_line).ok();
+                    *l2.lock().unwrap() = Some(first_line.trim_end().to_string());
+                    // Drain the rest of the header block.
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) => return,
+                            Ok(_) if line == "\r\n" || line == "\n" => break,
+                            Ok(_) => {}
+                            Err(_) => return,
+                        }
+                    }
+                    writer
+                        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                        .ok();
+                    // Echo tunnelled bytes back to the client.
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        match reader.get_mut().read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                if writer.write_all(&buf[..n]).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        FakeUpstream {
+            port,
+            contacted,
+            last_connect_line,
+            shutdown,
+        }
+    }
+
+    /// End-to-end: cplt forwards an allowed CONNECT through the upstream proxy,
+    /// the upstream sees the *real target* (not the upstream address), and the
+    /// tunnel carries bytes both ways.
+    #[test]
+    fn proxy_forwards_allowed_connect_through_upstream() {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+        require_localhost_tcp!();
+
+        let upstream_srv = spawn_fake_upstream();
+        let upstream =
+            UpstreamProxy::parse(&format!("http://127.0.0.1:{}", upstream_srv.port)).unwrap();
+        let proxy = make_proxy_with_upstream(upstream, PathBuf::from("/dev/null"));
+
+        // Open a raw CONNECT to cplt for an allowed public target.
+        let mut conn = std::net::TcpStream::connect(format!("127.0.0.1:{}", proxy.port)).unwrap();
+        conn.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        write!(
+            conn,
+            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
+        )
+        .unwrap();
+
+        let mut reader = BufReader::new(conn.try_clone().unwrap());
+        let mut status = String::new();
+        reader.read_line(&mut status).unwrap();
+        assert!(
+            status.contains("200"),
+            "cplt should return 200 once upstream tunnel is up; got: {status}"
+        );
+        // Consume cplt's response header terminator (blank line).
+        let mut blank = String::new();
+        reader.read_line(&mut blank).ok();
+
+        // The tunnel is live: send bytes, expect the fake upstream to echo them.
+        conn.write_all(b"ping").unwrap();
+        let mut echo = [0u8; 4];
+        reader.get_mut().read_exact(&mut echo).unwrap();
+        assert_eq!(
+            &echo, b"ping",
+            "tunnelled bytes should round-trip via upstream"
+        );
+
+        // The upstream must have been asked to reach the REAL target.
+        let line = upstream_srv.last_connect_line.lock().unwrap().clone();
+        assert_eq!(line.as_deref(), Some("CONNECT example.com:443 HTTP/1.1"));
+
+        proxy.shutdown();
+        upstream_srv
+            .shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Security invariant: a blocklisted target is rejected by cplt BEFORE the
+    /// upstream proxy is ever contacted. The upstream must never see a request
+    /// cplt's policy would block.
+    #[test]
+    fn proxy_blocks_domain_before_contacting_upstream() {
+        require_localhost_tcp!();
+
+        let dir = test_dir("upstream-blocked");
+        let blocked = dir.join("blocked.txt");
+        std::fs::write(&blocked, "blocked.example.com\n").unwrap();
+
+        let upstream_srv = spawn_fake_upstream();
+        let upstream =
+            UpstreamProxy::parse(&format!("http://127.0.0.1:{}", upstream_srv.port)).unwrap();
+        let proxy = make_proxy_with_upstream(upstream, blocked);
+
+        let status = proxy_connect(proxy.port, "blocked.example.com:443");
+        assert!(
+            status.contains("403"),
+            "blocked domain must be rejected; got: {status}"
+        );
+
+        // Give any (erroneous) upstream connect a chance to land, then assert
+        // the upstream was NEVER contacted for the blocked target.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !upstream_srv
+                .contacted
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "upstream proxy must NOT be contacted for a blocked domain"
+        );
+
+        proxy.shutdown();
+        upstream_srv
+            .shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Flexible upstream-proxy builder for the policy-ordering tests: lets each
+    /// test vary the allowed ports, allowlist file, private-domain allowlist,
+    /// and injected resolver while forwarding through `upstream`.
+    #[allow(clippy::too_many_arguments)]
+    fn make_proxy_with_upstream_opts(
+        upstream: UpstreamProxy,
+        blocked_file: PathBuf,
+        allowed_ports: Vec<u16>,
+        allowed_domains_file: Option<PathBuf>,
+        cli_private_domains: Vec<String>,
+        resolver: Option<ResolverFn>,
+    ) -> ProxyHandle {
+        start(ProxyOptions {
+            port: 0,
+            blocked_file,
+            allowed_ports,
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
+            allowed_domains_file,
+            allowed_domains_initial: Vec::new(),
+            cli_private_domains,
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(5),
+            upstream: Some(upstream),
+            resolver,
+        })
+        .expect("proxy start failed")
+    }
+
+    /// How a broken fake upstream should misbehave after accepting a connection.
+    #[derive(Clone, Copy)]
+    enum BrokenUpstream {
+        /// Reply with a non-2xx CONNECT status (upstream refuses the tunnel).
+        Refuse403,
+        /// Accept the connection then close immediately without any reply.
+        CloseEarly,
+    }
+
+    /// Spawn a fake upstream that always fails the CONNECT — used to prove cplt
+    /// surfaces a clean 502 (and does not hang) when the upstream refuses or
+    /// disappears. Returns (port, shutdown flag).
+    fn spawn_broken_upstream(mode: BrokenUpstream) -> (u16, Arc<std::sync::atomic::AtomicBool>) {
+        use std::io::Write as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).ok();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = shutdown.clone();
+        std::thread::spawn(move || {
+            loop {
+                if s.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => match mode {
+                        BrokenUpstream::Refuse403 => {
+                            stream.set_nonblocking(false).ok();
+                            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
+                            // Drop the stream — tunnel never established.
+                        }
+                        BrokenUpstream::CloseEarly => {
+                            // Drop immediately without replying.
+                            drop(stream);
+                        }
+                    },
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+        (port, shutdown)
+    }
+
+    /// Security invariant (Finding 3a): a fail-closed allowlist rejects a target
+    /// BEFORE the upstream proxy is contacted. The allowlist gate must run ahead
+    /// of forwarding, exactly as the blocklist gate does.
+    #[test]
+    fn proxy_allowlist_blocks_before_upstream() {
+        require_localhost_tcp!();
+
+        let dir = test_dir("upstream-allowlist");
+        let allowlist = dir.join("allowed.txt");
+        std::fs::write(&allowlist, "allowed.example.com\n").unwrap();
+
+        let upstream_srv = spawn_fake_upstream();
+        let upstream =
+            UpstreamProxy::parse(&format!("http://127.0.0.1:{}", upstream_srv.port)).unwrap();
+        let proxy = make_proxy_with_upstream_opts(
+            upstream,
+            PathBuf::from("/dev/null"),
+            vec![443, 80],
+            Some(allowlist),
+            Vec::new(),
+            None,
+        );
+
+        let status = proxy_connect(proxy.port, "notallowed.example.com:443");
+        assert!(
+            status.contains("403"),
+            "domain not in allowlist must be rejected; got: {status}"
+        );
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !upstream_srv
+                .contacted
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "upstream must NOT be contacted for a domain outside the allowlist"
+        );
+
+        proxy.shutdown();
+        upstream_srv
+            .shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Security invariant (Finding 3b): a disallowed port is rejected BEFORE the
+    /// upstream proxy is contacted. The port gate must run ahead of forwarding.
+    #[test]
+    fn proxy_disallowed_port_blocks_before_upstream() {
+        require_localhost_tcp!();
+
+        let upstream_srv = spawn_fake_upstream();
+        let upstream =
+            UpstreamProxy::parse(&format!("http://127.0.0.1:{}", upstream_srv.port)).unwrap();
+        // Only 443/80 allowed; 22 is not.
+        let proxy = make_proxy_with_upstream_opts(
+            upstream,
+            PathBuf::from("/dev/null"),
+            vec![443, 80],
+            None,
+            Vec::new(),
+            None,
+        );
+
+        let status = proxy_connect(proxy.port, "example.com:22");
+        assert!(
+            status.contains("403"),
+            "disallowed port must be rejected; got: {status}"
+        );
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !upstream_srv
+                .contacted
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "upstream must NOT be contacted for a disallowed port"
+        );
+
+        proxy.shutdown();
+        upstream_srv
+            .shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Robustness (Finding 3c): when the upstream refuses with a non-2xx status,
+    /// cplt returns a clean 502 to the client instead of hanging or splicing.
+    #[test]
+    fn proxy_upstream_non_2xx_returns_502() {
+        require_localhost_tcp!();
+
+        let (up_port, up_shutdown) = spawn_broken_upstream(BrokenUpstream::Refuse403);
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{up_port}")).unwrap();
+        let proxy = make_proxy_with_upstream_opts(
+            upstream,
+            PathBuf::from("/dev/null"),
+            vec![443, 80],
+            None,
+            Vec::new(),
+            None,
+        );
+
+        let status = proxy_connect(proxy.port, "example.com:443");
+        assert!(
+            status.contains("502"),
+            "upstream 403 refusal must surface as 502 to the client; got: {status}"
+        );
+
+        proxy.shutdown();
+        up_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Robustness (Finding 3c): when the upstream accepts then closes before
+    /// replying, cplt returns a clean 502 instead of hanging.
+    #[test]
+    fn proxy_upstream_early_close_returns_502() {
+        require_localhost_tcp!();
+
+        let (up_port, up_shutdown) = spawn_broken_upstream(BrokenUpstream::CloseEarly);
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{up_port}")).unwrap();
+        let proxy = make_proxy_with_upstream_opts(
+            upstream,
+            PathBuf::from("/dev/null"),
+            vec![443, 80],
+            None,
+            Vec::new(),
+            None,
+        );
+
+        let status = proxy_connect(proxy.port, "example.com:443");
+        assert!(
+            status.contains("502"),
+            "upstream closing early must surface as 502 to the client; got: {status}"
+        );
+
+        proxy.shutdown();
+        up_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Security invariant (Finding 3d / SSRF fix): a host that resolves locally
+    /// to a private/link-local IP and is NOT in allow_private_domains is blocked
+    /// BEFORE the upstream is contacted — the same resolved-IP guard the direct
+    /// path applies. Simulates an attacker-registered public name whose A record
+    /// points at the cloud metadata endpoint.
+    #[test]
+    fn proxy_private_resolved_ip_blocks_before_upstream() {
+        require_localhost_tcp!();
+
+        let imds_addr: std::net::IpAddr = "169.254.169.254".parse().unwrap();
+        let resolver: ResolverFn = Arc::new(move |host: &str, port: u16| {
+            if host == "evil.example.com" {
+                Some(std::net::SocketAddr::new(imds_addr, port))
+            } else {
+                None
+            }
+        });
+
+        let upstream_srv = spawn_fake_upstream();
+        let upstream =
+            UpstreamProxy::parse(&format!("http://127.0.0.1:{}", upstream_srv.port)).unwrap();
+        let proxy = make_proxy_with_upstream_opts(
+            upstream,
+            PathBuf::from("/dev/null"),
+            vec![443, 80],
+            None,
+            Vec::new(),
+            Some(resolver),
+        );
+
+        let status = proxy_connect(proxy.port, "evil.example.com:443");
+        assert!(
+            status.contains("403"),
+            "public name resolving to a private IP must be blocked; got: {status}"
+        );
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !upstream_srv
+                .contacted
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "upstream must NOT be contacted for a host that resolves to a private IP"
+        );
+
+        proxy.shutdown();
+        upstream_srv
+            .shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Positive counterpart to the SSRF fix: the legitimate corporate-internal
+    /// case still works. A host that resolves to a private IP but IS listed in
+    /// allow_private_domains is forwarded to the upstream, exactly as it would be
+    /// permitted in direct mode.
+    #[test]
+    fn proxy_private_resolved_ip_forwarded_when_in_allow_private_domains() {
+        require_localhost_tcp!();
+
+        let internal_addr: std::net::IpAddr = "10.0.0.5".parse().unwrap();
+        let resolver: ResolverFn = Arc::new(move |host: &str, port: u16| {
+            if host == "intranet.corp.example" {
+                Some(std::net::SocketAddr::new(internal_addr, port))
+            } else {
+                None
+            }
+        });
+
+        let upstream_srv = spawn_fake_upstream();
+        let upstream =
+            UpstreamProxy::parse(&format!("http://127.0.0.1:{}", upstream_srv.port)).unwrap();
+        let proxy = make_proxy_with_upstream_opts(
+            upstream,
+            PathBuf::from("/dev/null"),
+            vec![443, 80],
+            None,
+            vec!["intranet.corp.example".to_string()],
+            Some(resolver),
+        );
+
+        let status = proxy_connect(proxy.port, "intranet.corp.example:443");
+        assert!(
+            status.contains("200"),
+            "allow_private_domains host must be forwarded to upstream; got: {status}"
+        );
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            upstream_srv
+                .contacted
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "upstream MUST be contacted for an allow_private_domains internal host"
+        );
+        let line = upstream_srv.last_connect_line.lock().unwrap().clone();
+        assert_eq!(
+            line.as_deref(),
+            Some("CONNECT intranet.corp.example:443 HTTP/1.1")
+        );
+
+        proxy.shutdown();
+        upstream_srv
+            .shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
