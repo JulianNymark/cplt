@@ -40,6 +40,23 @@ impl FeatureToggle {
             Self::UseDefault => config_default,
         }
     }
+
+    /// Project onto a tri-state `Option<bool>` for options whose config layer
+    /// is itself tri-state (`Some(true)`/`Some(false)`/`None`) rather than a
+    /// plain bool with a hardcoded default.
+    ///
+    /// `ForceOn`/`ForceOff` are explicit CLI overrides; `UseDefault` yields
+    /// `None` so the caller can fall through to the config value (e.g. via
+    /// `.or(config_value)`). Preserves the "off wins if both flags are set"
+    /// convention of `from_pair`, since a contradictory pair resolves to
+    /// `ForceOff` → `Some(false)`.
+    pub fn to_option(self) -> Option<bool> {
+        match self {
+            Self::ForceOn => Some(true),
+            Self::ForceOff => Some(false),
+            Self::UseDefault => None,
+        }
+    }
 }
 
 /// Default config directory relative to $HOME.
@@ -312,6 +329,11 @@ pub struct SandboxConfig {
     /// Enable per-session scratch directory for TMPDIR redirect (default: true).
     /// Creates an executable temp dir so tools like `go test` and `mise` can work.
     pub scratch_dir: Option<bool>,
+    /// Use Bubblewrap for namespace isolation on Linux (default: auto-detect).
+    /// - `true`: Always use bwrap (fail if unavailable)
+    /// - `false`: Never use bwrap (Landlock+seccomp only)
+    /// - Not set: Auto-detect and use if available (graceful degradation)
+    pub use_bubblewrap: Option<bool>,
     /// Suppress the startup configuration summary and non-essential info messages.
     /// Errors and warnings are always shown. (default: false)
     pub quiet: Option<bool>,
@@ -423,6 +445,7 @@ pub struct Resolved {
     pub allow_cache_exec_any: bool,
     pub allow_browser: bool,
     pub scratch_dir: bool,
+    pub use_bubblewrap: Option<bool>,
     pub quiet: bool,
     pub yes: bool,
     pub gh_guard: GhGuardPolicy,
@@ -468,6 +491,7 @@ pub struct CliFlags {
     pub allow_cache_exec_any: bool,
     pub allow_browser: bool,
     pub scratch: FeatureToggle,
+    pub use_bubblewrap: FeatureToggle,
     pub quiet: FeatureToggle,
     pub yes: FeatureToggle,
     pub gh_guard: FeatureToggle,

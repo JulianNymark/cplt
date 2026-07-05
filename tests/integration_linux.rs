@@ -18,12 +18,26 @@ mod linux_tests {
     // ── Landlock ABI detection ─────────────────────────────────────
 
     fn landlock_abi_version() -> Option<u32> {
-        fs::read_to_string("/sys/kernel/security/landlock/abi_version")
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
+        // Probe via the landlock_create_ruleset syscall (through the lib's
+        // check_availability), NOT /sys/kernel/security/landlock/abi_version:
+        // securityfs is root-only on GitHub Actions runners, so the file read
+        // reports "unavailable" on kernels where Landlock works fine.
+        cplt::sandbox::available_abi_version()
+    }
+
+    /// When `CPLT_TEST_REQUIRE_SANDBOX=1` is set (CI), a missing sandbox
+    /// capability must FAIL the test rather than silently skip. This closes the
+    /// gap where a runner regression that disables Landlock/bwrap would leave CI
+    /// green because every kernel-enforcement test self-skipped. Default (unset)
+    /// behaviour is unchanged for local dev on non-Linux or capability-poor hosts.
+    fn require_sandbox_enforced() -> bool {
+        std::env::var("CPLT_TEST_REQUIRE_SANDBOX").as_deref() == Ok("1")
     }
 
     /// Skip guard — call at the top of tests that require Landlock.
+    ///
+    /// With `CPLT_TEST_REQUIRE_SANDBOX=1` the skip branches panic instead, so a
+    /// missing capability turns the job red.
     macro_rules! require_landlock {
         () => {
             require_landlock!(1);
@@ -32,10 +46,21 @@ mod linux_tests {
             match landlock_abi_version() {
                 Some(v) if v >= $min_abi => {}
                 Some(v) => {
+                    if require_sandbox_enforced() {
+                        panic!(
+                            "Landlock ABI v{} required by CPLT_TEST_REQUIRE_SANDBOX but only v{v} available",
+                            $min_abi
+                        );
+                    }
                     eprintln!("SKIPPED: need Landlock ABI v{}, have v{v}", $min_abi);
                     return;
                 }
                 None => {
+                    if require_sandbox_enforced() {
+                        panic!(
+                            "Landlock required by CPLT_TEST_REQUIRE_SANDBOX but unavailable: not present on this kernel"
+                        );
+                    }
                     eprintln!("SKIPPED: Landlock not available on this kernel");
                     return;
                 }
@@ -70,7 +95,7 @@ mod linux_tests {
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project_dir.to_string_lossy(),
                 "--",
                 "-c",
@@ -100,7 +125,7 @@ mod linux_tests {
             "--quiet",
             "--agent",
             "shell",
-            "-C",
+            "--project-dir",
             &dir_str,
         ];
         args.extend_from_slice(extra_flags);
@@ -130,7 +155,7 @@ mod linux_tests {
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project_dir.to_string_lossy(),
                 "--",
                 "-c",
@@ -161,7 +186,7 @@ mod linux_tests {
             "--quiet",
             "--agent",
             "shell",
-            "-C",
+            "--project-dir",
             &dir_str,
         ];
         args.extend_from_slice(extra_flags);
@@ -247,7 +272,7 @@ mod linux_tests {
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "-c",
@@ -376,7 +401,7 @@ mod linux_tests {
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "-c",
@@ -411,7 +436,7 @@ mod linux_tests {
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "-c",
@@ -558,6 +583,86 @@ else:
         assert_eq!(code, 0, "Normal read/write/fork/exec should work");
     }
 
+    // ── Capability probe matrix (issue #113) ─────────────────────
+    //
+    // These probes start the real cplt binary with a shell script and assert
+    // BOTH directions of a documented guarantee (see SECURITY.md's platform
+    // comparison table). They fill gaps left by the tests above: exec-from-/tmp
+    // on the default Landlock path, write-outside-project as a positive/negative
+    // pair, and exec of a script written into the project tree.
+
+    /// Exec: a freshly written+chmod'd binary in /tmp must NOT run. /tmp carries
+    /// a read+write Landlock rule but deliberately no execute (allow_tmp_exec is
+    /// off by default), so the exec is kernel-denied even though the write and
+    /// chmod succeed. This is the default-path analogue of the bwrap-variant
+    /// `bwrap_exec_from_tmp_still_denied`.
+    #[test]
+    fn landlock_denies_exec_from_tmp() {
+        require_landlock!();
+        let project = create_test_project();
+        let marker = format!("/tmp/cplt-exec-probe-{}", std::process::id());
+        let script = format!(
+            "cp /bin/true {marker} && chmod +x {marker} && {marker} && echo RAN || echo EXEC_DENIED"
+        );
+        let (_, stdout, _) = run_sandboxed(project.path(), &script);
+        let _ = fs::remove_file(&marker);
+        assert!(
+            stdout.contains("EXEC_DENIED") && !stdout.contains("RAN"),
+            "exec of a binary dropped in /tmp must be Landlock-denied — stdout: {stdout}"
+        );
+    }
+
+    /// FS positive (exec): a script written into the project tree can be
+    /// executed. The project dir carries read+write+execute, so drop-then-run
+    /// inside it is allowed — the mirror image of the /tmp denial above.
+    #[test]
+    fn landlock_allows_exec_in_project() {
+        require_landlock!();
+        let project = create_test_project();
+        let script = r"
+            printf '#!/bin/sh\necho ran-in-project\n' > ./probe.sh
+            chmod +x ./probe.sh
+            ./probe.sh
+        ";
+        let (code, stdout, stderr) = run_sandboxed(project.path(), script);
+        assert_eq!(
+            code, 0,
+            "exec of a project-local script should work: {stderr}"
+        );
+        assert!(
+            stdout.contains("ran-in-project"),
+            "project-local script should run — stdout: {stdout}"
+        );
+    }
+
+    /// FS negative: writing outside the project and outside every writable rule
+    /// (project dir, /tmp, scratch cache subtree) must be kernel-denied. Targets
+    /// the real HOME root: a fake HOME from `tempfile::tempdir()` would live
+    /// under /tmp, which is writable by design (read+write, non-exec), so it
+    /// cannot demonstrate the deny.
+    #[test]
+    fn landlock_denies_write_outside_project() {
+        require_landlock!();
+        let project = create_test_project();
+        let escape = home_dir().join("cplt-landlock-escape-probe.txt");
+        let _ = fs::remove_file(&escape);
+        let script = format!(
+            "echo escape > '{}' 2>&1 && echo WROTE || echo WRITE_DENIED",
+            escape.display()
+        );
+        let (code, stdout, stderr) = run_sandboxed(project.path(), &script);
+        let created = escape.exists();
+        let _ = fs::remove_file(&escape);
+        assert!(
+            stdout.contains("WRITE_DENIED") && !stdout.contains("WROTE"),
+            "writing to the HOME root outside the project must be denied — code: {code}, stdout: {stdout}, stderr: {stderr}"
+        );
+        assert!(
+            !created,
+            "no file should have been created outside the project"
+        );
+    }
+
     // ── Network tests (ABI v4+) ───────────────────────────────────
 
     #[test]
@@ -680,7 +785,11 @@ else:
         require_landlock!();
         let project = create_test_project();
         let output = Command::new(binary_path())
-            .args(["--print-profile", "-C", &project.path().to_string_lossy()])
+            .args([
+                "--print-profile",
+                "--project-dir",
+                &project.path().to_string_lossy(),
+            ])
             .env("HOME", home_dir())
             .output()
             .expect("Failed to run cplt --print-profile");
@@ -706,8 +815,11 @@ else:
             git -c commit.gpgSign=false commit -m "init" &&
             git log --oneline
         "#;
-        let (code, stdout, _) = run_sandboxed(project.path(), script);
-        assert_eq!(code, 0, "Git workflow should work inside sandbox");
+        let (code, stdout, stderr) = run_sandboxed(project.path(), script);
+        assert_eq!(
+            code, 0,
+            "Git workflow should work inside sandbox — stdout: {stdout}, stderr: {stderr}"
+        );
         assert!(stdout.contains("init"));
     }
 
@@ -723,7 +835,7 @@ else:
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "-c",
@@ -772,7 +884,7 @@ else:
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "-c",
@@ -833,6 +945,10 @@ else:
     // Prerequisite: curl must be in PATH on the test machine.
 
     /// Skip guard for tests that require curl.
+    ///
+    /// curl is not a sandbox capability but is guaranteed on the CI runner, so
+    /// under `CPLT_TEST_REQUIRE_SANDBOX=1` a missing curl fails the job too —
+    /// otherwise the proxy-layer tests would silently vanish from coverage.
     macro_rules! require_curl {
         () => {
             if !std::process::Command::new("curl")
@@ -841,6 +957,11 @@ else:
                 .map(|o| o.status.success())
                 .unwrap_or(false)
             {
+                if require_sandbox_enforced() {
+                    panic!(
+                        "curl required by CPLT_TEST_REQUIRE_SANDBOX but unavailable: not found in PATH"
+                    );
+                }
                 eprintln!("SKIPPED: curl not available");
                 return;
             }
@@ -980,7 +1101,7 @@ else:
                 "--quiet",
                 "--agent",
                 "shell",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "-c",
@@ -1064,7 +1185,7 @@ else:
                 "--quiet",
                 "--agent",
                 "copilot",
-                "-C",
+                "--project-dir",
                 &project.path().to_string_lossy(),
                 "--",
                 "--version",
@@ -1084,6 +1205,389 @@ else:
         assert!(
             stdout.contains("dummy_rg executed successfully"),
             "sandbox should allow execution of binaries in copilot pkg dir. stdout: {stdout}"
+        );
+    }
+
+    // ── Bubblewrap namespace isolation ─────────────────────────────
+    //
+    // These tests verify the optional Bubblewrap layer on top of Landlock +
+    // seccomp. What bwrap actually provides (and what these tests assert):
+    // - pid/ipc/uts/cgroup/user namespaces (host process tree invisible,
+    //   unprivileged operation)
+    // - full host filesystem visible READ-ONLY inside the mount namespace,
+    //   with Landlock still providing the access control (deny-by-default)
+    // - the host network is deliberately SHARED (no --unshare-net) so the
+    //   agent can reach the host-bound CONNECT proxy on 127.0.0.1
+    // - Landlock + seccomp are re-applied inside the namespaces by the cplt
+    //   re-entry helper, so kernel access control is never weakened by bwrap
+
+    /// Check if `bwrap` is available. Tests that require it should call this
+    /// and return early if false.
+    fn bwrap_available() -> bool {
+        Command::new("which")
+            .arg("bwrap")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Skip guard for tests that need a working bubblewrap.
+    ///
+    /// With `CPLT_TEST_REQUIRE_SANDBOX=1` a missing bwrap panics instead of
+    /// skipping, so an uninstalled bubblewrap (issue #113's root cause) turns
+    /// the job red rather than silently passing. Accepts an optional minimum
+    /// Landlock ABI, mirroring `require_landlock!`, for net-rule tests.
+    macro_rules! require_bwrap {
+        () => {
+            require_bwrap!(1);
+        };
+        ($min_abi:expr) => {
+            require_landlock!($min_abi);
+            if !bwrap_available() {
+                if require_sandbox_enforced() {
+                    panic!(
+                        "Bubblewrap required by CPLT_TEST_REQUIRE_SANDBOX but unavailable: bwrap not found in PATH"
+                    );
+                }
+                eprintln!("SKIPPED: bwrap not available");
+                return;
+            }
+        };
+    }
+
+    /// Run inside the sandbox with bubblewrap explicitly enabled.
+    fn run_sandboxed_bwrap(project_dir: &Path, script: &str) -> (i32, String, String) {
+        run_sandboxed_with_flags(project_dir, &["--use-bubblewrap"], script)
+    }
+
+    #[test]
+    fn bwrap_auto_detect_default_runs() {
+        require_landlock!();
+        let project = create_test_project();
+
+        // No bubblewrap flag at all — the true auto-detect default. Must work
+        // both when bwrap is available (namespaces active) and when it is not
+        // (graceful fallback to Landlock+seccomp only).
+        let (exit, stdout, stderr) = run_sandboxed(project.path(), "echo auto-ok");
+
+        assert_eq!(
+            exit, 0,
+            "auto-detect default must not brick the run: {stderr}"
+        );
+        assert!(stdout.contains("auto-ok"));
+    }
+
+    #[test]
+    fn bwrap_explicit_disable_works() {
+        require_landlock!();
+        let project = create_test_project();
+
+        let (exit, stdout, _) =
+            run_sandboxed_with_flags(project.path(), &["--no-bubblewrap"], "echo 'without bwrap'");
+
+        assert_eq!(exit, 0, "Command should succeed without bwrap");
+        assert!(stdout.contains("without bwrap"));
+    }
+
+    #[test]
+    fn bwrap_pid_namespace_isolates_process_list() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let (exit, stdout, stderr) = run_sandboxed_bwrap(project.path(), "ps aux | wc -l");
+        assert_eq!(exit, 0, "ps should succeed: {stderr}");
+
+        // In a PID namespace only the agent's own tree is visible.
+        let proc_count: usize = stdout.trim().parse().unwrap_or(9999);
+        assert!(
+            proc_count < 20,
+            "Should see < 20 processes in PID namespace, got {proc_count}"
+        );
+    }
+
+    #[test]
+    fn bwrap_cannot_see_host_init() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let (exit, stdout, _) =
+            run_sandboxed_bwrap(project.path(), "cat /proc/1/comm 2>&1 || echo 'blocked'");
+        assert_eq!(exit, 0);
+        // PID 1 inside the namespace is bwrap/the helper, never the host init.
+        assert!(
+            !stdout.contains("systemd") || stdout.contains("blocked"),
+            "Should not see host init in PID namespace: {stdout}"
+        );
+    }
+
+    #[test]
+    fn bwrap_project_dir_readable_and_writable() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let (exit, stdout, stderr) = run_sandboxed_bwrap(
+            project.path(),
+            "cat test.txt && echo 'new content' > new_file.txt",
+        );
+        assert_eq!(exit, 0, "project read+write should work: {stderr}");
+        assert_eq!(stdout.trim(), "hello from project");
+
+        let content = fs::read_to_string(project.path().join("new_file.txt"))
+            .expect("Should create file in project");
+        assert_eq!(content.trim(), "new content");
+    }
+
+    #[test]
+    fn bwrap_project_dir_under_tmp_is_visible() {
+        require_bwrap!();
+
+        // Regression (PR #64 review): the namespace shadows /tmp with a fresh
+        // tmpfs, so a project dir under /tmp must be explicitly bind-mounted
+        // back or it vanishes (cwd falls back to /, all project IO fails).
+        let base = tempfile::Builder::new()
+            .prefix("cplt-bwrap-tmp-proj")
+            .tempdir_in("/tmp")
+            .expect("Failed to create project under /tmp");
+        fs::write(base.path().join("test.txt"), "hello from tmp project").unwrap();
+
+        let (exit, stdout, stderr) = run_sandboxed_bwrap(
+            base.path(),
+            "cat test.txt && echo ok > written.txt && cat written.txt",
+        );
+        assert_eq!(exit, 0, "project under /tmp must stay usable: {stderr}");
+        assert!(stdout.contains("hello from tmp project"));
+        assert!(stdout.contains("ok"));
+        assert!(base.path().join("written.txt").exists());
+    }
+
+    #[test]
+    fn bwrap_exec_from_tmp_still_denied() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        // SECURITY: the "exec from /tmp is denied" guarantee must hold with
+        // bwrap active. /tmp inside the namespace is a bare tmpfs whose
+        // Landlock rule grants no execute — the scratch dir (write+exec) is
+        // never overlaid on /tmp.
+        let (exit, stdout, _) = run_sandboxed_bwrap(
+            project.path(),
+            "cp /bin/true /tmp/evil && chmod +x /tmp/evil && /tmp/evil 2>&1 || echo 'exec blocked'",
+        );
+        assert_eq!(exit, 0);
+        assert!(
+            stdout.contains("exec blocked") || stdout.contains("Permission denied"),
+            "exec from /tmp must be denied under bwrap: {stdout}"
+        );
+    }
+
+    #[test]
+    fn bwrap_landlock_still_blocks_sensitive_paths() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        // Landlock (applied in-namespace by the re-entry helper) must still
+        // deny credential paths even though --ro-bind / / makes them visible
+        // in the mount table.
+        let (exit, stdout, _) = run_sandboxed_bwrap(
+            project.path(),
+            "ls ~/.ssh 2>&1 || cat ~/.aws/credentials 2>&1 || echo 'landlock blocked'",
+        );
+        assert_eq!(exit, 0);
+        assert!(
+            stdout.contains("landlock blocked") || stdout.contains("Permission denied"),
+            "Landlock must still deny sensitive paths with bwrap: {stdout}"
+        );
+    }
+
+    #[test]
+    fn bwrap_user_namespace_maps_host_uid() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let (exit, stdout, _) = run_sandboxed_bwrap(project.path(), "id -u");
+        assert_eq!(exit, 0);
+        let host_uid = unsafe { libc::getuid() };
+        assert_eq!(
+            stdout.trim(),
+            host_uid.to_string(),
+            "Should see the host UID inside the user namespace"
+        );
+    }
+
+    #[test]
+    fn bwrap_preserves_environment_variables() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let (exit, stdout, _) = run_sandboxed_bwrap(
+            project.path(),
+            "echo HOME=$HOME; echo PATH=$PATH | grep -q '/bin' && echo 'path ok'",
+        );
+        assert_eq!(exit, 0);
+        assert!(stdout.contains("HOME="), "HOME should be set");
+        assert!(stdout.contains("path ok"), "PATH should contain /bin");
+    }
+
+    #[test]
+    fn bwrap_seccomp_still_blocks_unshare() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        // seccomp is applied by the re-entry helper inside the namespaces —
+        // the agent must not be able to build nested namespaces.
+        let (exit, stdout, _) = run_sandboxed_bwrap(
+            project.path(),
+            "unshare --user true 2>&1 || echo 'unshare blocked'",
+        );
+        assert_eq!(exit, 0);
+        assert!(
+            stdout.contains("unshare blocked")
+                || stdout.contains("Operation not permitted")
+                || stdout.contains("not permitted"),
+            "unshare must stay seccomp-blocked inside bwrap: {stdout}"
+        );
+    }
+
+    // ── Bubblewrap capability probes (issue #113) ─────────────────
+    //
+    // These complement the bwrap tests above with PLANTED secrets in a fake
+    // HOME (the existing `bwrap_landlock_still_blocks_sensitive_paths` uses the
+    // real HOME and can pass vacuously) plus the two bwrap-only mount-namespace
+    // guarantees not yet asserted: a private /tmp that hides host temp files,
+    // and a read-only host filesystem.
+
+    /// Run inside the sandbox with bubblewrap enabled and a custom HOME.
+    fn run_sandboxed_home_bwrap(
+        project_dir: &Path,
+        home: &Path,
+        script: &str,
+    ) -> (i32, String, String) {
+        run_sandboxed_home_with_flags(project_dir, home, &["--use-bubblewrap"], script)
+    }
+
+    /// SECURITY (credential confidentiality under bwrap): a real `~/.ssh/id_rsa`
+    /// planted in a fake HOME is visible in the read-only mount table (`--ro-bind
+    /// / /`) but must be Landlock-denied — bwrap changes topology, not access
+    /// control. Non-vacuous because the file genuinely exists.
+    #[test]
+    fn bwrap_cannot_read_planted_ssh_key() {
+        require_bwrap!();
+        let project = create_test_project();
+        let fake_home = tempfile::tempdir().expect("Failed to create temp home");
+        let ssh_dir = fake_home.path().join(".ssh");
+        fs::create_dir_all(&ssh_dir).unwrap();
+        fs::write(
+            ssh_dir.join("id_rsa"),
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n",
+        )
+        .unwrap();
+
+        let (exit, stdout, _) = run_sandboxed_home_bwrap(
+            project.path(),
+            fake_home.path(),
+            "cat ~/.ssh/id_rsa 2>&1 && echo READ_OK || echo READ_DENIED",
+        );
+        assert_eq!(exit, 0, "shell wrapper itself should exit cleanly");
+        assert!(
+            stdout.contains("READ_DENIED") && !stdout.contains("BEGIN OPENSSH"),
+            "planted ~/.ssh/id_rsa must stay Landlock-denied under bwrap — stdout: {stdout}"
+        );
+    }
+
+    /// Same guarantee for a planted `~/.aws/credentials`.
+    #[test]
+    fn bwrap_cannot_read_planted_aws_credentials() {
+        require_bwrap!();
+        let project = create_test_project();
+        let fake_home = tempfile::tempdir().expect("Failed to create temp home");
+        let aws_dir = fake_home.path().join(".aws");
+        fs::create_dir_all(&aws_dir).unwrap();
+        fs::write(
+            aws_dir.join("credentials"),
+            "[default]\naws_secret_access_key = PLANTED_SECRET_MUST_NOT_LEAK\n",
+        )
+        .unwrap();
+
+        let (exit, stdout, _) = run_sandboxed_home_bwrap(
+            project.path(),
+            fake_home.path(),
+            "cat ~/.aws/credentials 2>&1 && echo READ_OK || echo READ_DENIED",
+        );
+        assert_eq!(exit, 0);
+        assert!(
+            stdout.contains("READ_DENIED") && !stdout.contains("PLANTED_SECRET"),
+            "planted ~/.aws/credentials must stay Landlock-denied under bwrap — stdout: {stdout}"
+        );
+    }
+
+    /// bwrap mount-namespace property: `/tmp` is a fresh private tmpfs, so a
+    /// file created on the HOST `/tmp` before the run is NOT visible inside.
+    #[test]
+    fn bwrap_private_tmp_hides_host_file() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let host_marker = format!("/tmp/cplt-host-marker-{}", std::process::id());
+        fs::write(&host_marker, "visible-on-host").unwrap();
+
+        let script = format!("test -e {host_marker} && echo VISIBLE || echo HIDDEN");
+        let (exit, stdout, stderr) = run_sandboxed_bwrap(project.path(), &script);
+        let _ = fs::remove_file(&host_marker);
+
+        assert_eq!(exit, 0, "probe should run: {stderr}");
+        assert!(
+            stdout.contains("HIDDEN") && !stdout.contains("VISIBLE"),
+            "host /tmp file must not be visible in the private tmpfs — stdout: {stdout}"
+        );
+    }
+
+    /// bwrap mount-namespace property: the host filesystem is bind-mounted
+    /// read-only. A Landlock-allowed system file (`/etc/hosts`) is readable, but
+    /// writing it fails — both the `--ro-bind` and the absence of a write rule
+    /// enforce this.
+    #[test]
+    fn bwrap_host_fs_visible_read_only() {
+        require_bwrap!();
+        let project = create_test_project();
+
+        let (exit, stdout, _) = run_sandboxed_bwrap(
+            project.path(),
+            "cat /etc/hosts > /dev/null && echo READ_OK; \
+             echo x >> /etc/hosts 2>&1 && echo WROTE || echo WRITE_DENIED",
+        );
+        assert_eq!(exit, 0);
+        assert!(
+            stdout.contains("READ_OK"),
+            "an allowed system file should be readable under bwrap — stdout: {stdout}"
+        );
+        assert!(
+            stdout.contains("WRITE_DENIED") && !stdout.contains("WROTE"),
+            "the read-only host fs must reject writes under bwrap — stdout: {stdout}"
+        );
+    }
+
+    /// Network enforcement is unchanged by bwrap (the net namespace is shared so
+    /// the proxy stays reachable; Landlock TCP-connect rules remain the control).
+    /// A direct connect to a disallowed port must be kernel-blocked. A live
+    /// listener distinguishes "blocked" (EPERM) from "nothing listening"
+    /// (ECONNREFUSED).
+    #[test]
+    fn bwrap_blocks_outbound_tcp() {
+        require_bwrap!(4);
+        let project = create_test_project();
+
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind test listener");
+        let port = listener.local_addr().unwrap().port();
+
+        let script =
+            format!("bash -c 'echo > /dev/tcp/127.0.0.1/{port}' 2>&1 || echo CONNECT_FAILED");
+        let (code, stdout, _) = run_sandboxed_bwrap(project.path(), &script);
+        drop(listener);
+
+        assert!(
+            code != 0 || stdout.contains("CONNECT_FAILED"),
+            "outbound TCP to port {port} must stay Landlock-blocked under bwrap — code: {code}, stdout: {stdout}"
         );
     }
 }

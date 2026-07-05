@@ -4,7 +4,8 @@
 //!
 //! The sandbox uses different kernel enforcement mechanisms per platform:
 //! - **macOS**: Seatbelt/SBPL via `sandbox-exec`
-//! - **Linux**: Landlock LSM + seccomp-BPF
+//! - **Linux**: Landlock LSM + seccomp-BPF, optionally wrapped in Bubblewrap
+//!   namespace isolation (see `bubblewrap` module for the layering)
 //!
 //! The public API is platform-agnostic:
 //! - [`prepare()`] validates configuration and compiles it into a [`PreparedSandbox`]
@@ -16,6 +17,7 @@
 //! - `profile`: SBPL profile generation (macOS — also compiled cross-platform for testing)
 //! - `exec`: sandbox-exec (macOS) / Landlock+seccomp (Linux) invocation
 //! - `landlock_mod`: Landlock rule generation (cross-platform) and application (Linux)
+//! - `bubblewrap`: optional namespace isolation layer (Linux only)
 //!
 //! # Submodule layout
 //!
@@ -29,6 +31,9 @@ use crate::agent::{Agent, AgentDir};
 #[cfg(target_os = "linux")]
 use crate::ui;
 
+#[cfg(target_os = "linux")]
+#[path = "sandbox_bubblewrap.rs"]
+mod bubblewrap;
 #[path = "sandbox_env.rs"]
 mod env;
 #[path = "sandbox_exec.rs"]
@@ -63,6 +68,10 @@ pub use landlock_mod::{
     FsAccess, FsRule, LandlockPolicy, NetRule, blocked_syscall_names, describe_policy,
     generate_policy,
 };
+// Kernel capability probe — used by integration tests (securityfs is
+// root-only on some hosts, so tests cannot read abi_version from there).
+#[cfg(target_os = "linux")]
+pub use landlock_mod::available_abi_version;
 
 // ── Platform-agnostic sandbox API ──────────────────────────────
 
@@ -122,6 +131,11 @@ pub struct SandboxConfig<'a> {
     pub allow_cache_exec_any: bool,
     /// Allow Launch Services (`open` command) for OAuth browser flows.
     pub allow_browser: bool,
+    /// Use Bubblewrap for namespace isolation (Linux only).
+    /// - `Some(true)`: Always use bwrap (fail if unavailable)
+    /// - `Some(false)`: Never use bwrap (Landlock+seccomp only)
+    /// - `None`: Auto-detect and use if available (graceful degradation)
+    pub use_bubblewrap: Option<bool>,
 }
 
 /// A validated, platform-specific sandbox ready for execution.
@@ -149,6 +163,10 @@ pub struct PreparedSandbox {
     /// Built in the parent process; applied in pre_exec.
     #[cfg(target_os = "linux")]
     precomputed: landlock_mod::PrecomputedSandbox,
+    /// Bubblewrap execution wrapper (Linux only).
+    /// If Some, bwrap is used to wrap the execution.
+    #[cfg(target_os = "linux")]
+    bwrap_wrapper: Option<bubblewrap::BubblewrapWrapper>,
 }
 
 impl PreparedSandbox {
@@ -315,6 +333,17 @@ fn prepare_impl(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
     let policy = landlock_mod::generate_policy(config);
     let profile_text = landlock_mod::describe_policy(&policy);
 
+    // Decide bubblewrap wrapping before `precompute()` consumes `policy`.
+    // `resolve()` only clones `fs_rules`/`net_rules` on the arms that actually
+    // build a wrapper (explicit-on, or auto-detect with bwrap available) — the
+    // disabled and fallback arms borrow and clone nothing.
+    let bwrap_wrapper = bubblewrap::resolve(
+        config.use_bubblewrap,
+        &policy.fs_rules,
+        &policy.net_rules,
+        policy.restrict_net_connect,
+    )?;
+
     // Pre-compute everything in the parent process.
     // ABI check, BPF construction, and all allocation happens here.
     // The pre_exec hook only makes raw syscalls.
@@ -330,6 +359,7 @@ fn prepare_impl(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         allow_localhost: config.localhost_ports.to_vec(),
         allow_localhost_any: config.allow_localhost_any,
         precomputed,
+        bwrap_wrapper,
     })
 }
 
