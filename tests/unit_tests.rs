@@ -8,7 +8,7 @@ use cplt::is_unsafe_root;
 use cplt::proxy::{is_blocked_in_content, is_domain_match, is_private_hostname, is_private_ip};
 use cplt::sandbox::{
     HardeningCategory, ProfileOptions, SandboxConfig, build_sandbox_env, generate_policy,
-    generate_profile, validate_sbpl_path,
+    generate_profile, tool_override_path_is_safe, tool_path_env_overrides, validate_sbpl_path,
 };
 
 // ============================================================
@@ -6672,4 +6672,311 @@ format = "text"
             key_info.section
         );
     }
+}
+
+// ============================================================
+// Tool-path env var overrides (GOPATH, CARGO_HOME, NODE_PATH, ...)
+// ============================================================
+
+fn env_pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
+}
+
+#[test]
+fn tool_path_gopath_custom_yields_writable_rule() {
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("GOPATH", "/custom/gopath")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert_eq!(overrides.len(), 1, "GOPATH override should be emitted");
+    assert_eq!(
+        overrides[0].path,
+        std::path::PathBuf::from("/custom/gopath")
+    );
+    assert!(overrides[0].write, "GOPATH is a build cache → read+write");
+}
+
+#[test]
+fn tool_path_node_path_yields_read_only_rule() {
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("NODE_PATH", "/custom/node_modules")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(
+        overrides[0].path,
+        std::path::PathBuf::from("/custom/node_modules")
+    );
+    assert!(
+        !overrides[0].write,
+        "NODE_PATH is a lookup path → read-only"
+    );
+}
+
+#[test]
+fn tool_path_unset_env_vars_add_nothing() {
+    let home = std::path::Path::new("/home/tester");
+    let env: Vec<(String, String)> = Vec::new();
+    let overrides = tool_path_env_overrides(&env, home);
+    assert!(
+        overrides.is_empty(),
+        "no tool-path env vars set → no overrides"
+    );
+}
+
+#[test]
+fn tool_path_empty_value_adds_nothing() {
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("GOPATH", "")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert!(overrides.is_empty(), "empty value → treated as unset");
+}
+
+#[test]
+fn tool_path_default_value_not_double_added() {
+    // GOPATH pointing at the default ~/go is already covered by HOME_TOOL_DIRS
+    // (go/bin, go/pkg), so it must not produce an extra override.
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("GOPATH", "/home/tester/go")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert!(
+        overrides.is_empty(),
+        "default GOPATH must not be double-added, got: {overrides:?}"
+    );
+}
+
+#[test]
+fn tool_path_default_value_via_tilde_not_double_added() {
+    // The tilde form of the default must also resolve to ~/go and be skipped.
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("CARGO_HOME", "~/.cargo")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert!(
+        overrides.is_empty(),
+        "default CARGO_HOME (~/.cargo) must not be double-added, got: {overrides:?}"
+    );
+}
+
+#[test]
+fn tool_path_tilde_is_expanded_to_home() {
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("CARGO_HOME", "~/alt-cargo")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(
+        overrides[0].path,
+        std::path::PathBuf::from("/home/tester/alt-cargo")
+    );
+    assert!(overrides[0].write);
+}
+
+#[test]
+fn tool_path_multiple_vars_mapped_by_access() {
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[
+        ("GOPATH", "/custom/gopath"),
+        ("CARGO_HOME", "/custom/cargo"),
+        ("NODE_PATH", "/custom/lookup"),
+        ("PIP_CACHE_DIR", "/custom/pip"),
+    ]);
+    let overrides = tool_path_env_overrides(&env, home);
+    let write: Vec<&std::path::Path> = overrides
+        .iter()
+        .filter(|o| o.write)
+        .map(|o| o.path.as_path())
+        .collect();
+    let read: Vec<&std::path::Path> = overrides
+        .iter()
+        .filter(|o| !o.write)
+        .map(|o| o.path.as_path())
+        .collect();
+    assert!(write.contains(&std::path::Path::new("/custom/gopath")));
+    assert!(write.contains(&std::path::Path::new("/custom/cargo")));
+    assert!(write.contains(&std::path::Path::new("/custom/pip")));
+    assert_eq!(read, vec![std::path::Path::new("/custom/lookup")]);
+}
+
+#[test]
+fn tool_path_same_path_write_wins_over_read() {
+    // If a read-only var and a write var resolve to the same custom path,
+    // the write grant must win (deduped to a single writable override).
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("NODE_PATH", "/shared/dir"), ("GOPATH", "/shared/dir")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert_eq!(overrides.len(), 1, "same path must be deduplicated");
+    assert_eq!(overrides[0].path, std::path::PathBuf::from("/shared/dir"));
+    assert!(overrides[0].write, "write grant wins over read");
+}
+
+// --- List-valued tool-path env vars (colon-separated on Unix) ---------------
+// GOPATH and NODE_PATH are OS path lists (`GOPATH=/a:/b`); each segment must
+// become its own override. Single-path vars are never split.
+
+#[test]
+fn tool_path_gopath_list_yields_one_override_per_segment() {
+    // GOPATH=/a:/b → two writable overrides, one per directory in the list.
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("GOPATH", "/a:/b")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    let paths: Vec<&std::path::Path> = overrides.iter().map(|o| o.path.as_path()).collect();
+    assert_eq!(overrides.len(), 2, "each GOPATH segment → its own override");
+    assert!(paths.contains(&std::path::Path::new("/a")));
+    assert!(paths.contains(&std::path::Path::new("/b")));
+    assert!(
+        overrides.iter().all(|o| o.write),
+        "GOPATH segments are build roots → read+write"
+    );
+}
+
+#[test]
+fn tool_path_node_path_list_yields_read_only_per_segment() {
+    // NODE_PATH=/x:/y → two read-only overrides, one per lookup directory.
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("NODE_PATH", "/x:/y")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    let paths: Vec<&std::path::Path> = overrides.iter().map(|o| o.path.as_path()).collect();
+    assert_eq!(
+        overrides.len(),
+        2,
+        "each NODE_PATH segment → its own override"
+    );
+    assert!(paths.contains(&std::path::Path::new("/x")));
+    assert!(paths.contains(&std::path::Path::new("/y")));
+    assert!(
+        overrides.iter().all(|o| !o.write),
+        "NODE_PATH segments are lookup paths → read-only"
+    );
+}
+
+#[test]
+fn tool_path_list_empty_segments_are_ignored() {
+    // Doubled (`/a::/b`) and trailing (`/b:`) separators produce empty segments
+    // that must be skipped rather than resolving to HOME (join of an empty path).
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("GOPATH", "/a::/b:")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    let paths: Vec<&std::path::Path> = overrides.iter().map(|o| o.path.as_path()).collect();
+    assert_eq!(
+        overrides.len(),
+        2,
+        "empty segments must be skipped, got: {overrides:?}"
+    );
+    assert!(paths.contains(&std::path::Path::new("/a")));
+    assert!(paths.contains(&std::path::Path::new("/b")));
+    assert!(
+        !paths.contains(&home),
+        "an empty segment must NOT resolve to HOME"
+    );
+}
+
+#[test]
+fn tool_path_single_path_var_with_colon_is_not_split() {
+    // A single-path var (CARGO_HOME) is never split, so a `:` in a weird-but-real
+    // directory name is preserved verbatim as one path.
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("CARGO_HOME", "/weird:dir/cargo")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    assert_eq!(overrides.len(), 1, "single-path var must not be split");
+    assert_eq!(
+        overrides[0].path,
+        std::path::PathBuf::from("/weird:dir/cargo")
+    );
+    assert!(overrides[0].write);
+}
+
+#[test]
+fn tool_path_list_per_segment_safety_guard_drops_unsafe_segment() {
+    // GOPATH=/custom:/ → the list splits into /custom and /. tool_path_env_overrides
+    // emits both; the per-segment safety guard keeps /custom and drops the root.
+    let home = std::path::Path::new("/home/tester");
+    let env = env_pairs(&[("GOPATH", "/custom:/")]);
+    let overrides = tool_path_env_overrides(&env, home);
+    let kept: Vec<&std::path::Path> = overrides
+        .iter()
+        .map(|o| o.path.as_path())
+        .filter(|p| tool_override_path_is_safe(p, home))
+        .collect();
+    assert_eq!(
+        kept,
+        vec![std::path::Path::new("/custom")],
+        "only the safe segment survives the per-segment guard"
+    );
+    assert!(
+        !tool_override_path_is_safe(std::path::Path::new("/"), home),
+        "the `/` segment must be dropped by the guard"
+    );
+}
+
+// --- Safety guard: reject over-broad tool-path overrides -------------------
+// tool_override_path_is_safe() is the choke point that stops an ambient env var
+// (e.g. GOPATH=$HOME or GOPATH=/) from silently widening the sandbox. It runs on
+// the already-canonicalized path, so `..` has been collapsed by then.
+
+#[test]
+fn tool_override_home_dir_is_dropped() {
+    // GOPATH=$HOME → granting write to the entire home dir defeats the sandbox.
+    let home = std::path::Path::new("/home/tester");
+    assert!(
+        !tool_override_path_is_safe(home, home),
+        "an override resolving to HOME itself must be dropped"
+    );
+}
+
+#[test]
+fn tool_override_filesystem_root_is_dropped() {
+    // GOPATH=/ → granting the whole filesystem must be dropped.
+    let home = std::path::Path::new("/home/tester");
+    assert!(
+        !tool_override_path_is_safe(std::path::Path::new("/"), home),
+        "an override resolving to / must be dropped"
+    );
+}
+
+#[test]
+fn tool_override_home_ancestor_is_dropped() {
+    // A relative value like GOPATH=../../.. canonicalizes to an ancestor of HOME
+    // (e.g. /home or /). Any ancestor of HOME is an over-grant and must be
+    // dropped — this holds cross-platform (is_unsafe_root does not list /home on
+    // macOS, so the HOME-ancestor check is what catches it there).
+    let home = std::path::Path::new("/home/tester");
+    for ancestor in ["/home", "/"] {
+        assert!(
+            !tool_override_path_is_safe(std::path::Path::new(ancestor), home),
+            "ancestor of HOME ({ancestor}) must be dropped"
+        );
+    }
+}
+
+#[test]
+fn tool_override_escaped_path_to_unsafe_root_is_dropped() {
+    // GOPATH=../../../../etc canonicalizes to /etc — resolve_tool_path's
+    // join-to-HOME does NOT contain it once `..` collapses. The guard catches the
+    // effective (canonicalized) grant. /tmp is an unsafe root everywhere; /etc is
+    // one on Linux.
+    let home = std::path::Path::new("/home/tester");
+    assert!(
+        !tool_override_path_is_safe(std::path::Path::new("/tmp"), home),
+        "an override resolving to /tmp must be dropped"
+    );
+    #[cfg(target_os = "linux")]
+    assert!(
+        !tool_override_path_is_safe(std::path::Path::new("/etc"), home),
+        "an override escaping HOME to a system root must be dropped"
+    );
+}
+
+#[test]
+fn tool_override_normal_custom_dir_is_kept() {
+    // The feature must still work: a real custom tool dir that is neither a root
+    // nor HOME/an ancestor stays granted — both outside and inside HOME.
+    let home = std::path::Path::new("/home/tester");
+    assert!(
+        tool_override_path_is_safe(std::path::Path::new("/opt/custom-gopath"), home),
+        "a normal custom dir outside HOME must be granted"
+    );
+    assert!(
+        tool_override_path_is_safe(std::path::Path::new("/home/tester/go-alt"), home),
+        "a normal custom SUBdir of HOME must be granted"
+    );
 }
