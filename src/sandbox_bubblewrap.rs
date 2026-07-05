@@ -122,8 +122,12 @@ pub(crate) fn check_availability() -> Option<PathBuf> {
 /// [`build_bwrap_args`] (plus `/bin/true`) so the probe can never drift from
 /// the real invocation. Catches hardened hosts where `bwrap` exists but user
 /// namespaces are disabled.
-pub(crate) fn test_functionality(bwrap_path: &Path, fs_rules: &[FsRule]) -> Result<(), String> {
-    let mut args = build_bwrap_args(fs_rules);
+pub(crate) fn test_functionality(
+    bwrap_path: &Path,
+    fs_rules: &[FsRule],
+    ro_protect: &[PathBuf],
+) -> Result<(), String> {
+    let mut args = build_bwrap_args(fs_rules, ro_protect);
     args.push("--".to_string());
     args.push("/bin/true".to_string());
 
@@ -171,7 +175,24 @@ pub(crate) fn test_functionality(bwrap_path: &Path, fs_rules: &[FsRule]) -> Resu
 /// Paths managed by bwrap (`/proc`, `/dev`, `/sys`) and the `/tmp` mount point
 /// itself are skipped in step 4 — binding host `/tmp` back over the tmpfs would
 /// re-expose host temp files and re-break the exec guarantee.
-pub(crate) fn build_bwrap_args(fs_rules: &[FsRule]) -> Vec<String> {
+///
+/// 5. Finally, for every path in `ro_protect` that exists, `--ro-bind <p> <p>`
+///    is emitted *after* the writable binds so it shadows them read-only. This
+///    is the Finding 1 persistence mitigation: the project's `.git/hooks` lives
+///    inside the writable project tree, which Landlock cannot carve a sub-deny
+///    out of. A read-only bwrap mount restores parity — an agent can no longer
+///    plant a hook file that runs unsandboxed on the next `git` invocation. The
+///    protected set is deliberately narrow (`.git/hooks`, `.cplt.toml`) — see
+///    [`git_persistence_paths`] for why `.git/config`/`.gitmodules` are left
+///    writable and for the `core.hooksPath` residual.
+///
+///    Two documented residuals: a read-only bind only protects paths that
+///    already **exist** at launch — bwrap errors on a missing bind source and
+///    cannot bind a nonexistent path, so a not-yet-created `.cplt.toml` can
+///    still be created by the agent; and submodule hooks
+///    (`.git/modules/<name>/hooks`) are not covered. Both are documented in
+///    SECURITY.md.
+pub(crate) fn build_bwrap_args(fs_rules: &[FsRule], ro_protect: &[PathBuf]) -> Vec<String> {
     let mut args = Vec::new();
 
     // ── Namespace isolation (network intentionally shared — see module docs) ──
@@ -215,7 +236,80 @@ pub(crate) fn build_bwrap_args(fs_rules: &[FsRule]) -> Vec<String> {
         args.extend(["--bind".to_string(), path_str.clone(), path_str]);
     }
 
+    // ── Read-only overlays for git-persistence paths (Finding 1) ──
+    // Emitted last so they shadow the writable project bind above.
+    for path in ro_protect {
+        // bwrap errors on a non-existent bind source; a read-only bind also
+        // cannot protect a path that does not yet exist. Skip missing paths
+        // (mirrors the writable-bind handling and keeps the probe from failing).
+        if !path.exists() {
+            continue;
+        }
+        let path_str = path.to_string_lossy().into_owned();
+        args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+    }
+
     args
+}
+
+/// Project-internal paths re-bound **read-only** when Bubblewrap is active, to
+/// restore the macOS write-deny parity that Landlock cannot express (they live
+/// inside the writable project tree, which Landlock cannot carve a sub-deny out
+/// of). Only paths that exist on disk are ultimately bound (see
+/// [`build_bwrap_args`]).
+///
+/// The set is deliberately **narrow** — only paths an agent has no legitimate
+/// reason to write *and* that are real persistence vectors:
+///
+/// - `.git/hooks` — the primary persistence escape. A planted hook runs
+///   *unsandboxed* on the next `git` invocation; agents do not normally write
+///   here.
+/// - `.cplt.toml` — relaxes the next session's sandbox; agents do not normally
+///   write it, and any `[propose]` block needs explicit trust approval anyway.
+///
+/// `.git/config` and `.gitmodules` are **deliberately left writable**: read-only
+/// binding them would break common, legitimate in-sandbox git operations
+/// (`git config user.email/user.name` identity setup — without it the next
+/// `git commit` fails "Please tell me who you are" — plus `git remote add`,
+/// `git push -u` upstream tracking, and `git submodule add`, which writes
+/// `.gitmodules`). Worse, git rewrites config via a `.git/config.lock` +
+/// rename-over-file; a denied write can leave a STALE `.git/config.lock` that
+/// blocks the user's *next* out-of-sandbox git. This also matches the git
+/// command guard, which explicitly allows `git config user.name`.
+///
+/// RESIDUAL: because `.git/config` stays writable, an agent can still set
+/// `core.hooksPath` to redirect hooks to a writable directory. The read-only
+/// `.git/hooks` bind therefore only mitigates the *direct* persistence vector
+/// (planting a hook file); it is not a complete closure of git-hook
+/// persistence. See SECURITY.md for the full residual discussion.
+///
+/// # Worktrees
+///
+/// In a git **worktree**, `<project>/.git` is a *file* (a gitdir pointer), so
+/// `<project>/.git/hooks` does not exist and the real hooks live under the
+/// shared common dir (`<git_common_dir>/hooks`) — which the sandbox grants
+/// write access to. Protecting only the project's `.git/hooks` would therefore
+/// miss the actual persistence vector for worktrees. When `git_common_dir` is
+/// known (worktree case) and differs from `<project>/.git`, we ALSO protect
+/// `<git_common_dir>/hooks`. Non-existent paths are skipped downstream (see
+/// [`build_bwrap_args`]).
+pub(crate) fn git_persistence_paths(
+    project_dir: &Path,
+    git_common_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut paths = vec![
+        project_dir.join(".git/hooks"),
+        project_dir.join(".cplt.toml"),
+    ];
+    // Worktree: the shared common dir holds the real hooks. `git_common_dir` is
+    // only `Some` for a worktree (see `discover::git_common_dir`), but guard on
+    // it differing from `<project>/.git` so a regular repo never double-binds.
+    if let Some(common) = git_common_dir
+        && common != project_dir.join(".git")
+    {
+        paths.push(common.join("hooks"));
+    }
+    paths
 }
 
 /// Resolve whether bubblewrap should wrap this run, and build the wrapper.
@@ -233,10 +327,11 @@ pub(crate) fn resolve(
     fs_rules: &[FsRule],
     net_rules: &[NetRule],
     restrict_net_connect: bool,
+    ro_protect: &[PathBuf],
 ) -> Result<Option<BubblewrapWrapper>, String> {
     match use_bubblewrap {
         Some(false) => Ok(None),
-        Some(true) => build_wrapper(fs_rules, net_rules, restrict_net_connect, true)
+        Some(true) => build_wrapper(fs_rules, net_rules, restrict_net_connect, ro_protect, true)
             .map(Some)
             .map_err(|e| {
                 format!(
@@ -244,7 +339,7 @@ pub(crate) fn resolve(
                      Install bubblewrap or remove --use-bubblewrap."
                 )
             }),
-        None => match build_wrapper(fs_rules, net_rules, restrict_net_connect, false) {
+        None => match build_wrapper(fs_rules, net_rules, restrict_net_connect, ro_protect, false) {
             Ok(wrapper) => Ok(Some(wrapper)),
             Err(e) => {
                 crate::ui::warn(&format!(
@@ -260,11 +355,12 @@ fn build_wrapper(
     fs_rules: &[FsRule],
     net_rules: &[NetRule],
     restrict_net_connect: bool,
+    ro_protect: &[PathBuf],
     strict: bool,
 ) -> Result<BubblewrapWrapper, String> {
     let bwrap_path = check_availability().ok_or_else(|| "bwrap not found in PATH".to_string())?;
-    test_functionality(&bwrap_path, fs_rules)?;
-    let bwrap_args = build_bwrap_args(fs_rules);
+    test_functionality(&bwrap_path, fs_rules, ro_protect)?;
+    let bwrap_args = build_bwrap_args(fs_rules, ro_protect);
     Ok(BubblewrapWrapper {
         bwrap_path,
         bwrap_args,
@@ -500,7 +596,7 @@ mod tests {
 
     #[test]
     fn args_isolate_expected_namespaces() {
-        let args = build_bwrap_args(&[]);
+        let args = build_bwrap_args(&[], &[]);
         assert!(args.contains(&"--unshare-pid".to_string()));
         assert!(args.contains(&"--unshare-ipc".to_string()));
         assert!(args.contains(&"--unshare-uts".to_string()));
@@ -513,7 +609,7 @@ mod tests {
 
     #[test]
     fn args_set_up_base_mounts() {
-        let args = build_bwrap_args(&[]);
+        let args = build_bwrap_args(&[], &[]);
         assert!(args.windows(3).any(|w| w == ["--ro-bind", "/", "/"]));
         assert!(args.windows(2).any(|w| w == ["--proc", "/proc"]));
         assert!(args.windows(2).any(|w| w == ["--dev", "/dev"]));
@@ -534,7 +630,7 @@ mod tests {
                 ioctl: false,
             },
         }];
-        let args = build_bwrap_args(&rules);
+        let args = build_bwrap_args(&rules, &[]);
         let tmp_bind = args
             .windows(3)
             .any(|w| w[0] == "--bind" && w[1] == "/tmp" && w[2] == "/tmp");
@@ -553,7 +649,7 @@ mod tests {
             "test premise: tempdir lives under the system temp dir"
         );
         let rules = vec![writable_rule(&dir_str)];
-        let args = build_bwrap_args(&rules);
+        let args = build_bwrap_args(&rules, &[]);
 
         let tmpfs_idx = args.iter().position(|a| a == "--tmpfs").expect("tmpfs");
         let bind_idx = args
@@ -576,7 +672,7 @@ mod tests {
         // non-bwrap configuration kernel-denies by default.
         let dir = tempfile::tempdir().expect("tempdir");
         let scratch_like = writable_rule(&dir.path().to_string_lossy());
-        let args = build_bwrap_args(&[scratch_like]);
+        let args = build_bwrap_args(&[scratch_like], &[]);
 
         // No mount operation may target /tmp as its destination other than the
         // tmpfs itself.
@@ -590,7 +686,7 @@ mod tests {
     #[test]
     fn nonexistent_writable_paths_are_skipped() {
         let rules = vec![writable_rule("/definitely/not/a/real/path/xyzzy")];
-        let args = build_bwrap_args(&rules);
+        let args = build_bwrap_args(&rules, &[]);
         assert!(!args.iter().any(|a| a.contains("xyzzy")));
     }
 
@@ -601,7 +697,7 @@ mod tests {
             writable_rule("/proc/self"),
             writable_rule("/sys/fs/cgroup"),
         ];
-        let args = build_bwrap_args(&rules);
+        let args = build_bwrap_args(&rules, &[]);
         assert!(
             !args
                 .windows(3)
@@ -621,6 +717,139 @@ mod tests {
 
     #[test]
     fn resolve_disabled_returns_none() {
-        assert!(resolve(Some(false), &[], &[], true).unwrap().is_none());
+        assert!(resolve(Some(false), &[], &[], true, &[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn git_hooks_are_rebound_read_only_after_writable_project() {
+        // Finding 1: an existing project/.git/hooks inside the writable project
+        // tree must be re-bound read-only, and AFTER the writable project bind so
+        // the read-only mount shadows it (bwrap applies mounts in argument order).
+        let proj = tempfile::tempdir().expect("tempdir");
+        let hooks = proj.path().join(".git/hooks");
+        std::fs::create_dir_all(&hooks).expect("create .git/hooks");
+        let proj_str = proj.path().to_string_lossy().into_owned();
+        let hooks_str = hooks.to_string_lossy().into_owned();
+
+        let rules = vec![writable_rule(&proj_str)];
+        let ro = git_persistence_paths(proj.path(), None);
+        let args = build_bwrap_args(&rules, &ro);
+
+        let proj_bind_idx = args
+            .windows(3)
+            .position(|w| w[0] == "--bind" && w[1] == proj_str && w[2] == proj_str)
+            .expect("writable project must be bound");
+        let hooks_ro_idx = args
+            .windows(3)
+            .position(|w| w[0] == "--ro-bind" && w[1] == hooks_str && w[2] == hooks_str)
+            .expect(".git/hooks must be re-bound read-only");
+        assert!(
+            hooks_ro_idx > proj_bind_idx,
+            "read-only .git/hooks bind must come AFTER the writable project bind"
+        );
+    }
+
+    #[test]
+    fn ro_protect_set_is_narrow_and_leaves_git_config_writable() {
+        // The protected set is deliberately narrow: only .git/hooks and
+        // .cplt.toml. .git/config / .gitmodules must stay writable so legit
+        // in-sandbox git config/remote/submodule ops (and their lock files)
+        // are not broken — even when those files exist on disk.
+        let proj = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(proj.path().join(".git/hooks")).expect("create .git/hooks");
+        std::fs::write(proj.path().join(".git/config"), "").expect("create .git/config");
+        std::fs::write(proj.path().join(".gitmodules"), "").expect("create .gitmodules");
+        std::fs::write(proj.path().join(".cplt.toml"), "").expect("create .cplt.toml");
+
+        let proj_str = proj.path().to_string_lossy().into_owned();
+        let rules = vec![writable_rule(&proj_str)];
+        let ro = git_persistence_paths(proj.path(), None);
+        let args = build_bwrap_args(&rules, &ro);
+
+        // .git/hooks and .cplt.toml are re-bound read-only.
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--ro-bind"
+                    && w[1] == proj.path().join(".git/hooks").to_string_lossy()),
+            ".git/hooks must be re-bound read-only"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--ro-bind"
+                    && w[1] == proj.path().join(".cplt.toml").to_string_lossy()),
+            ".cplt.toml must be re-bound read-only"
+        );
+        // .git/config and .gitmodules are NOT re-bound (stay writable), even
+        // though both exist on disk — the narrowing, not the exists-check, is
+        // what leaves them out.
+        assert!(
+            !args.iter().any(|a| a.ends_with("/.git/config")),
+            ".git/config must NOT be re-bound read-only (would break git config/remote ops)"
+        );
+        assert!(
+            !args.iter().any(|a| a.ends_with("/.gitmodules")),
+            ".gitmodules must NOT be re-bound read-only (would break git submodule add)"
+        );
+    }
+
+    #[test]
+    fn nonexistent_git_persistence_paths_are_skipped() {
+        // A read-only bind of a missing path would make bwrap error (failing the
+        // probe) and cannot protect a not-yet-created file anyway — skip it.
+        let proj = tempfile::tempdir().expect("tempdir");
+        // No .git/hooks or .cplt.toml created.
+        let ro = git_persistence_paths(proj.path(), None);
+        let args = build_bwrap_args(&[], &ro);
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains(".git/hooks") || a.contains(".cplt.toml")),
+            "missing git-persistence paths must not be bound"
+        );
+    }
+
+    #[test]
+    fn worktree_common_dir_hooks_are_protected() {
+        // In a git worktree, <project>/.git is a FILE pointing at the shared
+        // gitdir, so <project>/.git/hooks does not exist and the real hooks live
+        // under git_common_dir/hooks (which the sandbox grants write access to).
+        // The ro_protect set MUST include the common-dir hooks so the
+        // persistence-escape mitigation does not miss them.
+        let common = tempfile::tempdir().expect("tempdir"); // shared .git dir
+        let common_hooks = common.path().join("hooks");
+        std::fs::create_dir_all(&common_hooks).expect("create common hooks");
+
+        let proj = tempfile::tempdir().expect("tempdir"); // worktree checkout
+        let ro = git_persistence_paths(proj.path(), Some(common.path()));
+
+        assert!(
+            ro.contains(&common_hooks),
+            "worktree common-dir hooks must be in the ro_protect set"
+        );
+
+        // And once bound they are re-bound read-only (they exist on disk).
+        let args = build_bwrap_args(&[], &ro);
+        let common_hooks_str = common_hooks.to_string_lossy().into_owned();
+        assert!(
+            args.windows(3).any(|w| w[0] == "--ro-bind"
+                && w[1] == common_hooks_str
+                && w[2] == common_hooks_str),
+            "worktree common-dir hooks must be re-bound read-only"
+        );
+    }
+
+    #[test]
+    fn regular_repo_does_not_double_bind_git_dir() {
+        // Defensive guard: if git_common_dir were ever `Some(<project>/.git)`
+        // (a non-worktree), it must NOT be added a second time — the standard
+        // <project>/.git/hooks entry already covers it.
+        let proj = tempfile::tempdir().expect("tempdir");
+        let ro = git_persistence_paths(proj.path(), Some(&proj.path().join(".git")));
+        let hooks = proj.path().join(".git/hooks");
+        assert_eq!(
+            ro.iter().filter(|p| **p == hooks).count(),
+            1,
+            "the project's .git/hooks must appear exactly once"
+        );
     }
 }
