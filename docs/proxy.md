@@ -228,6 +228,48 @@ cplt config set sandbox.pass_env HTTPS_PROXY
 
 > **Note:** Disabling the proxy removes cplt's built-in domain filtering, connection logging, and port enforcement. The `blocked_domains` and `allowed_domains` settings are features of the built-in proxy — they have no effect when the proxy is disabled. If your corporate proxy has its own domain filtering, rely on that instead. The sandbox still enforces filesystem and process isolation regardless of proxy settings.
 
+### Chaining through an upstream (corporate) proxy
+
+Instead of disabling cplt's proxy, you can keep it **and** forward its approved CONNECT tunnels through your corporate proxy. cplt still enforces **all** of its own filtering (allowlist, blocklist, port policy, resolved-IP SSRF guard) *before* forwarding — the upstream only ever receives targets cplt's policy already permits.
+
+```bash
+cplt config set proxy.upstream "http://corporate-proxy.example.com:8080"
+# or for a single run:
+cplt --proxy-upstream http://corporate-proxy.example.com:8080 -- -p "fix the tests"
+```
+
+Optional basic-auth userinfo is supported (`http://user:pass@host:8080`); only the `http` scheme is supported. The credentials are redacted in `config show` and startup output.
+
+#### Bypassing the upstream for some hosts (`NO_PROXY`)
+
+Corporate setups almost always list internal hosts that must **not** go through the corporate proxy. Add them to `proxy.upstream_no_proxy` — a matching CONNECT target is connected to **directly by cplt** instead of being forwarded upstream, exactly like a `NO_PROXY` entry:
+
+```bash
+cplt config set proxy.upstream_no_proxy "internal.example.com"
+# repeatable CLI flag for a single run:
+cplt --proxy-upstream-no-proxy internal.example.com -- -p "..."
+```
+
+```toml
+[proxy]
+upstream = "http://corporate-proxy.example.com:8080"
+upstream_no_proxy = ["internal.example.com", "corp.example"]
+```
+
+> [!IMPORTANT]
+> **Internal hosts also need `allow_private_domains`.** A no-proxy host takes cplt's **direct** path, which applies the resolved-IP SSRF guard — so an internal host that resolves to a private IP (the usual `NO_PROXY` target) is **blocked** (`403 Resolved to private IP`) unless you *also* allow it to resolve private:
+> ```toml
+> [proxy]
+> upstream = "http://corporate-proxy.example.com:8080"
+> upstream_no_proxy   = ["internal.example.com"]  # bypass the upstream
+> allow_private_domains = ["internal.example.com"]  # AND permit its private IP
+> ```
+
+- **Matching** uses the same rules as the other domain lists: `example.com` matches the exact host and all subdomains (`internal.example.com`). Case-insensitive; leading/trailing dots (`.example.com.`) are stripped automatically. **CIDR/IP ranges are not honored** — only hostnames (exact + subdomain) and exact IPs match; a `10.0.0.0/8`-style entry is silently ignored (it could only divert to the already-filtered direct path anyway).
+- **`NO_PROXY` env is merged in, additively.** cplt reads the ambient `NO_PROXY`/`no_proxy` environment variable (comma- or whitespace-separated) and merges those hosts on top of the config/CLI list; there is no CLI way to *subtract* an ambient entry. Empty entries and a bare `*` wildcard are ignored (cplt does not honor "bypass everything").
+- **No-op without an upstream.** The list is only consulted when `proxy.upstream` is set.
+- **Security is preserved.** A no-proxy host is **not** exempt from any filtering. Every gate (allow/block/port/SSRF resolved-IP check) runs *before* the upstream-vs-direct decision, and the direct path re-applies the resolved-IP guard. The host is simply connected directly by cplt — which runs **outside** the sandbox — rather than forwarded to the corporate proxy. Because cplt (not the agent) makes that connection, this also works under `proxy.forced`.
+
 ## Copilot CLI network endpoints
 
 Copilot CLI 1.0.21 connects directly to these endpoints (empirically verified):

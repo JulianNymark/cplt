@@ -73,6 +73,22 @@ impl Config {
     /// Returns an error if a deny path from config cannot be resolved
     /// (security-critical: silently dropping deny rules is dangerous).
     pub fn merge(&self, cli: CliFlags) -> Result<Resolved, ConfigError> {
+        self.merge_with_no_proxy_env(cli, no_proxy_env_value())
+    }
+
+    /// Same as [`merge`](Self::merge) but with the ambient `NO_PROXY`/`no_proxy`
+    /// value injected explicitly rather than read from the process environment.
+    ///
+    /// `merge` is the normal entry point (it reads the real environment); this
+    /// variant exists so tests can exercise the NO_PROXY-merge path
+    /// deterministically without mutating process-global env — which is UB under
+    /// concurrent test threads (edition 2024) and would clobber a developer's
+    /// real setting. Pass `None` for "no ambient NO_PROXY".
+    pub fn merge_with_no_proxy_env(
+        &self,
+        cli: CliFlags,
+        no_proxy_env: Option<String>,
+    ) -> Result<Resolved, ConfigError> {
         // Proxy: FeatureToggle resolves --with-proxy/--no-proxy against config default (true).
         let with_proxy = cli.proxy.resolve(self.proxy.enabled.unwrap_or(true));
 
@@ -123,6 +139,31 @@ impl Config {
                     .map_err(|e| ConfigError::Validation(format!("proxy.upstream: {e}")))?,
             ),
             None => None,
+        };
+
+        // Upstream no-proxy list: hosts that BYPASS the upstream and connect
+        // DIRECTLY (standard NO_PROXY behavior). CLI over config (mirrors
+        // proxy.upstream's precedence), then MERGE the ambient NO_PROXY/no_proxy
+        // env so an existing corporate setup works out of the box. Every entry is
+        // normalized (lowercase, leading dots stripped; empty and bare `*`
+        // dropped). This is a no-op at runtime when proxy.upstream is unset — the
+        // list is only consulted on the upstream-forward branch of the proxy.
+        let proxy_upstream_no_proxy = {
+            let base: Vec<String> = if cli.proxy_upstream_no_proxy.is_empty() {
+                self.proxy.upstream_no_proxy.clone().unwrap_or_default()
+            } else {
+                cli.proxy_upstream_no_proxy.clone()
+            };
+            let mut merged: Vec<String> = base
+                .iter()
+                .filter_map(|e| crate::proxy::normalize_no_proxy_entry(e))
+                .collect();
+            if let Some(env) = no_proxy_env {
+                merged.extend(crate::proxy::parse_no_proxy_list(&env));
+            }
+            merged.sort_unstable();
+            merged.dedup();
+            merged
         };
 
         // Allow private domains: merge CLI + config list, sort+dedup.
@@ -413,6 +454,7 @@ impl Config {
             proxy_log_level,
             proxy_timeout,
             proxy_upstream,
+            proxy_upstream_no_proxy,
             allow_private_domains,
             allow_read,
             allow_write,
@@ -444,6 +486,18 @@ impl Config {
             deny_env: Vec::new(),
         })
     }
+}
+
+/// Read the ambient `NO_PROXY`/`no_proxy` environment value, if any. Kept as a
+/// tiny standalone fn so there is a single place cplt reaches into the process
+/// environment for upstream-proxy-bypass configuration. cplt runs OUTSIDE the
+/// sandbox, so this reads the user's own shell environment — exactly the
+/// existing corporate `NO_PROXY` setup we want to honor.
+fn no_proxy_env_value() -> Option<String> {
+    std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .ok()
+        .filter(|v| !v.trim().is_empty())
 }
 
 impl Resolved {
