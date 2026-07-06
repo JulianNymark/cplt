@@ -147,6 +147,12 @@ Localhost outbound is blocked by default, which prevents sandboxed processes fro
 
 **Fix:** Use `cplt config set allow.localhost <PORT>` for specific services, or `cplt config set sandbox.allow_localhost_any true` for build tools that use random ports (Next.js, Vite, esbuild).
 
+## App/build can't reach the network under cplt
+
+When the proxy is on (the default), cplt injects the standard `HTTP(S)_PROXY` env vars into the session so agent traffic can be filtered and logged, and **every** process inherits them — your app, build, and tests, not just the agent. So if something reaches the network fine outside cplt but times out under it, the usual cause is the HTTP client mishandling those proxy env vars (some client versions have shipped proxy-handling regressions — check for a newer patch release), or a domain/port that really is blocked — not cplt refusing all traffic.
+
+cplt doesn't restrict outbound *domains* by default, but the proxy still enforces the port policy, private-IP/localhost safeguards, and any configured allowlist/blocklist. To see what actually happened, run with the proxy log (`--proxy-log <file>` or `--proxy-log-level all`) and look for `BLOCKED` lines: if nothing was blocked the request left cplt and the fault is client-side; `BLOCKED-*` lines mean a port or configured list stopped it — a policy question, not a client bug.
+
 ## Docker and Testcontainers
 
 Docker is **intentionally blocked** — `~/.docker` is denied and the Docker socket is not accessible. This is by design: Docker gives near-root access to the host system, which defeats the purpose of sandboxing.
