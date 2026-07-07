@@ -346,6 +346,13 @@ pub struct ProxyState {
     allowed_domains_file: Option<PathBuf>,
     allowlist_cache: Mutex<DomainCache>,
 
+    // Agent default allowlist (issue #52): the agent's built-in fail-closed
+    // domain set, frozen at startup. Empty = the feature is off (unchanged
+    // allow-all behaviour). When non-empty it is MERGED with the reloadable
+    // `allowed_domains_file` to form the effective allowlist — so the built-in
+    // base and the user's additions both apply without re-listing either.
+    default_allowlist: Vec<String>,
+
     // Private domains: merged from immutable CLI args + dynamic TOML config
     cli_private_domains: Vec<String>,
     config_file: Option<PathBuf>,
@@ -394,13 +401,36 @@ impl ProxyState {
         )
     }
 
-    /// Get the allowlist, re-reading from disk if TTL expired.
-    /// Returns empty Vec when no allowlist file is configured (allow-all mode).
+    /// Get the effective allowlist, re-reading the user file from disk if the
+    /// TTL expired and merging in the agent's built-in default allowlist.
+    ///
+    /// Resolution (issue #52):
+    /// - `default_allowlist` empty (feature off / `--allow-all-domains`):
+    ///   behaviour is UNCHANGED — the reloadable file is the sole source, and an
+    ///   empty result means allow-all.
+    /// - `default_allowlist` non-empty (`proxy.default_allowlist` on): the
+    ///   effective allowlist is the agent defaults MERGED with any
+    ///   user-configured file domains, deduplicated. The result is always
+    ///   non-empty, so `handle_connect` fail-closes on unknown domains.
+    ///
+    /// Either way the returned list is fed to the same `is_domain_match` /
+    /// BLOCKED-ALLOWLIST enforcement — no matching logic is duplicated.
     fn get_allowed_domains(&self) -> Vec<String> {
-        match self.allowed_domains_file.as_deref() {
+        let file_domains = match self.allowed_domains_file.as_deref() {
             Some(path) => get_cached_domains(&self.allowlist_cache, Some(path), parse_lines_file),
             None => Vec::new(),
+        };
+
+        if self.default_allowlist.is_empty() {
+            // Feature off — preserve today's exact behaviour.
+            return file_domains;
         }
+
+        let mut merged = self.default_allowlist.clone();
+        merged.extend(file_domains);
+        merged.sort_unstable();
+        merged.dedup();
+        merged
     }
 
     /// Get private domains: union of immutable CLI entries + dynamic config entries.
@@ -565,6 +595,10 @@ pub struct ProxyOptions {
     /// Initial allowed domains from CLI/config (used for startup validation).
     /// After startup, the file is the source of truth for dynamic reload.
     pub allowed_domains_initial: Vec<String>,
+    /// Agent built-in default allowlist (issue #52). Empty = feature off
+    /// (unchanged allow-all). When set, it is merged with `allowed_domains_file`
+    /// to form the effective, fail-closed allowlist. Frozen at startup.
+    pub default_allowlist: Vec<String>,
     /// Domains allowed to resolve to private IPs — CLI portion (immutable).
     pub cli_private_domains: Vec<String>,
     /// Domains allowed to resolve to private IPs — config portion (initial).
@@ -650,6 +684,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         blocked_cache: Mutex::new(DomainCache::new(blocked_initial)),
         allowed_domains_file: opts.allowed_domains_file,
         allowlist_cache: Mutex::new(DomainCache::new(allowlist_initial)),
+        default_allowlist: opts.default_allowlist,
         cli_private_domains: opts.cli_private_domains,
         config_file: opts.config_file,
         private_domains_cache: Mutex::new(DomainCache::new(opts.config_private_domains)),
@@ -870,8 +905,24 @@ fn handle_connect(mut client: TcpStream, target: &str, state: &ProxyState) {
 
     // Enforce domain allowlist — when configured, only listed domains pass.
     // Fail-closed: if the allowlist is non-empty and the domain isn't in it, deny.
+    //
+    // Localhost carve-out: skip the allowlist gate for an opted-in localhost
+    // target, consistent with the port-policy and private-hostname gates above
+    // (both also skip when `localhost_connect_allowed`). The agent-default
+    // allowlist never contains "localhost", so without this exemption a user
+    // combining fail-closed networking with a local dev-server carve-out
+    // (`--default-allowlist --allow-localhost 3000`) would get
+    // `CONNECT localhost:3000` blocked — a surprising break of a legitimate
+    // combo. Still safe: `localhost_connect_allowed` requires both an explicit
+    // opt-in AND a loopback-spelled host, and the resolved-IP loopback check
+    // below still enforces that the target actually resolves to a loopback IP,
+    // so this exemption cannot let a non-loopback host masquerade as localhost
+    // to bypass the allowlist.
     let allowed_domains = state.get_allowed_domains();
-    if !allowed_domains.is_empty() && !is_domain_match(&host, &allowed_domains) {
+    if !localhost_connect_allowed
+        && !allowed_domains.is_empty()
+        && !is_domain_match(&host, &allowed_domains)
+    {
         log_connection("CONNECT", target, "BLOCKED-ALLOWLIST", log_file, log_level);
         let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nDomain not in allowlist\r\n");
         return;
@@ -1863,6 +1914,7 @@ mod tests {
             blocked_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_domains_file: None,
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
+            default_allowlist: Vec::new(),
             cli_private_domains: vec!["cli.example.com".to_string()],
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(vec![
@@ -1891,6 +1943,7 @@ mod tests {
             blocked_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_domains_file: None,
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
+            default_allowlist: Vec::new(),
             cli_private_domains: vec!["shared.com".to_string()],
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(vec!["shared.com".to_string()])),
@@ -1922,6 +1975,7 @@ mod tests {
             allowlist_cache: Mutex::new(DomainCache::new(vec![
                 "should-not-appear.com".to_string(),
             ])),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
@@ -1956,6 +2010,7 @@ mod tests {
             }),
             allowed_domains_file: None,
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
@@ -1991,6 +2046,7 @@ mod tests {
             blocked_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_domains_file: None,
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
+            default_allowlist: Vec::new(),
             cli_private_domains: vec!["cli.nav.no".to_string()],
             config_file: Some(config_path.clone()),
             private_domains_cache: Mutex::new(DomainCache {
@@ -2061,6 +2117,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
             config_file: None,
@@ -2095,6 +2152,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file: Some(allowlist_path),
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
             config_file: None,
@@ -2126,6 +2184,7 @@ mod tests {
                     .checked_sub(RELOAD_TTL + Duration::from_millis(100))
                     .unwrap(),
             }),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
@@ -2156,6 +2215,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── Default allowlist (issue #52): effective-allowlist merge logic ──────
+
+    /// Build a ProxyState wired for default-allowlist merge tests: a frozen
+    /// agent `default_allowlist` plus an optional user `allowed_domains` file.
+    fn state_for_allowlist(default_allowlist: Vec<String>, file: Option<PathBuf>) -> ProxyState {
+        let initial = file
+            .as_deref()
+            .and_then(parse_lines_file)
+            .unwrap_or_default();
+        ProxyState {
+            blocked_file: PathBuf::from("/dev/null"),
+            blocked_cache: Mutex::new(DomainCache::new(Vec::new())),
+            allowed_domains_file: file,
+            allowlist_cache: Mutex::new(DomainCache::new(initial)),
+            default_allowlist,
+            cli_private_domains: Vec::new(),
+            config_file: None,
+            private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
+            allowed_ports: vec![443],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
+            upstream: None,
+            upstream_no_proxy: Vec::new(),
+            resolver: None,
+        }
+    }
+
+    #[test]
+    fn default_allowlist_merges_and_fails_closed() {
+        let defaults: Vec<String> = crate::agent::Agent::Copilot
+            .default_allowed_domains()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let state = state_for_allowlist(defaults, None);
+        let eff = state.get_allowed_domains();
+        // Non-empty => the BLOCKED-ALLOWLIST gate fail-closes on unknown domains.
+        assert!(!eff.is_empty(), "default allowlist must be enforced");
+        for d in ["github.com", "api.github.com", "registry.npmjs.org"] {
+            assert!(is_domain_match(d, &eff), "{d} must be allowed");
+        }
+        // Bare `githubcopilot.com` covers the `*.githubcopilot.com` subdomain.
+        assert!(is_domain_match("api.githubcopilot.com", &eff));
+        // Everything else is blocked.
+        assert!(!is_domain_match("evil.com", &eff));
+    }
+
+    #[test]
+    fn default_allowlist_merges_user_configured_domain() {
+        let dir = test_dir("default-allowlist-merge");
+        let path = dir.join("allowed.txt");
+        std::fs::write(&path, "internal.example.com\n").unwrap();
+
+        let state = state_for_allowlist(vec!["github.com".to_string()], Some(path));
+        let eff = state.get_allowed_domains();
+        assert!(is_domain_match("github.com", &eff), "agent default kept");
+        assert!(
+            is_domain_match("internal.example.com", &eff),
+            "user-configured domain must be merged in"
+        );
+        assert!(!is_domain_match("evil.com", &eff));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_default_allowlist_is_allow_all_no_regression() {
+        // CRITICAL no-regression check: feature off (empty default_allowlist)
+        // and no file => empty effective allowlist => allow-all, exactly as
+        // before this change. `handle_connect` treats empty as "no allowlist".
+        let state = state_for_allowlist(Vec::new(), None);
+        assert!(
+            state.get_allowed_domains().is_empty(),
+            "default off must remain allow-all"
+        );
+    }
+
     /// Skip guard for tests that make real TCP connections.
     /// These tests require localhost TCP access, which is blocked inside the cplt sandbox.
     macro_rules! require_localhost_tcp {
@@ -2165,6 +2304,212 @@ mod tests {
                 return;
             }
         };
+    }
+
+    /// Start a proxy with a default allowlist for end-to-end CONNECT tests.
+    /// Traffic is forwarded to the (fake) `upstream`; a public-IP resolver is
+    /// injected so the SSRF/resolved-IP guard passes deterministically for
+    /// allowed domains without real DNS. Blocked domains never reach either.
+    fn make_proxy_default_allowlist(
+        default_allowlist: Vec<String>,
+        allowed_domains_file: Option<PathBuf>,
+        upstream: UpstreamProxy,
+    ) -> ProxyHandle {
+        let public_ip: std::net::IpAddr = "93.184.216.34".parse().unwrap();
+        let resolver: ResolverFn =
+            Arc::new(move |_h: &str, p: u16| Some(std::net::SocketAddr::new(public_ip, p)));
+        start(ProxyOptions {
+            port: 0,
+            blocked_file: PathBuf::from("/dev/null"),
+            allowed_ports: vec![443, 80],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
+            allowed_domains_file,
+            allowed_domains_initial: Vec::new(),
+            default_allowlist,
+            cli_private_domains: Vec::new(),
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(5),
+            upstream: Some(upstream),
+            upstream_no_proxy: Vec::new(),
+            resolver: Some(resolver),
+        })
+        .expect("proxy start failed")
+    }
+
+    fn copilot_defaults() -> Vec<String> {
+        crate::agent::Agent::Copilot
+            .default_allowed_domains()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    /// Assert a CONNECT to an ALLOWED host completes with a 200 tunnel through
+    /// the (already running) fake origin/upstream. A real policy block (`403
+    /// Forbidden`) fails immediately; only transient transport closes (`403 EOF`
+    /// / `403 ECONNRESET` from `proxy_connect`, which contain no "Forbidden")
+    /// are retried, since the fake-server handshake can flake under heavy
+    /// parallel test load. `host` is the CONNECT host (":443" is appended).
+    fn assert_connect_allowed(proxy_port: u16, host: &str) {
+        for _ in 0..8 {
+            let status = proxy_connect(proxy_port, &format!("{host}:443"));
+            assert!(
+                !status.contains("Forbidden"),
+                "{host} must NOT be blocked by policy; got {status}"
+            );
+            if status.contains("200") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("{host} must complete a 200 tunnel once allowed");
+    }
+
+    #[test]
+    fn proxy_default_allowlist_blocks_unknown_domain() {
+        require_localhost_tcp!();
+        let up = spawn_fake_upstream();
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{}", up.port)).unwrap();
+        let proxy = make_proxy_default_allowlist(copilot_defaults(), None, upstream);
+
+        let status = proxy_connect(proxy.port, "evil.com:443");
+        proxy.shutdown();
+        std::thread::sleep(Duration::from_millis(50));
+        let contacted = up.contacted.load(std::sync::atomic::Ordering::SeqCst);
+        up.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(
+            status.contains("403"),
+            "evil.com must be blocked (BLOCKED-ALLOWLIST) under the default allowlist; got {status}"
+        );
+        assert!(
+            !contacted,
+            "upstream must NOT be contacted for a blocked domain"
+        );
+    }
+
+    #[test]
+    fn proxy_default_allowlist_allows_agent_and_registry_domains() {
+        require_localhost_tcp!();
+        // Copilot infra, its subdomain form, and a package registry all pass
+        // the allowlist gate and get forwarded to the fake upstream (200). One
+        // proxy + one upstream serves every host to keep resource use low.
+        let up = spawn_fake_upstream();
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{}", up.port)).unwrap();
+        let proxy = make_proxy_default_allowlist(copilot_defaults(), None, upstream);
+        for host in [
+            "github.com",
+            "api.github.com",
+            "api.githubcopilot.com",
+            "registry.npmjs.org",
+        ] {
+            assert_connect_allowed(proxy.port, host);
+        }
+        proxy.shutdown();
+        up.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[test]
+    fn proxy_default_allowlist_merges_user_domain_e2e() {
+        require_localhost_tcp!();
+        let dir = test_dir("default-allowlist-e2e-merge");
+        let allowlist = dir.join("allowed.txt");
+        std::fs::write(&allowlist, "extra.example.com\n").unwrap();
+
+        // Small agent base + a user file: the user domain is merged and allowed.
+        let up = spawn_fake_upstream();
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{}", up.port)).unwrap();
+        let proxy =
+            make_proxy_default_allowlist(vec!["github.com".to_string()], Some(allowlist), upstream);
+        assert_connect_allowed(proxy.port, "extra.example.com");
+        proxy.shutdown();
+        up.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proxy_allow_all_domains_disables_allowlist_e2e() {
+        // `--allow-all-domains` => main.rs passes an empty default_allowlist and
+        // no file. At the proxy that is allow-all: evil.com is permitted again.
+        require_localhost_tcp!();
+        let up = spawn_fake_upstream();
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{}", up.port)).unwrap();
+        let proxy = make_proxy_default_allowlist(Vec::new(), None, upstream);
+        assert_connect_allowed(proxy.port, "evil.com");
+        proxy.shutdown();
+        up.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[test]
+    fn proxy_default_allowlist_allows_localhost_carveout_but_blocks_unknown() {
+        // Combining fail-closed networking with a local dev-server carve-out
+        // (`--default-allowlist --allow-localhost <PORT>`) must let the opted-in
+        // localhost port through even though "localhost" is not in the agent
+        // default allowlist, while a non-allowlisted public domain stays blocked.
+        require_localhost_tcp!();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Accept the one localhost connection so the tunnel completes (200).
+        let handle = std::thread::spawn(move || {
+            listener.accept().ok();
+        });
+
+        // Pin resolution to IPv4 loopback so the tunnel reaches our listener and
+        // the resolved-IP loopback check passes (localhost connects directly,
+        // never via the upstream). evil.com never reaches resolution — it is
+        // blocked at the allowlist gate first.
+        let loopback_v4: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let resolver: ResolverFn =
+            Arc::new(move |_host: &str, p: u16| Some(std::net::SocketAddr::new(loopback_v4, p)));
+        let up = spawn_fake_upstream();
+        let upstream = UpstreamProxy::parse(&format!("http://127.0.0.1:{}", up.port)).unwrap();
+        let proxy = start(ProxyOptions {
+            port: 0,
+            blocked_file: PathBuf::from("/dev/null"),
+            allowed_ports: vec![443, 80],
+            allow_localhost_ports: vec![port],
+            allow_localhost_any: false,
+            allowed_domains_file: None,
+            allowed_domains_initial: Vec::new(),
+            default_allowlist: copilot_defaults(),
+            cli_private_domains: Vec::new(),
+            config_private_domains: Vec::new(),
+            config_file: None,
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(5),
+            upstream: Some(upstream),
+            upstream_no_proxy: Vec::new(),
+            resolver: Some(resolver),
+        })
+        .expect("proxy start failed");
+
+        let localhost_status = proxy_connect(proxy.port, &format!("localhost:{port}"));
+        let evil_status = proxy_connect(proxy.port, "evil.com:443");
+
+        proxy.shutdown();
+        // Fallback connect so the accept thread unblocks if the proxy didn't reach it.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        handle.join().ok();
+        up.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(
+            localhost_status.contains("200"),
+            "CONNECT localhost:{port} must be ALLOWED under --default-allowlist \
+             with --allow-localhost {port} (allowlist gate must not block the \
+             localhost carve-out); got: {localhost_status}"
+        );
+        assert!(
+            evil_status.contains("403"),
+            "evil.com must stay BLOCKED (BLOCKED-ALLOWLIST) under the default \
+             allowlist even when a localhost carve-out is active; got: {evil_status}"
+        );
     }
 
     /// Helper: make a raw CONNECT request through the proxy and return the status line.
@@ -2205,6 +2550,7 @@ mod tests {
             allow_localhost_any,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
             config_file: None,
@@ -2427,6 +2773,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(), // NOT allow-listed
             config_private_domains: Vec::new(),
             config_file: None,
@@ -2485,6 +2832,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains: vec!["corp.internal".to_string()], // allow-listed
             config_private_domains: Vec::new(),
             config_file: None,
@@ -2934,6 +3282,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
             config_file: None,
@@ -3142,6 +3491,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains,
             config_private_domains: Vec::new(),
             config_file: None,
@@ -3572,6 +3922,7 @@ mod tests {
             allow_localhost_any: false,
             allowed_domains_file: None,
             allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
             cli_private_domains,
             config_private_domains: Vec::new(),
             config_file: None,
