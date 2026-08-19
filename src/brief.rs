@@ -34,6 +34,12 @@ pub const BLOCK_END: &str = "<!-- cplt:sandbox end -->";
 /// beneath it instead.
 const HAND_WRITTEN_HEADING_PREFIX: &str = "## Sandbox";
 
+/// The one-line pointer appended beneath a hand-written "## Sandbox" heading.
+/// A single line (no embedded newlines) so it can be inserted directly into
+/// a `Vec<&str>` of lines without corrupting the line-based join.
+const POINTER_LINE: &str =
+    "> cplt: see https://github.com/navikt/cplt for sandboxed-agent guidance.";
+
 /// Generate the per-session brief written to the scratch dir.
 ///
 /// Rendered from the live resolved config: if the user allowed `~/.aws`,
@@ -182,10 +188,17 @@ pub enum BlockOutcome {
 pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
     let block = managed_block();
 
-    let Ok(existing) = std::fs::read_to_string(path) else {
-        std::fs::write(path, format!("{block}\n"))
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-        return Ok(BlockOutcome::Created);
+    let existing = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::write(path, format!("{block}\n"))
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            return Ok(BlockOutcome::Created);
+        }
+        // Any other error (permission denied, not valid UTF-8, etc.) — refuse
+        // to guess. Overwriting here could destroy an existing file we just
+        // couldn't read.
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
 
     let begin_count = existing.matches(BLOCK_BEGIN).count();
@@ -220,10 +233,17 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
         .lines()
         .position(|l| l.trim_start().starts_with(HAND_WRITTEN_HEADING_PREFIX))
     {
-        let pointer =
-            "\n> cplt: see https://github.com/navikt/cplt for sandboxed-agent guidance.\n";
+        // Idempotency: don't insert another pointer line if one is already
+        // present anywhere in the file (e.g. from a previous launch).
+        if existing.contains(POINTER_LINE) {
+            return Ok(BlockOutcome::Unchanged);
+        }
         let mut lines: Vec<&str> = existing.lines().collect();
-        lines.insert(heading_pos + 1, pointer);
+        // Insert as a blank separator + single pointer line — not a string
+        // containing embedded newlines, which would corrupt the line-based
+        // join below.
+        lines.insert(heading_pos + 1, "");
+        lines.insert(heading_pos + 2, POINTER_LINE);
         let mut new_content = lines.join("\n");
         if existing.ends_with('\n') {
             new_content.push('\n');
@@ -462,6 +482,61 @@ mod tests {
         assert_eq!(outcome, BlockOutcome::SkippedAmbiguous);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, doubled, "ambiguous file must be left untouched");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn upsert_pointer_is_idempotent_on_rerun() {
+        let tmp = std::env::temp_dir().join("cplt-test-brief-pointer-idempotent");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("AGENTS.md");
+        std::fs::write(
+            &path,
+            "# Project\n\n## Sandbox\n\nWe run our own custom sandbox setup.\n",
+        )
+        .unwrap();
+
+        let first = upsert_managed_block(&path).unwrap();
+        assert_eq!(first, BlockOutcome::PointerAppended);
+        let after_first = std::fs::read_to_string(&path).unwrap();
+
+        let second = upsert_managed_block(&path).unwrap();
+        assert_eq!(
+            second,
+            BlockOutcome::Unchanged,
+            "re-run must not insert a second pointer line"
+        );
+        let after_second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after_first, after_second, "no duplication on re-run");
+        assert_eq!(
+            after_second.matches("cplt: see").count(),
+            1,
+            "exactly one pointer line, not one per launch"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn upsert_refuses_to_overwrite_unreadable_file() {
+        // A read error that ISN'T "file not found" (e.g. invalid UTF-8,
+        // permission denied) must never be treated as "absent" — that would
+        // silently destroy the user's existing AGENTS.md.
+        let tmp = std::env::temp_dir().join("cplt-test-brief-unreadable");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("AGENTS.md");
+        // Invalid UTF-8 bytes make read_to_string fail with InvalidData,
+        // not NotFound.
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0xff]).unwrap();
+
+        let result = upsert_managed_block(&path);
+        assert!(result.is_err(), "non-NotFound read errors must surface");
+
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(raw, vec![0xff, 0xfe, 0x00, 0xff], "file must be untouched");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

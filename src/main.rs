@@ -1733,6 +1733,51 @@ fn resolve_domain_allowlist_decision(
     }
 }
 
+/// Agent-facing sandbox brief (issue #148; opt-out via --no-brief /
+/// sandbox.brief = false). Two-layer context injection:
+/// - session: fresh scratch `CPLT_BRIEF.md` rendered from the resolved
+///   policy (never a static template).
+/// - persistent: managed `AGENTS.md` block in the project root, written
+///   BEFORE the agent process starts (this whole setup phase is
+///   unsandboxed) and left for the user to commit — the git diff IS the
+///   audit trail, no hidden writes.
+///
+/// Best-effort: any failure is warned about, never fatal — a missing brief
+/// shouldn't block the agent from launching.
+fn apply_agent_sandbox_brief(
+    resolved: &config::Resolved,
+    active_agent: agent::Agent,
+    scratch_path: Option<&Path>,
+    project_dir: &Path,
+) {
+    if !resolved.brief {
+        return;
+    }
+    if let Some(scratch) = scratch_path {
+        let content = brief::generate_session_brief(resolved, active_agent);
+        if let Err(e) = brief::write_session_brief(scratch, &content) {
+            ui::warn(&format!("Could not write sandbox brief: {e}"));
+        }
+    }
+    let agents_md = project_dir.join("AGENTS.md");
+    match brief::upsert_managed_block(&agents_md) {
+        Ok(brief::BlockOutcome::SkippedAmbiguous) => {
+            ui::warn(&format!(
+                "AGENTS.md has multiple cplt:sandbox managed blocks — skipped \
+                 (fix manually): {}",
+                agents_md.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => {
+            ui::warn(&format!(
+                "Could not update AGENTS.md sandbox block ({}): {e}",
+                agents_md.display()
+            ));
+        }
+    }
+}
+
 fn start_proxy_if_enabled(
     resolved: &mut config::Resolved,
     cli: &Cli,
@@ -2371,30 +2416,8 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     // After pre-creation, so a dir we just made resolves too. See #171.
     agent::canonicalize_agent_dirs(&mut agent_dirs);
 
-    // Agent-facing sandbox brief (issue #148; opt-out via --no-brief /
-    // sandbox.brief = false). Two-layer context injection:
-    // - session: fresh scratch CPLT_BRIEF.md rendered from the resolved
-    //   policy (never a static template).
-    // - persistent: managed AGENTS.md block in the project root, written
-    //   BEFORE the agent process starts (this whole setup phase is
-    //   unsandboxed) and left for the user to commit — the git diff IS
-    //   the audit trail, no hidden writes.
-    if resolved.brief {
-        if let Some(scratch) = scratch_path {
-            let content = brief::generate_session_brief(&resolved, active_agent);
-            if let Err(e) = brief::write_session_brief(scratch, &content) {
-                ui::warn(&format!("Could not write sandbox brief: {e}"));
-            }
-        }
-        let agents_md = project_dir.join("AGENTS.md");
-        if let Ok(brief::BlockOutcome::SkippedAmbiguous) = brief::upsert_managed_block(&agents_md) {
-            ui::warn(&format!(
-                "AGENTS.md has multiple cplt:sandbox managed blocks — skipped \
-                 (fix manually): {}",
-                agents_md.display()
-            ));
-        }
-    }
+    // Agent-facing sandbox brief (issue #148) — see `apply_agent_sandbox_brief`.
+    apply_agent_sandbox_brief(&resolved, active_agent, scratch_path, &project_dir);
 
     // macOS-only, opt-in (sandbox.gradle_init): install the guarded Gradle
     // init script so sandboxed builds keep the preferIPv4Stack workaround for
@@ -2906,24 +2929,8 @@ fn prepare_shell_sandbox(
     // See the agent-path call site: resolve symlinked agent dirs (#171).
     agent::canonicalize_agent_dirs(&mut agent_dirs);
 
-    // See the agent-path call site: agent-facing sandbox brief (issue #148;
-    // opt-out via --no-brief / sandbox.brief = false).
-    if resolved.brief {
-        if let Some(scratch) = scratch_path {
-            let content = brief::generate_session_brief(resolved, active_agent);
-            if let Err(e) = brief::write_session_brief(scratch, &content) {
-                ui::warn(&format!("Could not write sandbox brief: {e}"));
-            }
-        }
-        let agents_md = project_dir.join("AGENTS.md");
-        if let Ok(brief::BlockOutcome::SkippedAmbiguous) = brief::upsert_managed_block(&agents_md) {
-            ui::warn(&format!(
-                "AGENTS.md has multiple cplt:sandbox managed blocks — skipped \
-                 (fix manually): {}",
-                agents_md.display()
-            ));
-        }
-    }
+    // See the agent-path call site: agent-facing sandbox brief (issue #148).
+    apply_agent_sandbox_brief(resolved, active_agent, scratch_path, project_dir);
 
     // See the agent-path call site: guarded Gradle init script (opt-in via
     // sandbox.gradle_init) so sandboxed builds keep the preferIPv4Stack
