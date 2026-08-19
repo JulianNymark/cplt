@@ -149,7 +149,14 @@ pub fn managed_block() -> String {
          deliberate policy deny, not a transient error — don't retry or search \
          for a workaround. Report it to the user with the exact command and \
          path; they can adjust the sandbox config (e.g. `cplt trust`, \
-         `allow.read`/`allow.write`).\n\
+         `allow.read`/`allow.write`).\n\n\
+         **If `$__CPLT_WRAPPED` IS set:** cplt also writes a session-specific \
+         brief to `$TMPDIR/CPLT_BRIEF.md` (unexpanded — resolve `$TMPDIR` from \
+         your own environment, it's redirected to the per-session scratch dir \
+         and differs every launch) with the exact resolved policy for this run \
+         (network, credentials, env files). Read it before assuming something \
+         is blocked or allowed. If missing, `--no-scratch-dir` was likely \
+         passed for this session — check `cplt --print-profile` instead.\n\
          {BLOCK_END}"
     )
 }
@@ -366,6 +373,22 @@ mod tests {
         assert!(block.starts_with(BLOCK_BEGIN));
         assert!(block.ends_with(BLOCK_END));
         assert!(block.contains("__CPLT_WRAPPED"));
+    }
+
+    #[test]
+    fn managed_block_points_at_session_brief_via_tmpdir() {
+        let block = managed_block();
+        // Must reference the literal, unexpanded $TMPDIR var (not a baked-in
+        // per-session scratch path) so the static managed block stays stable
+        // across launches — see write_session_brief() / --scratch-dir.
+        assert!(
+            block.contains("$TMPDIR/CPLT_BRIEF.md"),
+            "managed block should point agents at the session-specific brief"
+        );
+        assert!(
+            !block.contains("/tmp/") || block.contains("$TMPDIR"),
+            "must not embed a concrete scratch path"
+        );
     }
 
     #[test]
