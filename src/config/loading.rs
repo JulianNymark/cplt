@@ -343,6 +343,13 @@ impl Config {
             !self.sandbox.validate.unwrap_or(true)
         };
 
+        // Brief: --no-brief wins, then config, then true (brief on by default).
+        let brief = if cli.no_brief {
+            false
+        } else {
+            self.sandbox.brief.unwrap_or(true)
+        };
+
         // Allow-env-files: explicit CLI flag wins, then explicit config value,
         // then the preset baseline (false when no preset — deny by default).
         let allow_env_files = cli
@@ -594,6 +601,7 @@ impl Config {
             allow_localhost_any,
             allow_env_files,
             no_validate,
+            brief,
             pass_env,
             inherit_env,
             allow_lifecycle_scripts,
@@ -1529,6 +1537,31 @@ validate = false
         let config: Config = toml::from_str("[sandbox]\nvalidate = false\n").unwrap();
         let resolved = config.merge(CliFlags::default()).unwrap();
         assert!(resolved.no_validate);
+    }
+
+    #[test]
+    fn brief_defaults_on() {
+        let resolved = Config::default().merge(CliFlags::default()).unwrap();
+        assert!(resolved.brief, "brief is on by default");
+    }
+
+    #[test]
+    fn cli_no_brief_overrides_config() {
+        let config: Config = toml::from_str("[sandbox]\nbrief = true\n").unwrap();
+        let resolved = config
+            .merge(CliFlags {
+                no_brief: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!resolved.brief, "--no-brief wins over config");
+    }
+
+    #[test]
+    fn config_brief_false_disables() {
+        let config: Config = toml::from_str("[sandbox]\nbrief = false\n").unwrap();
+        let resolved = config.merge(CliFlags::default()).unwrap();
+        assert!(!resolved.brief);
     }
 
     #[test]

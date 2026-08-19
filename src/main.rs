@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 #[cfg(target_os = "macos")]
 use cplt::gradle_init;
 use cplt::{
-    agent, audit, check, config, discover, gh_proxy, proxy, repo_config, sandbox, scratch,
+    agent, audit, brief, check, config, discover, gh_proxy, proxy, repo_config, sandbox, scratch,
     subscriptions, trust, update,
 };
 use std::collections::BTreeSet;
@@ -493,6 +493,12 @@ grants exec to every binary cached by any application. Prefer
     /// that file and network restrictions are active.
     #[arg(long)]
     no_validate: bool,
+
+    /// Disable the agent-facing sandbox brief (scratch `CPLT_BRIEF.md`) and
+    /// the managed AGENTS.md block injection. On by default so the agent
+    /// knows it's sandboxed instead of retrying EPERM blindly.
+    #[arg(long)]
+    no_brief: bool,
 
     /// Print the generated sandbox profile (SBPL) and exit.
     /// Useful for debugging or auditing the sandbox rules.
@@ -1279,6 +1285,7 @@ fn resolve_context(cli: &Cli, check_mode: bool) -> anyhow::Result<ResolvedContex
             cli.no_allow_env_files,
         ),
         no_validate: cli.no_validate,
+        no_brief: cli.no_brief,
         pass_env: cli.pass_env.clone(),
         inherit_env: cli.inherit_env,
         allow_lifecycle_scripts: config::FeatureToggle::from_pair(
@@ -2364,6 +2371,31 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     // After pre-creation, so a dir we just made resolves too. See #171.
     agent::canonicalize_agent_dirs(&mut agent_dirs);
 
+    // Agent-facing sandbox brief (issue #148; opt-out via --no-brief /
+    // sandbox.brief = false). Two-layer context injection:
+    // - session: fresh scratch CPLT_BRIEF.md rendered from the resolved
+    //   policy (never a static template).
+    // - persistent: managed AGENTS.md block in the project root, written
+    //   BEFORE the agent process starts (this whole setup phase is
+    //   unsandboxed) and left for the user to commit — the git diff IS
+    //   the audit trail, no hidden writes.
+    if resolved.brief {
+        if let Some(scratch) = scratch_path {
+            let content = brief::generate_session_brief(&resolved, active_agent);
+            if let Err(e) = brief::write_session_brief(scratch, &content) {
+                ui::warn(&format!("Could not write sandbox brief: {e}"));
+            }
+        }
+        let agents_md = project_dir.join("AGENTS.md");
+        if let Ok(brief::BlockOutcome::SkippedAmbiguous) = brief::upsert_managed_block(&agents_md) {
+            ui::warn(&format!(
+                "AGENTS.md has multiple cplt:sandbox managed blocks — skipped \
+                 (fix manually): {}",
+                agents_md.display()
+            ));
+        }
+    }
+
     // macOS-only, opt-in (sandbox.gradle_init): install the guarded Gradle
     // init script so sandboxed builds keep the preferIPv4Stack workaround for
     // the daemon and Test/JavaExec forks (WorkerExecutor forks have no
@@ -2873,6 +2905,25 @@ fn prepare_shell_sandbox(
     }
     // See the agent-path call site: resolve symlinked agent dirs (#171).
     agent::canonicalize_agent_dirs(&mut agent_dirs);
+
+    // See the agent-path call site: agent-facing sandbox brief (issue #148;
+    // opt-out via --no-brief / sandbox.brief = false).
+    if resolved.brief {
+        if let Some(scratch) = scratch_path {
+            let content = brief::generate_session_brief(resolved, active_agent);
+            if let Err(e) = brief::write_session_brief(scratch, &content) {
+                ui::warn(&format!("Could not write sandbox brief: {e}"));
+            }
+        }
+        let agents_md = project_dir.join("AGENTS.md");
+        if let Ok(brief::BlockOutcome::SkippedAmbiguous) = brief::upsert_managed_block(&agents_md) {
+            ui::warn(&format!(
+                "AGENTS.md has multiple cplt:sandbox managed blocks — skipped \
+                 (fix manually): {}",
+                agents_md.display()
+            ));
+        }
+    }
 
     // See the agent-path call site: guarded Gradle init script (opt-in via
     // sandbox.gradle_init) so sandboxed builds keep the preferIPv4Stack

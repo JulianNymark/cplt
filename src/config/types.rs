@@ -569,6 +569,10 @@ pub struct SandboxConfig {
     pub preset: Option<Preset>,
     /// Run sandbox-exec validation test on startup (default: true).
     pub validate: Option<bool>,
+    /// Generate the agent-facing sandbox brief and inject the managed
+    /// AGENTS.md block on every launch (default: true). Disable with
+    /// `--no-brief` or `sandbox.brief = false`.
+    pub brief: Option<bool>,
     /// Allow reading .env files and private keys in project dir (default: false).
     pub allow_env_files: Option<bool>,
     /// Allow all localhost outbound (default: false).
@@ -762,6 +766,7 @@ pub struct Resolved {
     pub allow_localhost_any: bool,
     pub allow_env_files: bool,
     pub no_validate: bool,
+    pub brief: bool,
     pub pass_env: Vec<String>,
     pub inherit_env: bool,
     pub allow_lifecycle_scripts: bool,
@@ -833,6 +838,7 @@ pub struct CliFlags {
     /// Preset-controlled toggle (see `allow_localhost_any`).
     pub allow_env_files: FeatureToggle,
     pub no_validate: bool,
+    pub no_brief: bool,
     pub pass_env: Vec<String>,
     pub inherit_env: bool,
     /// Preset-controlled toggle (see `allow_localhost_any`).

@@ -7799,6 +7799,7 @@ paths = []
 agent = "copilot"
 preset = "standard"
 validate = true
+brief = true
 allow_env_files = false
 allow_localhost_any = false
 pass_env = []

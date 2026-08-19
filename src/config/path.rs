@@ -151,6 +151,11 @@ pub fn default_config_contents() -> String {
 # Disable to save ~200ms startup if you trust your config.
 # validate = true
 #
+# Generate the agent-facing sandbox brief (scratch CPLT_BRIEF.md) and inject
+# the managed AGENTS.md block in the project root on every launch
+# (default: true). Disable if you don't want cplt writing to AGENTS.md.
+# brief = true
+#
 # Allow Copilot to read .env files and private keys (.pem, .key)
 # in the project directory. Blocked by default, because these often contain
 # secrets that a rogue agent could exfiltrate via HTTPS.

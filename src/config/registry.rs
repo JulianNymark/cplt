@@ -222,6 +222,14 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
     },
     ConfigKeyInfo {
         section: "sandbox",
+        key: "brief",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "true",
+        description: "Generate the agent-facing sandbox brief (scratch CPLT_BRIEF.md) and inject the managed AGENTS.md block on every launch.",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
         key: "allow_env_files",
         value_type: ConfigValueType::Bool,
         dangerous: false,
