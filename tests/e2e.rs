@@ -104,9 +104,18 @@ mod e2e_tests {
 
     /// Create a cplt Command pre-configured to ignore the user's config.
     /// Use for tests that assert on profile/output content that config could affect.
+    ///
+    /// Always passes `--no-brief`: most e2e tests launch with cwd = project_dir()
+    /// (this repo's own checkout, not an isolated tempdir), and brief is on by
+    /// default. Without this, a real launch would inject the managed sandbox
+    /// block into this repo's own AGENTS.md, dirtying the working tree and
+    /// tripping CI's "clean tree" check (issue #112). No e2e test exercises the
+    /// brief/AGENTS.md injection behavior itself (that's covered by unit tests
+    /// in src/brief.rs), so this is safe to apply globally.
     fn cplt_cmd() -> Command {
         let mut cmd = Command::new(binary_path());
         no_user_config(&mut cmd);
+        cmd.arg("--no-brief");
         cmd
     }
 
@@ -119,7 +128,7 @@ mod e2e_tests {
         require_copilot!();
         require_sandbox!();
         let output = Command::new(binary_path())
-            .args(["--yes", "--no-validate", "--", "--version"])
+            .args(["--yes", "--no-validate", "--no-brief", "--", "--version"])
             .current_dir(project_dir())
             .output()
             .expect("binary should run");
@@ -960,7 +969,9 @@ mod e2e_tests {
         let new_path = format!("{}:{current_path}", fake_dir.path().display());
 
         let mut cmd = Command::new(binary_path());
-        cmd.args(["--yes", "--no-validate"])
+        // --no-brief: see cplt_cmd() doc comment above — cwd here is project_dir()
+        // (this repo's own checkout), so brief-on-by-default would dirty AGENTS.md.
+        cmd.args(["--yes", "--no-validate", "--no-brief"])
             .args(extra_args)
             .args(["--", "--version"]) // fake copilot ignores args, prints env
             .current_dir(project_dir())
@@ -1506,7 +1517,7 @@ mod e2e_tests {
         let new_path = format!("{}:{current_path}", fake_dir.path().display());
 
         let output = Command::new(binary_path())
-            .args(["--yes", "--no-validate", "--", "--version"])
+            .args(["--yes", "--no-validate", "--no-brief", "--", "--version"])
             .current_dir(project_dir())
             .env("PATH", &new_path)
             .env("__CPLT_WRAPPED", "1")
@@ -1565,7 +1576,7 @@ mod e2e_tests {
 
         // PATH contains ONLY the symlink dir — no real copilot anywhere
         let output = Command::new(binary_path())
-            .args(["--yes", "--no-validate", "--", "--version"])
+            .args(["--yes", "--no-validate", "--no-brief", "--", "--version"])
             .current_dir(project_dir())
             .env("PATH", dir.path().display().to_string())
             .output()
@@ -3114,7 +3125,7 @@ paths = [
         let new_path = format!("{}:{current_path}", fake_dir.path().display());
 
         let output = Command::new(binary_path())
-            .args(["--yes", "--no-validate"])
+            .args(["--yes", "--no-validate", "--no-brief"])
             .args(cplt_args)
             .current_dir(project_dir())
             .env("PATH", &new_path)
