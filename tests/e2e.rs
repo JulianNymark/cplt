@@ -988,7 +988,13 @@ mod e2e_tests {
         let current_path = std::env::var("PATH").unwrap_or_default();
         let new_path = format!("{}:{current_path}", fake_dir.path().display());
         let mut cmd = Command::new(binary_path());
-        cmd.current_dir(project_dir()).env("PATH", &new_path);
+        // --no-brief: these tests launch with cwd = repo root (project_dir()), not
+        // an isolated tempdir. Without this, a real launch would inject the
+        // managed sandbox block into this repo's own AGENTS.md, dirtying the
+        // working tree and tripping CI's "clean tree" check.
+        cmd.current_dir(project_dir())
+            .env("PATH", &new_path)
+            .arg("--no-brief");
         (cmd, fake_dir)
     }
 
