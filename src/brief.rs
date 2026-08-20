@@ -231,6 +231,21 @@ pub enum BlockOutcome {
 pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
     let block = managed_block();
 
+    // Symlink guard (pre-sandbox write): this function runs BEFORE the
+    // sandbox is entered, with full host privileges, on a path supplied by
+    // the (possibly untrusted) project repo. A symlinked AGENTS.md would
+    // redirect fs::write to an arbitrary host file (e.g. ~/.zshrc).
+    // symlink_metadata does not follow the link — refuse outright.
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(format!(
+                "{} is a symlink — refusing to write (possible hostile repo)",
+                path.display()
+            ));
+        }
+        Ok(_) | Err(_) => {} // real file, or doesn't exist yet — fine
+    }
+
     let existing = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -425,6 +440,28 @@ mod tests {
             !block.contains("/tmp/") || block.contains("$TMPDIR"),
             "must not embed a concrete scratch path"
         );
+    }
+
+    /// A symlinked AGENTS.md must never be written through: cplt runs this
+    /// pre-sandbox with host privileges, so a hostile repo could otherwise
+    /// redirect the write to an arbitrary file (e.g. ~/.zshrc).
+    #[test]
+    #[cfg(unix)]
+    fn upsert_refuses_symlink() {
+        let tmp = std::env::temp_dir().join("cplt-test-brief-symlink");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let target = tmp.join("target.txt");
+        std::fs::write(&target, "precious\n").unwrap();
+        let path = tmp.join("AGENTS.md");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let err = upsert_managed_block(&path).unwrap_err();
+        assert!(err.contains("symlink"), "unexpected error: {err}");
+        // Target untouched.
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious\n");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
