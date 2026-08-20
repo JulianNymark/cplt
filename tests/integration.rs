@@ -1907,10 +1907,13 @@ except Exception as e:
         // No require_sandbox!(): `--print-profile` only generates and prints the
         // SBPL text; it never invokes sandbox-exec, so it runs even when nested.
         let project = fs::canonicalize(".").unwrap();
+        // --no-brief: cwd/project-dir is the repo root — without it the launch
+        // injects the managed block into this repo's AGENTS.md (issue #112).
         let output = Command::new(binary_path())
             .args([
                 "--proxy-forced",
                 "--print-profile",
+                "--no-brief",
                 "--project-dir",
                 &project.to_string_lossy(),
             ])
