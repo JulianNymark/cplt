@@ -396,13 +396,17 @@ fn install_command_wrappers(
     // error. A friendly wrapper turns that into a clear message instead of
     // the agent retrying or guessing at network workarounds (issue #148).
     if let Some(real_ssh) = which_binary("ssh") {
+        // real_ssh comes from the launch-time PATH, which a hostile repo
+        // setup (direnv, tweaked profile) can influence — a path containing
+        // $(...), backticks, or a quote would execute inside the sandbox on
+        // every `ssh` invocation. shell_escape it like the git/gh wrappers.
+        let ssh_escaped = crate::gh_proxy::shell_escape(&real_ssh.to_string_lossy());
         let script = format!(
             "#!/bin/sh\n\
              # cplt: SSH is blocked in this sandbox (no key/agent access).\n\
              # This wrapper is auto-generated. Do not edit.\n\
-             echo \"cplt: SSH blocked by the sandbox — ask the user to run this ({}) outside cplt.\" >&2\n\
+             echo \"cplt: SSH blocked by the sandbox — ask the user to run this ({ssh_escaped}) outside cplt.\" >&2\n\
              exit 1\n",
-            real_ssh.display()
         );
         let wrapper_path = bin_dir.join("ssh");
         if std::fs::write(&wrapper_path, script).is_ok() {
