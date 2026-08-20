@@ -1408,7 +1408,7 @@ fn parse_repo_from_url(url: &str) -> Option<String> {
 ///
 /// Wraps the value in single quotes and escapes any embedded single quotes
 /// using the `'\''` idiom (end quote, literal quote, resume quote).
-pub(crate) fn shell_escape(s: &str) -> String {
+fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
