@@ -268,11 +268,17 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
 
     if begin_count == 1 {
         let start = existing.find(BLOCK_BEGIN).unwrap();
-        let end = existing.find(BLOCK_END).unwrap() + BLOCK_END.len();
-        if end < start {
-            // END appears before BEGIN — malformed, refuse.
+        let end_start = existing.find(BLOCK_END).unwrap();
+        // END must open after BEGIN opens. Comparing the two *start* offsets
+        // (rather than `end < start`, where `end` is past the END marker) also
+        // catches the adjacent case `<!--end--><!--begin-->`: there the two
+        // happen to be equal, the slice below would be empty, and we would
+        // splice a second pair of markers into the file — corrupting it into
+        // the permanently-ambiguous state.
+        if end_start < start {
             return Ok(BlockOutcome::SkippedAmbiguous);
         }
+        let end = end_start + BLOCK_END.len();
         let current_block = &existing[start..end];
         if current_block == block {
             return Ok(BlockOutcome::Unchanged);
@@ -580,6 +586,27 @@ mod tests {
         assert_eq!(outcome, BlockOutcome::SkippedAmbiguous);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, doubled, "ambiguous file must be left untouched");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `<!--end--><!--begin-->` with no gap: the END marker's *end* offset
+    /// equals the BEGIN marker's start, so an `end < start` guard lets it
+    /// through, splices the block into the zero-width slice between them, and
+    /// leaves the file with two marker pairs — permanently ambiguous.
+    #[test]
+    fn upsert_refuses_adjacent_reversed_markers() {
+        let tmp = std::env::temp_dir().join("cplt-test-brief-reversed");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("AGENTS.md");
+        let reversed = format!("{BLOCK_END}{BLOCK_BEGIN}\n");
+        std::fs::write(&path, &reversed).unwrap();
+
+        let outcome = upsert_managed_block(&path).unwrap();
+        assert_eq!(outcome, BlockOutcome::SkippedAmbiguous);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, reversed, "malformed file must be left untouched");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
