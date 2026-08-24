@@ -728,11 +728,13 @@ fn profile_contains_deny_default() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -765,11 +767,13 @@ fn profile_allows_tty_ioctl() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -811,11 +815,13 @@ fn landlock_policy_device_files_have_ioctl() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -876,11 +882,13 @@ fn profile_grants_project_access() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -942,11 +950,13 @@ fn profile_grants_copilot_config_access() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -982,11 +992,13 @@ fn profile_grants_claude_config_access() {
             allow_tmp_exec: false,
             copilot_install_dir: None,
             java_home: None,
+            dotnet_root: None,
             git_hooks_path: None,
             git_common_dir: None,
             allow_gpg_signing: false,
             deny_clipboard: false,
             allow_jvm_attach: false,
+            allow_msbuild: false,
             allow_docker: false,
             electron_app_dir: None,
             agent: cplt::agent::Agent::Claude,
@@ -1031,11 +1043,13 @@ fn profile_denies_sensitive_dirs() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1093,11 +1107,13 @@ fn profile_denies_sensitive_files() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1137,11 +1153,13 @@ fn profile_denies_credential_files_in_tool_dirs() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1212,11 +1230,13 @@ fn profile_allows_credential_files_when_user_opts_in() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1303,11 +1323,13 @@ fn profile_extra_read_overrides_denied_dotfile_directory() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1362,11 +1384,13 @@ fn profile_extra_read_overrides_multiple_denied_dotfile_dirs() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1419,11 +1443,13 @@ fn profile_restricts_outbound_tcp() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1483,11 +1509,13 @@ fn profile_extra_ports_adds_allows() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1531,11 +1559,13 @@ fn profile_allow_browser_enables_lsopen() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1571,11 +1601,13 @@ fn profile_proxy_port_allows_localhost() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1615,11 +1647,13 @@ fn profile_allow_localhost_opens_specific_ports() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1674,11 +1708,13 @@ fn profile_deny_rules_come_after_allow_rules() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1720,11 +1756,13 @@ fn profile_allows_gh_config_read_only() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1768,11 +1806,13 @@ fn profile_allows_file_map_executable_for_copilot() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1812,11 +1852,13 @@ fn profile_denies_env_files_by_default() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1880,11 +1922,13 @@ fn profile_allows_env_files_when_flag_set() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1920,11 +1964,13 @@ fn profile_env_deny_comes_after_project_allow() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -1972,11 +2018,13 @@ fn profile_env_deny_comes_after_user_allows() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2063,11 +2111,13 @@ fn profile_allows_all_localhost_when_flag_set() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2121,11 +2171,13 @@ fn profile_allows_all_tcp_outbound_when_jvm_and_localhost_any() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: true,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2175,11 +2227,13 @@ fn profile_denies_write_to_copilot_pkg() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2419,11 +2473,13 @@ fn profile_denies_exec_from_tmp() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2460,6 +2516,11 @@ fn profile_denies_exec_from_tmp() {
         !p.contains(".java_pid"),
         "Default profile must NOT contain .java_pid socket rules — JVM attach is opt-in"
     );
+    // Must NOT contain MSBuild worker-node socket rules by default (opt-in via --allow-msbuild)
+    assert!(
+        !p.contains("MSBuild[0-9]+$"),
+        "Default profile must NOT contain MSBuild worker-node socket rules — MSBuild is opt-in"
+    );
 }
 
 #[test]
@@ -2483,11 +2544,13 @@ fn profile_allows_jvm_attach_when_flag_set() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: true,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2542,6 +2605,75 @@ fn profile_allows_jvm_attach_when_flag_set() {
     );
 }
 
+#[test]
+fn profile_allows_msbuild_when_flag_set() {
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        allow_socket: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        proxy_forced: false,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        dotnet_root: None,
+        git_hooks_path: None,
+        git_common_dir: None,
+        allow_gpg_signing: false,
+        deny_clipboard: false,
+        allow_jvm_attach: false,
+        allow_msbuild: true,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    // Must allow unix socket bind+inbound+connect for the MSBuild worker-node
+    // pipe (MSBuild<pid>). Three operations needed: bind (worker node creates
+    // socket), inbound (worker node accepts), outbound (client connects).
+    assert!(
+        p.contains(
+            r#"(allow network-bind (local unix-socket (regex #"^/private/tmp/MSBuild[0-9]+$")))"#
+        ),
+        "Profile must allow unix socket bind for MSBuild worker-node IPC"
+    );
+    assert!(
+        p.contains(
+            r#"(allow network-inbound (local unix-socket (regex #"^/private/tmp/MSBuild[0-9]+$")))"#
+        ),
+        "Profile must allow unix socket inbound for MSBuild worker-node IPC"
+    );
+    assert!(
+        p.contains(
+            r#"(allow network-outbound (remote unix-socket (regex #"^/private/tmp/MSBuild[0-9]+$")))"#
+        ),
+        "Profile must allow unix socket connect for MSBuild worker-node IPC"
+    );
+    // Must NOT have broad subpath unix socket rules (would expose SSH agent)
+    assert!(
+        !p.contains("unix-socket (subpath \"/private/tmp\")"),
+        "Profile must NOT have broad subpath unix-socket rule — exposes SSH_AUTH_SOCK"
+    );
+    // Must NOT enable JVM attach as a side effect
+    assert!(
+        !p.contains(".java_pid"),
+        "allow_msbuild must NOT also enable JVM Attach API socket rules"
+    );
+}
+
 // ============================================================
 // TCP bind uses localhost (SBPL limitation: cannot restrict to loopback only)
 // ============================================================
@@ -2567,11 +2699,13 @@ fn profile_allows_localhost_tcp_bind() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2618,11 +2752,13 @@ fn allow_localhost_any_affects_both_backends() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2660,11 +2796,13 @@ fn allow_localhost_any_affects_both_backends() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2714,11 +2852,13 @@ fn config_options_parity_across_backends() {
         allow_tmp_exec: true,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: true,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2801,11 +2941,13 @@ fn config_options_parity_across_backends() {
         allow_tmp_exec: true,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: true,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2882,11 +3024,13 @@ fn profile_denies_git_persistence_vectors() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2944,11 +3088,13 @@ fn profile_denies_write_to_cplt_toml() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -2988,11 +3134,13 @@ fn default_profile() -> String {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -3845,11 +3993,13 @@ fn profile_scratch_dir_adds_all_permissions() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -3914,11 +4064,13 @@ fn profile_allow_tmp_exec_removes_denies() {
         allow_tmp_exec: true,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4080,11 +4232,13 @@ fn profile_allows_copilot_install_dir() {
             "/Users/test/n/lib/node_modules/@github/copilot",
         )),
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4131,11 +4285,13 @@ fn profile_allows_vscode_copilot_path() {
         allow_tmp_exec: false,
         copilot_install_dir: Some(std::path::Path::new(vscode_dir)),
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4166,6 +4322,178 @@ fn profile_no_copilot_install_dir_omits_section() {
 }
 
 #[test]
+fn profile_allows_dotnet_root_when_set() {
+    // Simulates actions/setup-dotnet installing the SDK in the writable
+    // dotnet CLI state directory, whose broad process-exec rule is denied.
+    let dotnet_root = "/Users/test/.dotnet";
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        extra_write: &[],
+        allow_socket: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        proxy_forced: false,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        dotnet_root: Some(std::path::Path::new(dotnet_root)),
+        git_hooks_path: None,
+        git_common_dir: None,
+        allow_gpg_signing: false,
+        deny_clipboard: false,
+        allow_jvm_attach: false,
+        allow_msbuild: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+    assert!(
+        p.contains(&format!("(allow file-read* (subpath \"{dotnet_root}\"))")),
+        "Profile must allow reading DOTNET_ROOT"
+    );
+    assert!(
+        p.contains(&format!(
+            "(allow file-map-executable (subpath \"{dotnet_root}\"))"
+        )),
+        "Profile must allow file-map-executable for DOTNET_ROOT (hostfxr/dylib loading)"
+    );
+    let exec_deny = p
+        .find(&format!("(deny process-exec (subpath \"{dotnet_root}\"))"))
+        .expect("writable ~/.dotnet must deny broad process execution");
+    let host_allow = p
+        .find(&format!(
+            "(allow process-exec (literal \"{dotnet_root}/dotnet\"))"
+        ))
+        .expect("DOTNET_ROOT must allow executing the dotnet host");
+    assert!(
+        host_allow > exec_deny,
+        "The narrow dotnet host allow must override the broad ~/.dotnet exec deny"
+    );
+    assert!(
+        p.contains(&format!(
+            "(deny file-write* (literal \"{dotnet_root}/dotnet\"))"
+        )),
+        "The executable dotnet host must remain read-only"
+    );
+    // MSBuild forks compiler workers (csc, VBCSCompiler) straight out of
+    // {DOTNET_ROOT}/sdk/<ver>/Roslyn/bincore, and copies apphost templates
+    // out of sdk/shared — both need exec re-allowed over the broad
+    // ~/.dotnet deny, same pattern as the host binary above.
+    for subdir in ["sdk", "shared"] {
+        let sub_allow = p
+            .find(&format!(
+                "(allow process-exec (subpath \"{dotnet_root}/{subdir}\"))"
+            ))
+            .unwrap_or_else(|| panic!("DOTNET_ROOT/{subdir} must allow process-exec"));
+        assert!(
+            sub_allow > exec_deny,
+            "The {subdir} exec allow must override the broad ~/.dotnet exec deny"
+        );
+        assert!(
+            p.contains(&format!(
+                "(deny file-write* (subpath \"{dotnet_root}/{subdir}\"))"
+            )),
+            "DOTNET_ROOT/{subdir} must remain read-only"
+        );
+    }
+}
+
+#[test]
+fn profile_no_dotnet_root_omits_section() {
+    let p = default_profile();
+    assert!(
+        !p.contains("DOTNET_ROOT"),
+        "Default profile should not have a DOTNET_ROOT section when unset"
+    );
+}
+
+/// `$DOTNET_ROOT/{sdk,shared}` are the only trees where cplt re-grants
+/// `process-exec` inside an otherwise-writable area, so they must stay
+/// read-only even when the user's own `allow.write` covers them — otherwise
+/// the agent can drop a binary there and execute it, bypassing
+/// `allow_tmp_exec` / `allow_cache_exec`. SBPL is last-match-wins, so this is
+/// purely a question of emission order.
+#[test]
+fn profile_dotnet_exec_paths_stay_readonly_under_user_allow_write() {
+    let dotnet_root = "/Users/test/.dotnet";
+    let p = generate_profile(&ProfileOptions {
+        project_dir: std::path::Path::new("/projects/app"),
+        home_dir: std::path::Path::new("/Users/test"),
+        extra_read: &[],
+        // The user allows writes to the whole dotnet root (or any parent).
+        extra_write: &[std::path::PathBuf::from(dotnet_root)],
+        allow_socket: &[],
+        extra_deny: &[],
+        existing_home_tool_dirs: None,
+        existing_app_dirs: None,
+        extra_ports: &[],
+        localhost_ports: &[],
+        proxy_port: None,
+        proxy_forced: false,
+        allow_env_files: false,
+        allow_localhost_any: false,
+        scratch_dir: None,
+        allow_tmp_exec: false,
+        copilot_install_dir: None,
+        java_home: None,
+        dotnet_root: Some(std::path::Path::new(dotnet_root)),
+        git_hooks_path: None,
+        git_common_dir: None,
+        allow_gpg_signing: false,
+        deny_clipboard: false,
+        allow_jvm_attach: false,
+        allow_msbuild: false,
+        allow_docker: false,
+        electron_app_dir: None,
+        agent: cplt::agent::Agent::Copilot,
+        agent_dirs: &[],
+        allow_cache_exec: &[],
+        allow_cache_exec_any: false,
+        allow_browser: false,
+    });
+
+    let user_write = p
+        .find(&format!("(allow file-write* (subpath \"{dotnet_root}\"))"))
+        .expect("user allow.write must be emitted");
+
+    for subdir in ["sdk", "shared"] {
+        let write_deny = p
+            .find(&format!(
+                "(deny file-write* (subpath \"{dotnet_root}/{subdir}\"))"
+            ))
+            .unwrap_or_else(|| panic!("DOTNET_ROOT/{subdir} must deny writes"));
+        assert!(
+            write_deny > user_write,
+            "the {subdir} write-deny must come AFTER the user's allow.write, \
+             or exec-allowed SDK dirs become writable (write-then-exec)"
+        );
+    }
+
+    let host_deny = p
+        .find(&format!(
+            "(deny file-write* (literal \"{dotnet_root}/dotnet\"))"
+        ))
+        .expect("dotnet host must deny writes");
+    assert!(
+        host_deny > user_write,
+        "the dotnet host write-deny must come AFTER the user's allow.write"
+    );
+}
+
+#[test]
 fn profile_allows_electron_app_bundle() {
     let electron_dir = "/Applications/Visual Studio Code.app/Contents";
     let p = generate_profile(&ProfileOptions {
@@ -4187,11 +4515,13 @@ fn profile_allows_electron_app_bundle() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: Some(std::path::Path::new(electron_dir)),
         agent: cplt::agent::Agent::Copilot,
@@ -4346,11 +4676,13 @@ fn profile_allows_git_hooks_path() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: Some(std::path::Path::new("/Users/test/.config/git/hooks")),
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4407,11 +4739,13 @@ fn profile_allows_git_worktree_common_dir() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: Some(std::path::Path::new("/Users/test/repos/main-repo/.git")),
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4560,11 +4894,13 @@ fn profile_gpg_signing_allows_public_keyring() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4608,11 +4944,13 @@ fn profile_gpg_signing_allows_agent_socket() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4653,11 +4991,13 @@ fn profile_gpg_signing_denies_private_keys() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4697,11 +5037,13 @@ fn profile_gpg_signing_rules_come_after_deny() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4751,11 +5093,13 @@ fn profile_gpg_signing_uses_literal_not_subpath() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4793,11 +5137,13 @@ fn profile_gpg_signing_deny_path_wins() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4838,11 +5184,13 @@ fn profile_gpg_signing_denies_legacy_secring() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -4878,11 +5226,13 @@ fn profile_gpg_signing_allows_socket_file_read() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: true,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5177,6 +5527,54 @@ fn env_gradle_macos_sandbox_respects_pass_env() {
 }
 
 // ============================================================
+// build_sandbox_env — DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER injection
+// ============================================================
+
+#[test]
+fn env_injects_dotnet_do_not_use_msbuild_server() {
+    let parent = make_env(&[("HOME", "/Users/test"), ("PATH", "/usr/bin")]);
+    let env = build_sandbox_env(&parent, &[], false, &[], None, cplt::agent::Agent::Copilot);
+
+    let dotnet = env
+        .vars
+        .iter()
+        .find(|(k, _)| k == "DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER");
+    assert!(
+        dotnet.is_some(),
+        "DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER should always be injected to disable persistent server reuse"
+    );
+    assert_eq!(dotnet.unwrap().1, "1");
+}
+
+#[test]
+fn env_dotnet_do_not_use_msbuild_server_respects_pass_env() {
+    let parent = make_env(&[
+        ("HOME", "/Users/test"),
+        ("DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER", "0"),
+    ]);
+    let extra = vec!["DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER".to_string()];
+    let env = build_sandbox_env(
+        &parent,
+        &extra,
+        false,
+        &[],
+        None,
+        cplt::agent::Agent::Copilot,
+    );
+
+    let dotnet = env
+        .vars
+        .iter()
+        .find(|(k, _)| k == "DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER");
+    assert!(dotnet.is_some());
+    assert_eq!(
+        dotnet.unwrap().1,
+        "0",
+        "--pass-env should prevent forcing DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER=1"
+    );
+}
+
+// ============================================================
 // NODE_OPTIONS sanitization — strip dangerous preload flags
 // ============================================================
 
@@ -5372,11 +5770,13 @@ fn profile_docker_disabled_by_default() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5418,11 +5818,13 @@ fn profile_docker_enabled_allows_config_and_sockets() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: true,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5496,11 +5898,13 @@ fn profile_docker_skipped_when_deny_path_overlaps() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: true,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5543,11 +5947,13 @@ fn profile_socket_allows_rules() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5606,11 +6012,13 @@ fn profile_socket_skipped_when_deny_path_overlaps() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5663,11 +6071,13 @@ fn profile_allow_cache_exec_subdir_adds_carveout() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5714,11 +6124,13 @@ fn profile_allow_cache_exec_any_allows_all_caches() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5759,11 +6171,13 @@ fn profile_default_denies_cache_exec() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5800,11 +6214,13 @@ fn profile_allow_cache_exec_multiple_subdirs() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5924,11 +6340,13 @@ fn profile_cache_exec_carveout_comes_after_exec_deny() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -5971,6 +6389,7 @@ fn repo_key_target_maps_sandbox_booleans_to_propose() {
 
     let propose_keys = [
         "sandbox.allow_jvm_attach",
+        "sandbox.allow_msbuild",
         "sandbox.allow_localhost_any",
         "sandbox.allow_docker",
         "sandbox.allow_tmp_exec",
@@ -6217,11 +6636,13 @@ fn chromium_runtime_rules_emitted_for_ms_playwright() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6276,11 +6697,13 @@ fn chromium_runtime_rules_emitted_for_ms_playwright_subpath() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6324,11 +6747,13 @@ fn chromium_runtime_rules_absent_by_default() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6369,11 +6794,13 @@ fn chromium_runtime_rules_absent_for_unrelated_cache_exec() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6415,11 +6842,13 @@ fn chromium_runtime_rules_absent_for_cache_exec_any_alone() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6470,11 +6899,13 @@ fn chromium_runtime_rules_absent_for_near_miss_names() {
             allow_tmp_exec: false,
             copilot_install_dir: None,
             java_home: None,
+            dotnet_root: None,
             git_hooks_path: None,
             git_common_dir: None,
             allow_gpg_signing: false,
             deny_clipboard: false,
             allow_jvm_attach: false,
+            allow_msbuild: false,
             allow_docker: false,
             electron_app_dir: None,
             agent: cplt::agent::Agent::Copilot,
@@ -6528,11 +6959,13 @@ fn existing_app_dirs_none_includes_all() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6576,11 +7009,13 @@ fn existing_app_dirs_matching_includes_dir() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6625,11 +7060,13 @@ fn existing_app_dirs_nonmatching_excludes_dir() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6682,11 +7119,13 @@ fn existing_app_dirs_per_path_filtering() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6772,11 +7211,13 @@ fn profile_opencode_config_dir_write_scoped_to_auth_json() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::OpenCode,
@@ -6855,11 +7296,13 @@ fn deny_clipboard_emits_pasteboard_deny_after_allow() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: true,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -6902,11 +7345,13 @@ fn no_deny_clipboard_by_default() {
         allow_tmp_exec: false,
         copilot_install_dir: None,
         java_home: None,
+        dotnet_root: None,
         git_hooks_path: None,
         git_common_dir: None,
         allow_gpg_signing: false,
         deny_clipboard: false,
         allow_jvm_attach: false,
+        allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
         agent: cplt::agent::Agent::Copilot,
@@ -7010,6 +7455,7 @@ use_bubblewrap = false
 quiet = false
 yes = false
 allow_jvm_attach = false
+allow_msbuild = false
 gradle_init = false
 allow_docker = false
 allow_cache_exec = []

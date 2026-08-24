@@ -175,6 +175,31 @@ mod project_tests {
             p
         }
 
+        fn scaffold_dotnet() -> Self {
+            let p = Self::new("dotnet");
+            p.write_file(
+                "testapp.csproj",
+                r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"#,
+            );
+            p.write_file(
+                "Program.cs",
+                "Console.WriteLine(\"May the Force be with you.\");\n",
+            );
+            p.write_file("README.md", "# Test .NET App\n");
+            p.write_file(".gitignore", ".env*\nbin/\nobj/\n");
+            p.git_init();
+            p.write_file(".env", "DB_HOST=localhost\nDB_PASS=secret\n");
+            p
+        }
+
         fn scaffold_python() -> Self {
             let p = Self::new("python");
             p.write_file("requirements.txt", "flask==3.0.0\nrequests==2.31.0\n");
@@ -306,9 +331,17 @@ fun main() {
         let output = Command::new(binary_path())
             .args(["--yes", "--no-validate"])
             .args(["--project-dir", &project.canonical_path().to_string_lossy()])
+            // Explicit so the test's intended fake "copilot" can't be silently
+            // overridden by a `sandbox.agent` set in the real ~/.config/cplt
+            // config.toml (CLI --agent takes precedence over config).
+            .args(["--agent", "copilot"])
             .args(extra_args)
             .args(["--", "--version"]) // fake copilot ignores this
             .env("PATH", &new_path)
+            // Point at a config file that doesn't exist so a developer's real
+            // ~/.config/cplt/config.toml (allow_docker, allow_msbuild, etc.)
+            // can never leak into these tests' sandbox behavior.
+            .env("CPLT_CONFIG", "/dev/null/nonexistent")
             .output()
             .expect("cplt should run");
 
@@ -913,8 +946,10 @@ if [ "${GIT_TERMINAL_PROMPT:-}" = "0" ]; then echo "RESULT:env_hardening_git:OK"
         let output = Command::new(binary_path())
             .args(["--yes", "--no-validate"])
             .args(["--project-dir", &project.canonical_path().to_string_lossy()])
+            .args(["--agent", "copilot"])
             .args(["--", "--version"])
             .env("PATH", &new_path)
+            .env("CPLT_CONFIG", "/dev/null/nonexistent")
             .env("AWS_SECRET_ACCESS_KEY", "FAKESECRET")
             .env("DATABASE_URL", "postgres://localhost/prod")
             .env("NPM_TOKEN", "npm_faketoken")
@@ -1400,6 +1435,180 @@ esac
         // go test should be blocked: sandbox denies exec from temp dirs
         assert_result_fail(&stdout, "go_test_no_scratch");
         assert_result_ok(&stdout, "deny_signature");
+    }
+
+    // ============================================================
+    // .NET / MSBuild tests
+    // ============================================================
+
+    enum DotnetAvailability {
+        Missing,
+        /// SDK found, but its major version is below the `net8.0` the fixture targets.
+        TooOld(String),
+        Available,
+    }
+
+    fn dotnet_availability() -> DotnetAvailability {
+        let Ok(output) = Command::new("dotnet").arg("--version").output() else {
+            return DotnetAvailability::Missing;
+        };
+        if !output.status.success() {
+            return DotnetAvailability::Missing;
+        }
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let major = version
+            .split('.')
+            .next()
+            .and_then(|s| s.parse::<u32>().ok());
+        match major {
+            Some(m) if m >= 8 => DotnetAvailability::Available,
+            _ => DotnetAvailability::TooOld(version),
+        }
+    }
+
+    /// `dotnet build` works end-to-end inside the sandbox with --allow-msbuild.
+    /// MSBuild forks out-of-proc worker nodes that talk to the client over a
+    /// Unix domain socket at /tmp/MSBuild<pid> — this is real MSBuild worker-node
+    /// IPC, not the synthetic socket simulation used by the profile-level tests.
+    #[test]
+    fn project_dotnet_build_works_with_allow_msbuild() {
+        require_sandbox!();
+        match dotnet_availability() {
+            DotnetAvailability::Missing => {
+                eprintln!("SKIPPED: dotnet not available");
+                return;
+            }
+            DotnetAvailability::TooOld(found) => {
+                eprintln!(
+                    "SKIPPED: dotnet {found} found, but the fixture targets net8.0 \
+                     (requires SDK major version >= 8)"
+                );
+                return;
+            }
+            DotnetAvailability::Available => {}
+        }
+
+        let project = TempProject::scaffold_dotnet();
+        let script = r#"
+if BUILD_OUTPUT=$(dotnet build --nologo 2>&1); then
+    echo "RESULT:dotnet_build:OK"
+else
+    echo "DOTNET_ERROR: $BUILD_OUTPUT" >&2
+    # MSBuild's worker-node pipe is created under $TMPDIR (NamedPipeUtil.
+    # GetPlatformSpecificPipeName uses Path.GetTempPath(), which reads TMPDIR
+    # on Unix) — surface it so a sandbox_deny failure shows the actual path
+    # the sandbox needed to allow, not just the /tmp path we assume by default.
+    echo "DOTNET_TMPDIR: ${TMPDIR:-/tmp}" >&2
+    case "$BUILD_OUTPUT" in
+        *"Operation not permitted"*|*"not permitted"*|*"Permission denied"*)
+            echo "RESULT:dotnet_build:FAIL:sandbox_deny"
+            ;;
+        *)
+            # An unrelated build failure (missing targeting pack, restore error,
+            # etc.) is still a failure — never report OK for a build that didn't
+            # succeed, or a red build could masquerade as a passing test.
+            echo "RESULT:dotnet_build:FAIL:build_error"
+            ;;
+    esac
+    echo "RESULT:dotnet_run:FAIL:build_failed"
+    exit 0
+fi
+
+# Prove the build actually produced a working binary, not just a green exit code.
+if RUN_OUTPUT=$(dotnet bin/Debug/net8.0/testapp.dll 2>&1); then
+    case "$RUN_OUTPUT" in
+        *"May the Force be with you."*)
+            echo "RESULT:dotnet_run:OK"
+            ;;
+        *)
+            echo "RESULT:dotnet_run:FAIL:unexpected_output:$RUN_OUTPUT"
+            ;;
+    esac
+else
+    echo "RESULT:dotnet_run:FAIL:$RUN_OUTPUT"
+fi
+"#;
+        let fake_dir = create_fake_copilot(&project, script);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &["--allow-msbuild"]);
+
+        assert!(
+            success,
+            "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        // Include stderr (DOTNET_ERROR + DOTNET_TMPDIR) directly in the failing
+        // assertion so a CI failure shows the actual dotnet error and the
+        // observed TMPDIR/pipe location without needing a re-run.
+        assert!(
+            stdout.contains("RESULT:dotnet_build:OK"),
+            "Expected RESULT:dotnet_build:OK in output.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains("RESULT:dotnet_run:OK"),
+            "Expected RESULT:dotnet_run:OK in output.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
+
+    /// Verify DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER=1 is injected inside the
+    /// sandbox, so `dotnet build` never starts or reuses a persistent MSBuild
+    /// Server process (which would listen on a differently-named, unallowed
+    /// socket: MSBuildServer-<hash> rather than MSBuild<pid>).
+    #[test]
+    fn project_dotnet_do_not_use_msbuild_server_env() {
+        require_sandbox!();
+        let project = TempProject::scaffold_dotnet();
+
+        let script = r#"
+if [ "$DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER" = "1" ]; then
+    echo "RESULT:dotnet_server_disabled:OK"
+else
+    echo "RESULT:dotnet_server_disabled:FAIL:got=${DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER:-unset}"
+fi
+"#;
+        let fake_dir = create_fake_copilot(&project, script);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
+
+        assert!(
+            success,
+            "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_result_ok(&stdout, "dotnet_server_disabled");
+    }
+
+    /// Without --allow-msbuild, a project run must not be able to open an
+    /// MSBuild worker-node socket — verified at the project/CLI layer (raw
+    /// profile coverage lives in `tests/integration.rs`).
+    #[test]
+    fn project_dotnet_blocked_msbuild_socket_without_flag() {
+        require_sandbox!();
+        let project = TempProject::scaffold_dotnet();
+        let cmd = r#"python3 -c "
+import socket, os
+SOCK = '/tmp/MSBuild77777'
+try: os.unlink(SOCK)
+except: pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.bind(SOCK)
+    print('RESULT:msbuild_socket:OK:EXPOSED')
+except PermissionError:
+    print('RESULT:msbuild_socket:OK:BLOCKED')
+except OSError as e:
+    print('RESULT:msbuild_socket:OK:BLOCKED' if e.errno == 1 else f'RESULT:msbuild_socket:FAIL:{e}')
+finally:
+    s.close()
+""#;
+        let fake_dir = create_fake_copilot(&project, cmd);
+        let (stdout, stderr, success) = run_cplt(&project, &fake_dir, &[]);
+
+        assert!(
+            success,
+            "cplt should succeed.\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_result_ok(&stdout, "msbuild_socket");
+        assert!(
+            stdout.contains("BLOCKED"),
+            "MSBuild socket must be blocked without --allow-msbuild, got: {stdout}"
+        );
     }
 
     // ============================================================
@@ -1949,8 +2158,10 @@ if [ -n "${CLASSPATH:-}" ]; then echo "RESULT:env_classpath:OK"; else echo "RESU
         let output = Command::new(binary_path())
             .args(["--yes", "--no-validate"])
             .args(["--project-dir", &project.canonical_path().to_string_lossy()])
+            .args(["--agent", "copilot"])
             .args(["--", "--version"])
             .env("PATH", &new_path)
+            .env("CPLT_CONFIG", "/dev/null/nonexistent")
             .env("JAVA_HOME", "/opt/java/21")
             .env("MAVEN_OPTS", "-Xmx512m -Djava.io.tmpdir=/tmp")
             .env("JAVA_TOOL_OPTIONS", "-Dfile.encoding=UTF-8")
@@ -2165,8 +2376,10 @@ esac
             .args(["--yes", "--no-validate"])
             .args(["--project-dir", &project.canonical_path().to_string_lossy()])
             .args(["--scratch-dir"])
+            .args(["--agent", "copilot"])
             .args(["--", "--version"])
             .env("PATH", &new_path)
+            .env("CPLT_CONFIG", "/dev/null/nonexistent")
             .env("JAVA_TOOL_OPTIONS", "-Xmx256m")
             .output()
             .expect("cplt should run");

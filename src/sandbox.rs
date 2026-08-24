@@ -114,6 +114,8 @@ pub struct SandboxConfig<'a> {
     pub copilot_install_dir: Option<&'a Path>,
     /// JAVA_HOME directory — grants JDK read + dylib loading.
     pub java_home: Option<&'a Path>,
+    /// DOTNET_ROOT directory — grants .NET SDK read + dylib loading.
+    pub dotnet_root: Option<&'a Path>,
     /// Global git hooks directory from `core.hooksPath`.
     pub git_hooks_path: Option<&'a Path>,
     /// Shared .git directory for git worktrees.
@@ -122,6 +124,8 @@ pub struct SandboxConfig<'a> {
     pub deny_clipboard: bool,
     /// Allow JVM Attach API unix sockets in /tmp (.java_pid* pattern only).
     pub allow_jvm_attach: bool,
+    /// Allow MSBuild worker-node unix sockets in /tmp (MSBuild<pid> pattern only).
+    pub allow_msbuild: bool,
     /// Allow Docker/Colima/OrbStack access (daemon socket + ~/.docker read).
     pub allow_docker: bool,
     /// Electron app bundle Contents directory (macOS only, ignored on Linux).
@@ -275,11 +279,13 @@ fn prepare_impl(config: &SandboxConfig) -> Result<PreparedSandbox, String> {
         allow_tmp_exec: config.allow_tmp_exec,
         copilot_install_dir: config.copilot_install_dir,
         java_home: config.java_home,
+        dotnet_root: config.dotnet_root,
         git_hooks_path: config.git_hooks_path,
         git_common_dir: config.git_common_dir,
         allow_gpg_signing: config.allow_gpg_signing,
         deny_clipboard: config.deny_clipboard,
         allow_jvm_attach: config.allow_jvm_attach,
+        allow_msbuild: config.allow_msbuild,
         allow_docker: config.allow_docker,
         electron_app_dir: config.electron_app_dir,
         agent: config.agent,
@@ -447,6 +453,9 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
     }
     if let Some(dir) = config.java_home {
         policy::validate_sbpl_path(dir).map_err(|e| format!("JAVA_HOME: {e}"))?;
+    }
+    if let Some(dir) = config.dotnet_root {
+        policy::validate_sbpl_path(dir).map_err(|e| format!("DOTNET_ROOT: {e}"))?;
     }
     if let Some(p) = config.git_hooks_path {
         policy::validate_sbpl_path(p).map_err(|e| format!("Git hooks path: {e}"))?;

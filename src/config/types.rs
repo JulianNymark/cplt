@@ -592,12 +592,21 @@ pub struct SandboxConfig {
     /// Only allows sockets matching /tmp/.java_pid<PID> — SSH agent and
     /// all other unix sockets remain blocked.
     pub allow_jvm_attach: Option<bool>,
+    /// Allow MSBuild worker-node unix sockets in /tmp (default: false).
+    /// Needed for `dotnet build`, which forks worker nodes that communicate
+    /// with the client over a Unix domain socket at /tmp/MSBuild<PID>.
+    /// This does NOT allow the persistent MSBuild Server (MSBuildServer-<hash>),
+    /// which stays blocked — reuse of that server is also disabled via
+    /// DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER=1. SSH agent and all other unix
+    /// sockets remain blocked.
+    pub allow_msbuild: Option<bool>,
     /// Install a cplt-managed Gradle init script in the Gradle user home
     /// (`$GRADLE_USER_HOME/init.d/` or `~/.gradle/init.d/`) that applies the
     /// preferIPv4Stack workaround inside the sandbox (default: false).
     /// Opt-in: writes to a tool config dir, so it is off unless the
     /// user asks for it.
     pub gradle_init: Option<bool>,
+    /// Allow Docker/Colima/OrbStack access inside the sandbox (default: false).
     /// DANGEROUS: Docker can mount any host path via container volumes, completely
     /// bypassing sandbox filesystem restrictions. Only enable if you trust the
     /// agent's container usage.
@@ -754,6 +763,7 @@ pub struct Resolved {
     pub allow_gpg_signing: bool,
     pub deny_clipboard: bool,
     pub allow_jvm_attach: bool,
+    pub allow_msbuild: bool,
     pub gradle_init: bool,
     pub allow_docker: bool,
     pub allow_tmp_exec: bool,
@@ -825,6 +835,7 @@ pub struct CliFlags {
     pub allow_gpg_signing: bool,
     pub deny_clipboard: bool,
     pub allow_jvm_attach: bool,
+    pub allow_msbuild: bool,
     pub gradle_init: bool,
     /// Preset-controlled toggle (see `allow_localhost_any`).
     pub allow_docker: FeatureToggle,

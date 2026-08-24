@@ -50,6 +50,7 @@ pub struct DenySection {
 pub struct ProposeSection {
     pub allow_localhost_any: Option<bool>,
     pub allow_jvm_attach: Option<bool>,
+    pub allow_msbuild: Option<bool>,
     /// Propose installing the cplt-managed Gradle init script (see
     /// `sandbox.gradle_init`). Writes to the Gradle user home, so it goes
     /// through the same trust review as other sandbox relaxations.
@@ -260,6 +261,9 @@ pub fn proposed_keys(propose: &ProposeSection) -> Vec<&'static str> {
     }
     if propose.allow_jvm_attach == Some(true) {
         keys.push("allow_jvm_attach");
+    }
+    if propose.allow_msbuild == Some(true) {
+        keys.push("allow_msbuild");
     }
     if propose.gradle_init == Some(true) {
         keys.push("gradle_init");

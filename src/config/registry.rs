@@ -326,6 +326,14 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
     },
     ConfigKeyInfo {
         section: "sandbox",
+        key: "allow_msbuild",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Allow MSBuild worker-node unix sockets for `dotnet build` (not the persistent MSBuild Server).",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
         key: "gradle_init",
         value_type: ConfigValueType::Bool,
         dangerous: false,
@@ -576,6 +584,7 @@ mod tests {
     fn lookup_key_valid_keys() {
         assert!(lookup_key("sandbox.quiet").is_ok());
         assert!(lookup_key("sandbox.allow_jvm_attach").is_ok());
+        assert!(lookup_key("sandbox.allow_msbuild").is_ok());
         assert!(lookup_key("proxy.port").is_ok());
         assert!(lookup_key("allow.ports").is_ok());
         assert!(lookup_key("deny.paths").is_ok());

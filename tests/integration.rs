@@ -405,11 +405,13 @@ mod macos_tests {
             allow_tmp_exec: false,
             copilot_install_dir: None,
             java_home: None,
+            dotnet_root: None,
             git_hooks_path: None,
             git_common_dir: None,
             allow_gpg_signing: false,
             deny_clipboard: false,
             allow_jvm_attach: false,
+            allow_msbuild: false,
             allow_docker: false,
             electron_app_dir: None,
             agent: cplt::agent::Agent::Copilot,
@@ -1352,6 +1354,88 @@ t.join(2)
         assert!(
             output.contains("OK"),
             "JVM Attach socket in /var/folders should be allowed, got: {output}"
+        );
+    }
+
+    #[test]
+    fn real_profile_allows_msbuild_socket_in_tmp() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let mut opts = default_opts(&project, &home);
+        opts.allow_msbuild = true;
+        let profile = write_real_profile(&opts);
+
+        // Simulate MSBuild worker-node IPC: bind+connect a MSBuild<pid> socket
+        let cmd = r#"python3 -c "
+import socket, os, threading, time
+SOCK = '/tmp/MSBuild99999'
+try: os.unlink(SOCK)
+except: pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(SOCK)
+s.listen(1)
+s.settimeout(3)
+def accept():
+    try:
+        c,_ = s.accept()
+        c.send(b'OK')
+        c.close()
+    except: pass
+t = threading.Thread(target=accept)
+t.start()
+time.sleep(0.2)
+c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+c.connect(SOCK)
+print(c.recv(10).decode())
+c.close()
+s.close()
+os.unlink(SOCK)
+t.join(2)
+""#;
+        let (output, _) = run_sandboxed(&profile, cmd);
+
+        fs::remove_file(&profile).ok();
+        assert!(
+            output.contains("OK"),
+            "MSBuild socket (MSBuild<pid>) should be allowed, got: {output}"
+        );
+    }
+
+    #[test]
+    fn real_profile_blocks_msbuild_socket_without_flag() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let home = home_dir();
+        let opts = default_opts(&project, &home);
+        let profile = write_real_profile(&opts);
+
+        // Without --allow-msbuild, binding a MSBuild<pid> socket must be denied.
+        let cmd = r#"python3 -c "
+import socket, os
+SOCK = '/tmp/MSBuild88888'
+try: os.unlink(SOCK)
+except: pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.bind(SOCK)
+    print('EXPOSED')
+except PermissionError:
+    print('BLOCKED')
+except OSError as e:
+    if e.errno == 1:
+        print('BLOCKED')
+    else:
+        print(f'ERROR:{e}')
+finally:
+    s.close()
+""#;
+        let (output, _) = run_sandboxed(&profile, cmd);
+
+        fs::remove_file(&profile).ok();
+        assert!(
+            output.contains("BLOCKED") || output.contains("Operation not permitted"),
+            "MSBuild socket must be blocked without --allow-msbuild, got: {output}"
         );
     }
 
