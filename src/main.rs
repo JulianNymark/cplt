@@ -1733,22 +1733,19 @@ fn resolve_domain_allowlist_decision(
     }
 }
 
-/// Agent-facing sandbox brief (issue #148; opt-out via --no-brief /
-/// sandbox.brief = false). Two-layer context injection:
-/// - session: fresh scratch `CPLT_BRIEF.md` rendered from the resolved
-///   policy (never a static template).
-/// - persistent: managed `AGENTS.md` block in the project root, written
-///   BEFORE the agent process starts (this whole setup phase is
-///   unsandboxed) and left for the user to commit — the git diff IS the
-///   audit trail, no hidden writes.
+/// Session layer of the sandbox brief (issue #148; opt-out via --no-brief /
+/// sandbox.brief = false): a fresh scratch `CPLT_BRIEF.md` rendered from the
+/// resolved policy, never a static template.
+///
+/// Safe for every entry point — the scratch dir is created per run and torn
+/// down with it, so nothing outside the sandbox is touched.
 ///
 /// Best-effort: any failure is warned about, never fatal — a missing brief
 /// shouldn't block the agent from launching.
-fn apply_agent_sandbox_brief(
+fn write_session_sandbox_brief(
     resolved: &config::Resolved,
     active_agent: agent::Agent,
     scratch_path: Option<&Path>,
-    project_dir: &Path,
 ) {
     if !resolved.brief {
         return;
@@ -1758,6 +1755,30 @@ fn apply_agent_sandbox_brief(
         if let Err(e) = brief::write_session_brief(scratch, &content) {
             ui::warn(&format!("Could not write sandbox brief: {e}"));
         }
+    }
+}
+
+/// Persistent layer of the sandbox brief: a managed `AGENTS.md` block in the
+/// project root, written BEFORE the agent process starts (this whole setup
+/// phase is unsandboxed) and left for the user to commit — the git diff IS the
+/// audit trail, no hidden writes.
+///
+/// Only the agent-launch path calls this. `cplt check` and `cplt exec` share
+/// the same sandbox preparation but must not mutate the user's project: check
+/// is a read-only diagnostic that prints a report, and exec runs one command.
+/// Writing AGENTS.md from either would be a side effect nobody asked for.
+///
+/// Skipped outside a git work tree, where the "git diff is the audit trail"
+/// guarantee does not hold — there the write would be exactly the kind of
+/// silent, unreviewable mutation this design set out to avoid.
+///
+/// Best-effort: any failure is warned about, never fatal.
+fn apply_persistent_sandbox_brief(resolved: &config::Resolved, project_dir: &Path) {
+    if !resolved.brief {
+        return;
+    }
+    if !in_git_work_tree(project_dir) {
+        return;
     }
     let agents_md = project_dir.join("AGENTS.md");
     match brief::upsert_managed_block(&agents_md) {
@@ -1776,6 +1797,18 @@ fn apply_agent_sandbox_brief(
             ));
         }
     }
+}
+
+/// Is `dir` inside a git work tree?
+///
+/// Bare repos and plain directories both answer no: `--is-inside-work-tree`
+/// prints `false` for a bare repo and fails outright outside a repository.
+fn in_git_work_tree(dir: &Path) -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(dir)
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout.starts_with(b"true"))
 }
 
 fn start_proxy_if_enabled(
@@ -2416,8 +2449,9 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     // After pre-creation, so a dir we just made resolves too. See #171.
     agent::canonicalize_agent_dirs(&mut agent_dirs);
 
-    // Agent-facing sandbox brief (issue #148) — see `apply_agent_sandbox_brief`.
-    apply_agent_sandbox_brief(&resolved, active_agent, scratch_path, &project_dir);
+    // Agent-facing sandbox brief (issue #148) — both layers on the agent path.
+    write_session_sandbox_brief(&resolved, active_agent, scratch_path);
+    apply_persistent_sandbox_brief(&resolved, &project_dir);
 
     // macOS-only, opt-in (sandbox.gradle_init): install the guarded Gradle
     // init script so sandboxed builds keep the preferIPv4Stack workaround for
@@ -2930,7 +2964,9 @@ fn prepare_shell_sandbox(
     agent::canonicalize_agent_dirs(&mut agent_dirs);
 
     // See the agent-path call site: agent-facing sandbox brief (issue #148).
-    apply_agent_sandbox_brief(resolved, active_agent, scratch_path, project_dir);
+    // Session layer only — `cplt check` and `cplt exec` must not write
+    // AGENTS.md into the user's project. See `apply_persistent_sandbox_brief`.
+    write_session_sandbox_brief(resolved, active_agent, scratch_path);
 
     // See the agent-path call site: guarded Gradle init script (opt-in via
     // sandbox.gradle_init) so sandboxed builds keep the preferIPv4Stack
@@ -6583,6 +6619,44 @@ mod tests {
             ..Default::default()
         };
         assert!(resolved_ip_block_item(&optin, "127.0.0.1", 443).is_none());
+    }
+
+    /// A plain directory is not a work tree, so the persistent brief must not
+    /// write there — outside git there is no diff to review the change in.
+    #[test]
+    fn in_git_work_tree_rejects_plain_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!in_git_work_tree(dir.path()));
+    }
+
+    #[test]
+    fn in_git_work_tree_accepts_initialised_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            return; // no git on this machine — nothing to assert
+        }
+        assert!(in_git_work_tree(dir.path()));
+    }
+
+    /// A bare repo has no work tree, so there is nothing to commit the managed
+    /// block into.
+    #[test]
+    fn in_git_work_tree_rejects_bare_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "--bare", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            return;
+        }
+        assert!(!in_git_work_tree(dir.path()));
     }
 }
 
