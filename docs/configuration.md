@@ -111,6 +111,8 @@ The settings below are machine-specific or local CLI preferences, so `.cplt.toml
 | `sandbox.yes` | local prompt-skip preference |
 | `sandbox.validate` | local launch behavior |
 | `sandbox.scratch_dir` | local temp handling |
+| `sandbox.brief` | local agent-context preference |
+| `sandbox.agents_md` | a repo must not be able to make cplt write into its own `AGENTS.md` |
 | `sandbox.use_bubblewrap` | depends on bwrap being installed on the machine |
 | `sandbox.pass_env` | machine-specific env passthrough |
 | `sandbox.audit` | local output preference, not project sandbox policy |
@@ -165,6 +167,43 @@ cplt config explain proxy.forced
 For arrays of objects, multi-line values, and other complex configuration, edit the file directly and run `cplt config validate` afterwards.
 
 **Dotted keys:** a dotted key belongs to whatever section header precedes it. `allow.read = [...]` is valid on its own — above every header, or written as `read = [...]` under `[allow]` — but the same line below `[git_guard]` means `git_guard.allow.read`. cplt then sees an unknown key and ignores it, with a warning at launch and an error from `cplt config validate`, so the grant never takes effect.
+
+## Agent sandbox brief (`sandbox.brief`, `sandbox.agents_md`)
+
+An agent inside the sandbox has no way of knowing it is sandboxed: it hits
+`EPERM`, assumes a bug, and retries. cplt can hand it the answer up front, in
+two layers.
+
+**`sandbox.brief` (default `true`)** — writes `CPLT_BRIEF.md` into the
+per-session scratch directory (the one `$TMPDIR` points at inside the sandbox).
+It is rendered from the resolved policy for *that* launch — network mode,
+`.env` handling, credential denies — and disappears with the scratch dir when
+the session ends. It never touches your project.
+
+**`sandbox.agents_md` (default `false`, opt-in)** — additionally injects a
+managed block into `<project>/AGENTS.md`, creating the file if it does not
+exist. This writes into your repository, which is why it is off by default:
+
+- The block is delimited by `<!-- cplt:sandbox begin -->` /
+  `<!-- cplt:sandbox end -->` markers. Re-runs replace it in place; content
+  outside the markers is never touched.
+- It contains no policy detail from your machine — the same generic text for
+  every repo, safe to commit.
+- It is written only on an actual agent launch, after the confirmation prompt.
+  `--print-profile`, `cplt check`, `cplt exec` and a declined prompt leave the
+  repo untouched.
+- Skipped outside a git work tree, and skipped with a warning if the file
+  somehow ends up with more than one marker pair.
+
+Turn it on globally:
+
+```bash
+cplt config set sandbox.agents_md true
+```
+
+Both are global-only keys — a repository cannot ask cplt to write into its own
+`AGENTS.md`. `--no-brief` (or `sandbox.brief = false`) disables both layers for
+a run.
 
 ## Per-repo configuration (`.cplt.toml`)
 
