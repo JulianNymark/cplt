@@ -356,6 +356,24 @@ forkOptions {
 
 Known affected: `ktlint-gradle` ([JLLeitschuh/ktlint-gradle#1110](https://github.com/JLLeitschuh/ktlint-gradle/issues/1110)). SBPL itself cannot be fixed — macOS sandbox profiles have no primitive for IPv4-mapped addresses, which is why cplt uses the `preferIPv4Stack` workaround at all.
 
+## Gradle toolchain JDKs
+
+`~/.gradle` is a dependency store: the sandbox grants read, write, and `file-map-executable` (for JNI libs) but **not** `process-exec`, so a rogue agent cannot drop a binary into the dependency cache and run it. Gradle's toolchain support auto-provisions JDKs into `~/.gradle/jdks`, which lands inside that non-executable tree — forking a toolchain `javac` or test JVM failed with `Operation not permitted`, and no config key could grant exec.
+
+cplt now carves `~/.gradle/jdks` back out as executable, and makes it **read-only** to keep the write-then-exec hole closed. Consequence: with `org.gradle.java.installations.auto-download=true`, a toolchain that is not already on disk fails at provisioning time with a write error instead of at exec time. Provision it once outside cplt, or use a JDK outside `~/.gradle`:
+
+```properties
+# ~/.gradle/gradle.properties
+org.gradle.java.installations.auto-download=false
+org.gradle.java.installations.paths=/Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home
+```
+
+Note that the provisioning failure surfaces as `foojay (Unable to download toolchain ..., due to: java.io.IOException: Operation not permitted)`, which reads like a network problem. It is the write being denied, not the download — check the proxy only after ruling this out.
+
+Two limits worth knowing. Both rules match the *resolved* path, so if `~/.gradle/jdks` is a symlink to another volume they silently do not apply; the agent cannot create that symlink itself (the same rules deny writing or `mkdir` at that path), so it takes a pre-existing relocation. And a relocated `GRADLE_USER_HOME` misses the rules entirely — but that is pre-existing, since the whole `~/.gradle` grant is keyed to the default location.
+
+**Linux:** unaffected. Landlock has a single `EXECUTE` right covering both `execve` and executable mappings, so the map-exec grant on `~/.gradle` already implies exec there — the carve-out is macOS-only, and the read-only pairing cannot be expressed on Linux for the same reason [`DENIED_HOME_SUBPATHS`](#private-registries) cannot.
+
 ## JVM Attach API
 
 JVM testing frameworks like **MockK** (inline mocking), **Mockito** (inline agents), and **ByteBuddy** use the JVM Attach API for runtime class instrumentation. This API creates a Unix domain socket at `/tmp/.java_pid<PID>` — which the sandbox blocks by default.
