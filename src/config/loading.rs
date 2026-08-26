@@ -343,12 +343,16 @@ impl Config {
             !self.sandbox.validate.unwrap_or(true)
         };
 
-        // Brief: --no-brief wins, then config, then true (brief on by default).
+        // Brief: --no-brief wins, then config, then true (the session brief in
+        // the scratch dir is on by default — it never touches the project).
         let brief = if cli.no_brief {
             false
         } else {
             self.sandbox.brief.unwrap_or(true)
         };
+        // AGENTS.md injection writes into the user's repo, so it is opt-in and
+        // gated on `brief` — `--no-brief` stays a kill switch for both layers.
+        let agents_md = brief && self.sandbox.agents_md.unwrap_or(false);
 
         // Allow-env-files: explicit CLI flag wins, then explicit config value,
         // then the preset baseline (false when no preset — deny by default).
@@ -602,6 +606,7 @@ impl Config {
             allow_env_files,
             no_validate,
             brief,
+            agents_md,
             pass_env,
             inherit_env,
             allow_lifecycle_scripts,
@@ -1562,6 +1567,35 @@ validate = false
         let config: Config = toml::from_str("[sandbox]\nbrief = false\n").unwrap();
         let resolved = config.merge(CliFlags::default()).unwrap();
         assert!(!resolved.brief);
+    }
+
+    #[test]
+    fn agents_md_defaults_off() {
+        let resolved = Config::default().merge(CliFlags::default()).unwrap();
+        assert!(
+            !resolved.agents_md,
+            "writing into the project's AGENTS.md must be opt-in"
+        );
+    }
+
+    #[test]
+    fn config_agents_md_true_enables() {
+        let config: Config = toml::from_str("[sandbox]\nagents_md = true\n").unwrap();
+        let resolved = config.merge(CliFlags::default()).unwrap();
+        assert!(resolved.agents_md);
+    }
+
+    #[test]
+    fn no_brief_also_disables_agents_md() {
+        let config: Config = toml::from_str("[sandbox]\nagents_md = true\n").unwrap();
+        let resolved = config
+            .merge(CliFlags {
+                no_brief: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!resolved.brief);
+        assert!(!resolved.agents_md, "--no-brief kills both layers");
     }
 
     #[test]

@@ -226,7 +226,15 @@ pub(super) const CONFIG_KEYS: &[ConfigKeyInfo] = &[
         value_type: ConfigValueType::Bool,
         dangerous: false,
         default_display: "true",
-        description: "Generate the agent-facing sandbox brief (scratch CPLT_BRIEF.md) and inject the managed AGENTS.md block on every launch.",
+        description: "Write the per-session agent-facing sandbox brief (CPLT_BRIEF.md) to the scratch dir.",
+    },
+    ConfigKeyInfo {
+        section: "sandbox",
+        key: "agents_md",
+        value_type: ConfigValueType::Bool,
+        dangerous: false,
+        default_display: "false",
+        description: "Also inject the managed cplt sandbox block into the project's AGENTS.md on launch (opt-in: writes into the repo). Requires sandbox.brief.",
     },
     ConfigKeyInfo {
         section: "sandbox",

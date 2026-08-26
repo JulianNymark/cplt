@@ -313,6 +313,7 @@ mod tests {
             allow_env_files: false,
             no_validate: false,
             brief: true,
+            agents_md: false,
             pass_env: Vec::new(),
             inherit_env: false,
             allow_lifecycle_scripts: false,

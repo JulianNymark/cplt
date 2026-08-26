@@ -1907,13 +1907,10 @@ except Exception as e:
         // No require_sandbox!(): `--print-profile` only generates and prints the
         // SBPL text; it never invokes sandbox-exec, so it runs even when nested.
         let project = fs::canonicalize(".").unwrap();
-        // --no-brief: cwd/project-dir is the repo root — without it the launch
-        // injects the managed block into this repo's AGENTS.md (issue #112).
         let output = Command::new(binary_path())
             .args([
                 "--proxy-forced",
                 "--print-profile",
-                "--no-brief",
                 "--project-dir",
                 &project.to_string_lossy(),
             ])
@@ -1924,6 +1921,48 @@ except Exception as e:
         assert!(
             !stdout.contains("\"*:443\""),
             "`--proxy-forced --print-profile` must not allow direct *:443 egress, got:\n{stdout}"
+        );
+    }
+
+    /// `--print-profile` is a read-only diagnostic: it must not mutate the
+    /// project, even with the AGENTS.md brief layer explicitly turned on.
+    /// The write belongs after the launch confirmation, not before the
+    /// early return.
+    #[test]
+    fn binary_print_profile_does_not_write_agents_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(dir.path()).unwrap();
+        let git_ok = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&project)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !git_ok {
+            return; // no git on this machine — nothing to assert
+        }
+
+        let config = project.join("cplt-config.toml");
+        fs::write(&config, "[sandbox]\nbrief = true\nagents_md = true\n").unwrap();
+
+        let output = Command::new(binary_path())
+            .args([
+                "--print-profile",
+                "--project-dir",
+                &project.to_string_lossy(),
+            ])
+            .env("HOME", home_dir())
+            .env("CPLT_CONFIG", &config)
+            .output()
+            .expect("Failed to run cplt --print-profile");
+
+        assert!(
+            output.status.success(),
+            "--print-profile should succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !project.join("AGENTS.md").exists(),
+            "--print-profile must not create AGENTS.md"
         );
     }
 }

@@ -494,9 +494,8 @@ grants exec to every binary cached by any application. Prefer
     #[arg(long)]
     no_validate: bool,
 
-    /// Disable the agent-facing sandbox brief (scratch `CPLT_BRIEF.md`) and
-    /// the managed AGENTS.md block injection. On by default so the agent
-    /// knows it's sandboxed instead of retrying EPERM blindly.
+    /// Disable the agent-facing sandbox brief (scratch `CPLT_BRIEF.md`, on by
+    /// default) and, with it, the opt-in `sandbox.agents_md` AGENTS.md block.
     #[arg(long)]
     no_brief: bool,
 
@@ -1760,21 +1759,21 @@ fn write_session_sandbox_brief(
 
 /// Persistent layer of the sandbox brief: a managed `AGENTS.md` block in the
 /// project root, written BEFORE the agent process starts (this whole setup
-/// phase is unsandboxed) and left for the user to commit — the git diff IS the
-/// audit trail, no hidden writes.
+/// phase is unsandboxed) and left for the user to review and commit.
 ///
-/// Only the agent-launch path calls this. `cplt check` and `cplt exec` share
-/// the same sandbox preparation but must not mutate the user's project: check
-/// is a read-only diagnostic that prints a report, and exec runs one command.
-/// Writing AGENTS.md from either would be a side effect nobody asked for.
+/// Opt-in via `sandbox.agents_md` — it writes into the user's repository, which
+/// is not something to do by default. Only the agent-launch path calls it, and
+/// only once the launch has been confirmed: `cplt check`, `cplt exec` and every
+/// early return (`--print-profile`, a declined prompt) must leave the project
+/// untouched.
 ///
-/// Skipped outside a git work tree, where the "git diff is the audit trail"
-/// guarantee does not hold — there the write would be exactly the kind of
-/// silent, unreviewable mutation this design set out to avoid.
+/// Skipped outside a git work tree: a project checkout is the only place a
+/// committed AGENTS.md makes sense, and cplt should not leave a file behind in
+/// an arbitrary directory the user happened to point it at.
 ///
 /// Best-effort: any failure is warned about, never fatal.
 fn apply_persistent_sandbox_brief(resolved: &config::Resolved, project_dir: &Path) {
-    if !resolved.brief {
+    if !resolved.agents_md {
         return;
     }
     if !in_git_work_tree(project_dir) {
@@ -1784,9 +1783,12 @@ fn apply_persistent_sandbox_brief(resolved: &config::Resolved, project_dir: &Pat
     match brief::upsert_managed_block(&agents_md) {
         Ok(brief::BlockOutcome::SkippedAmbiguous) => {
             ui::warn(&format!(
-                "AGENTS.md has multiple cplt:sandbox managed blocks — skipped \
-                 (fix manually): {}",
-                agents_md.display()
+                "{} contains more than one '{}' / '{}' marker pair — skipped. \
+                 Delete the extra pair (keep at most one) or set \
+                 sandbox.agents_md = false.",
+                agents_md.display(),
+                brief::BLOCK_BEGIN,
+                brief::BLOCK_END
             ));
         }
         Ok(_) => {}
@@ -2449,9 +2451,10 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     // After pre-creation, so a dir we just made resolves too. See #171.
     agent::canonicalize_agent_dirs(&mut agent_dirs);
 
-    // Agent-facing sandbox brief (issue #148) — both layers on the agent path.
+    // Agent-facing sandbox brief (issue #148), session layer only. The
+    // AGENTS.md layer writes into the user's repo and must not run until the
+    // launch is confirmed — see the call after prompt_confirm below.
     write_session_sandbox_brief(&resolved, active_agent, scratch_path);
-    apply_persistent_sandbox_brief(&resolved, &project_dir);
 
     // macOS-only, opt-in (sandbox.gradle_init): install the guarded Gradle
     // init script so sandboxed builds keep the preferIPv4Stack workaround for
@@ -2569,6 +2572,12 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     if let Err(e) = prompt_confirm(resolved.yes, resolved.quiet) {
         bail!("{e}");
     }
+
+    // Persistent layer of the sandbox brief (issue #148). Deliberately the
+    // last setup step before launch: every early return above (--print-profile,
+    // the recursion guard, preflight failure, a declined prompt) must leave
+    // the user's repo untouched.
+    apply_persistent_sandbox_brief(&resolved, &project_dir);
 
     // Compute hardening categories for environment sanitization
     let disabled_categories = resolved.disabled_hardening_categories();
@@ -6622,7 +6631,7 @@ mod tests {
     }
 
     /// A plain directory is not a work tree, so the persistent brief must not
-    /// write there — outside git there is no diff to review the change in.
+    /// write there — an AGENTS.md only belongs in a project checkout.
     #[test]
     fn in_git_work_tree_rejects_plain_directory() {
         let dir = tempfile::tempdir().unwrap();

@@ -569,10 +569,13 @@ pub struct SandboxConfig {
     pub preset: Option<Preset>,
     /// Run sandbox-exec validation test on startup (default: true).
     pub validate: Option<bool>,
-    /// Generate the agent-facing sandbox brief and inject the managed
-    /// AGENTS.md block on every launch (default: true). Disable with
-    /// `--no-brief` or `sandbox.brief = false`.
+    /// Write the per-session agent-facing sandbox brief to the scratch dir
+    /// (default: true). Disable with `--no-brief` or `sandbox.brief = false`.
     pub brief: Option<bool>,
+    /// Also inject the managed sandbox block into the project's `AGENTS.md`
+    /// (default: false — opt-in, since it writes into the user's repo).
+    /// Requires `brief`; `--no-brief` turns both off.
+    pub agents_md: Option<bool>,
     /// Allow reading .env files and private keys in project dir (default: false).
     pub allow_env_files: Option<bool>,
     /// Allow all localhost outbound (default: false).
@@ -767,6 +770,7 @@ pub struct Resolved {
     pub allow_env_files: bool,
     pub no_validate: bool,
     pub brief: bool,
+    pub agents_md: bool,
     pub pass_env: Vec<String>,
     pub inherit_env: bool,
     pub allow_lifecycle_scripts: bool,
