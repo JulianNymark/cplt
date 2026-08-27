@@ -430,8 +430,16 @@ pub struct ProxyState {
     // base and the user's additions both apply without re-listing either.
     default_allowlist: Vec<String>,
 
-    // Private domains: merged from immutable CLI args + dynamic TOML config
-    cli_private_domains: Vec<String>,
+    // Private domains: merged from a sticky set + the dynamic TOML config.
+    //
+    // `sticky_private_domains` holds every startup-resolved private domain that
+    // `config_file` does NOT supply: `--allow-private-domain` flags and
+    // trust-approved `[propose.proxy] allow_private_domains` from the repo
+    // `.cplt.toml`. They are frozen for the session because nothing re-reads
+    // their source — the repo config is read once from git HEAD, the CLI once
+    // from argv — so leaving them in the reloadable cache made the TTL refresh
+    // wipe them 5s into the session (#186).
+    sticky_private_domains: Vec<String>,
     config_file: Option<PathBuf>,
     private_domains_cache: Mutex<DomainCache>,
 
@@ -557,7 +565,7 @@ impl ProxyState {
         merged
     }
 
-    /// Get private domains: union of immutable CLI entries + dynamic config entries.
+    /// Get private domains: union of the sticky entries + dynamic config entries.
     fn get_private_domains(&self) -> Vec<String> {
         let config_domains = get_cached_domains(
             &self.private_domains_cache,
@@ -565,15 +573,15 @@ impl ProxyState {
             parse_private_domains_from_toml,
         );
 
-        if self.cli_private_domains.is_empty() {
+        if self.sticky_private_domains.is_empty() {
             return config_domains;
         }
         if config_domains.is_empty() {
-            return self.cli_private_domains.clone();
+            return self.sticky_private_domains.clone();
         }
 
-        // Merge CLI + config, deduplicate
-        let mut merged = self.cli_private_domains.clone();
+        // Merge sticky + config, deduplicate
+        let mut merged = self.sticky_private_domains.clone();
         merged.extend(config_domains);
         merged.sort_unstable();
         merged.dedup();
@@ -662,7 +670,16 @@ pub fn parse_lines_file(path: &Path) -> Option<Vec<String>> {
 }
 
 /// Parse `proxy.allow_private_domains` from a TOML config file.
-/// Returns None on read/parse failure (caller keeps last-good).
+///
+/// `Some(list)` means the file was read and parsed: an empty list is the real
+/// answer "this file allows no private domains", which is what revokes an entry
+/// removed from the config mid-session. `None` means the file could not be read
+/// or parsed, and the caller keeps its last-good list.
+///
+/// Uses the `toml` crate rather than scanning lines: the config file is written
+/// by `cplt init` (which emits multi-line arrays for more than one entry) and by
+/// hand, so a line scanner silently mis-reads multi-line arrays, trailing
+/// comments and dotted keys — all of which serde accepts elsewhere in cplt.
 fn parse_private_domains_from_toml(path: &Path) -> Option<Vec<String>> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -677,37 +694,25 @@ fn parse_private_domains_from_toml(path: &Path) -> Option<Vec<String>> {
         }
     };
 
-    // Minimal TOML parsing: find [proxy] section, extract allow_private_domains array.
-    // We avoid pulling in the full toml crate dependency here by doing line-based parsing.
-    let mut in_proxy_section = false;
-    let mut domains: Vec<String> = Vec::new();
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_proxy_section = trimmed == "[proxy]";
-            continue;
-        }
-        if !in_proxy_section {
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix("allow_private_domains") {
-            let value = value.trim_start().strip_prefix('=')?;
-            let value = value.trim();
-            // Parse simple TOML array: ["foo.com", "bar.com"]
-            if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
-                for entry in inner.split(',') {
-                    let entry = entry.trim().trim_matches('"').trim_matches('\'');
-                    let normalized = entry.to_lowercase().trim_end_matches('.').to_string();
-                    if !normalized.is_empty() {
-                        domains.push(normalized);
-                    }
-                }
-            }
-            break;
-        }
-    }
-    Some(domains)
+    let parsed: toml::Value = toml::from_str(&contents).ok()?;
+    let Some(value) = parsed
+        .get("proxy")
+        .and_then(|proxy| proxy.get("allow_private_domains"))
+    else {
+        // Key absent — the file genuinely allows nothing.
+        return Some(Vec::new());
+    };
+    // Wrong type: treat as unreadable (keep last-good) rather than as a
+    // revocation. Startup validation rejects it anyway.
+    let entries = value.as_array()?;
+    Some(
+        entries
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(normalize_hostname)
+            .filter(|d| !d.is_empty())
+            .collect(),
+    )
 }
 
 pub struct ProxyHandle {
@@ -719,6 +724,10 @@ pub struct ProxyHandle {
     /// Cloned from the state so the observed set can be read after the session
     /// via [`ProxyHandle::observed_domains`].
     domain_collector: Arc<DomainCollector>,
+    /// Test-only view of the live state, so reload behaviour can be asserted
+    /// against the real `start()` wiring instead of a hand-built `ProxyState`.
+    #[cfg(test)]
+    state: Option<Arc<ProxyState>>,
 }
 
 impl ProxyHandle {
@@ -775,8 +784,16 @@ pub struct ProxyOptions {
     pub default_allowlist: Vec<String>,
     /// Domains allowed to resolve to private IPs — CLI portion (immutable).
     pub cli_private_domains: Vec<String>,
-    /// Domains allowed to resolve to private IPs — config portion (initial).
+    /// Domains allowed to resolve to private IPs — the portion that came from
+    /// `config_file`'s own `proxy.allow_private_domains`. Only these follow its
+    /// 5-second reload, so editing that file still adds and revokes them.
     pub config_private_domains: Vec<String>,
+    /// Domains allowed to resolve to private IPs — the trust-approved
+    /// `[propose.proxy] allow_private_domains` entries from the repo
+    /// `.cplt.toml` (`Resolved::repo_private_domains`). Frozen for the session
+    /// like the CLI ones: their source is read once (git HEAD + trust store),
+    /// so the config-file reload must not be able to drop them (#186).
+    pub repo_private_domains: Vec<String>,
     /// Path to TOML config file for dynamic reload of private_domains.
     pub config_file: Option<PathBuf>,
     /// Path to append audit log lines. None = no file logging.
@@ -852,6 +869,20 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
             .map_err(|e| format!("Cannot open proxy log file {}: {e}", log_path.display()))?;
     }
 
+    // Private domains whose source is read exactly once — CLI flags and
+    // trust-approved repo `.cplt.toml` proposals — are held outside the
+    // TTL cache. That cache's only refresh source is the global config file,
+    // so anything else parked in it is silently dropped by the first refresh,
+    // 5s into the session (#186).
+    let mut sticky_private_domains: Vec<String> = opts
+        .cli_private_domains
+        .iter()
+        .chain(opts.repo_private_domains.iter())
+        .map(|d| normalize_hostname(d))
+        .collect();
+    sticky_private_domains.sort_unstable();
+    sticky_private_domains.dedup();
+
     // Observation collector, shared between the connection threads (via state)
     // and the returned handle so observed domains can be read after shutdown.
     let domain_collector: Arc<DomainCollector> = Arc::new(Mutex::new(BTreeMap::new()));
@@ -864,7 +895,7 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         allowed_domains_file: opts.allowed_domains_file,
         allowlist_cache: Mutex::new(DomainCache::new(allowlist_initial)),
         default_allowlist: opts.default_allowlist,
-        cli_private_domains: opts.cli_private_domains,
+        sticky_private_domains,
         config_file: opts.config_file,
         private_domains_cache: Mutex::new(DomainCache::new(opts.config_private_domains)),
         allowed_ports: ports,
@@ -884,6 +915,9 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         .set_nonblocking(false)
         .map_err(|e| format!("set_nonblocking: {e}"))?;
 
+    #[cfg(test)]
+    let state_for_tests = state.clone();
+
     let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = shutdown_flag.clone();
     let active_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -901,6 +935,8 @@ pub fn start(opts: ProxyOptions) -> Result<ProxyHandle, String> {
         shutdown_flag,
         port: actual_port,
         domain_collector,
+        #[cfg(test)]
+        state: Some(state_for_tests),
     })
 }
 
@@ -1724,9 +1760,12 @@ pub fn is_blocked_in_content(hostname: &str, contents: &str) -> bool {
     false
 }
 
-/// Normalize a hostname for consistent matching: lowercase, strip trailing dot.
-fn normalize_hostname(host: &str) -> String {
-    host.to_lowercase().trim_end_matches('.').to_string()
+/// Normalize a hostname (or a domain *pattern*) for consistent matching:
+/// trim, lowercase, strip trailing dot — the same rule `parse_lines_file`
+/// applies to file-sourced lists. Patterns must be normalized at ingest,
+/// because [`is_domain_match`] normalizes only the hostname side.
+pub fn normalize_hostname(host: &str) -> String {
+    host.trim().to_lowercase().trim_end_matches('.').to_string()
 }
 
 /// Check if a hostname matches any entry in a domain list.
@@ -2332,6 +2371,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// TOML shapes the previous line-scanning parser silently mis-read as "no
+    /// domains" (or, for the typo key, as an unreadable file): a multi-line
+    /// array — what `cplt init` writes for more than one entry — a trailing
+    /// comment, a dotted key, and a key that merely starts with the real one.
+    #[test]
+    fn parse_private_domains_from_toml_handles_real_world_shapes() {
+        let dir = test_dir("toml-shapes");
+        let cases = [
+            "[proxy]\nallow_private_domains = [\n  \"a.nav.no\",\n  \"b.nav.no\",\n]\n",
+            "[proxy]\nallow_private_domains = [\"a.nav.no\", \"B.NAV.no.\"]  # trailing comment\n",
+            "proxy.allow_private_domains = [\"a.nav.no\", \"b.nav.no\"]\n",
+            "[proxy]\nallow_private_domains_typo = []\nallow_private_domains = [\"a.nav.no\", \"b.nav.no\"]\n",
+        ];
+        for (i, contents) in cases.iter().enumerate() {
+            let path = dir.join(format!("config{i}.toml"));
+            std::fs::write(&path, contents).unwrap();
+            assert_eq!(
+                parse_private_domains_from_toml(&path),
+                Some(vec!["a.nav.no".to_string(), "b.nav.no".to_string()]),
+                "case {i}: {contents}"
+            );
+        }
+
+        // Unparseable TOML is "unreadable", not "allows nothing" — the caller
+        // keeps its last-good list instead of dropping every waiver.
+        let path = dir.join("broken.toml");
+        std::fs::write(&path, "[proxy\n").unwrap();
+        assert_eq!(parse_private_domains_from_toml(&path), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn parse_private_domains_from_toml_no_proxy_section() {
         let dir = test_dir("toml-noproxy");
@@ -2353,7 +2424,7 @@ mod tests {
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
             default_allowlist: Vec::new(),
             subscription_blocklist: Vec::new(),
-            cli_private_domains: vec!["cli.example.com".to_string()],
+            sticky_private_domains: vec!["cli.example.com".to_string()],
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(vec![
                 "config.example.com".to_string(),
@@ -2384,7 +2455,7 @@ mod tests {
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
             default_allowlist: Vec::new(),
             subscription_blocklist: Vec::new(),
-            cli_private_domains: vec!["shared.com".to_string()],
+            sticky_private_domains: vec!["shared.com".to_string()],
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(vec!["shared.com".to_string()])),
             allowed_ports: vec![443],
@@ -2418,7 +2489,7 @@ mod tests {
             ])),
             default_allowlist: Vec::new(),
             subscription_blocklist: Vec::new(),
-            cli_private_domains: Vec::new(),
+            sticky_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
@@ -2455,7 +2526,7 @@ mod tests {
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
             default_allowlist: Vec::new(),
             subscription_blocklist: Vec::new(),
-            cli_private_domains: Vec::new(),
+            sticky_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
@@ -2493,7 +2564,7 @@ mod tests {
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
             default_allowlist: Vec::new(),
             subscription_blocklist: Vec::new(),
-            cli_private_domains: vec!["cli.nav.no".to_string()],
+            sticky_private_domains: vec!["cli.nav.no".to_string()],
             config_file: Some(config_path.clone()),
             private_domains_cache: Mutex::new(DomainCache {
                 domains: vec!["old.nav.no".to_string()],
@@ -2541,6 +2612,135 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// #186: private domains whose source is read once — CLI flags and
+    /// trust-approved `[propose.proxy] allow_private_domains` from the repo
+    /// `.cplt.toml` — must survive the global config file's 5-second reload,
+    /// while domains that file actually supplies keep following it (including
+    /// being revoked when removed).
+    #[test]
+    fn private_domain_sources_survive_or_follow_the_config_reload() {
+        let dir = test_dir("private-domains-186");
+        let blocked = dir.join("blocked.txt");
+        std::fs::write(&blocked, "").unwrap();
+        let config_path = dir.join("config.toml");
+        // Multi-line array: the form `cplt init` writes for >1 entry
+        // (`init::write_string_array`), and the form the docs show.
+        std::fs::write(
+            &config_path,
+            "[allow]\nread = [\"~/.kube/config\"]\n\n[proxy]\nallow_private_domains = [\n  \"global-a.nav.no\",\n  \"global-b.nav.no\",\n]\n",
+        )
+        .unwrap();
+
+        // Built the way main.rs builds it: the resolved set (CLI + config file +
+        // trust-approved repo proposal) minus the two once-read sources, which
+        // it passes as their own fields. Hand-writing the reloadable list would
+        // test a shape the real wiring never produces.
+        let cli_private_domains = vec!["cli.nav.no".to_string()];
+        let repo_private_domains = vec!["mimir.nav.cloud.nais.io".to_string()];
+        let resolved_private_domains = [
+            "cli.nav.no",
+            "global-a.nav.no",
+            "global-b.nav.no",
+            "mimir.nav.cloud.nais.io",
+        ];
+        let config_private_domains: Vec<String> = resolved_private_domains
+            .iter()
+            .map(|d| (*d).to_string())
+            .filter(|d| {
+                !cli_private_domains
+                    .iter()
+                    .any(|c| normalize_hostname(c) == *d)
+                    && !repo_private_domains.contains(d)
+            })
+            .collect();
+        assert_eq!(
+            config_private_domains,
+            vec!["global-a.nav.no", "global-b.nav.no"],
+            "only the config file's own entries are reloadable"
+        );
+
+        let handle = start(ProxyOptions {
+            port: 0,
+            blocked_file: blocked,
+            allowed_ports: vec![],
+            allow_localhost_ports: Vec::new(),
+            allow_localhost_any: false,
+            allowed_domains_file: None,
+            allowed_domains_initial: Vec::new(),
+            default_allowlist: Vec::new(),
+            subscription_blocklist: Vec::new(),
+            cli_private_domains,
+            config_private_domains,
+            repo_private_domains,
+            config_file: Some(config_path.clone()),
+            log_file: None,
+            log_level: ProxyLogLevel::None,
+            timeout: Duration::from_secs(60),
+            upstream: None,
+            upstream_no_proxy: Vec::new(),
+            resolver: None,
+        })
+        .expect("proxy start failed");
+        let state = handle.state.clone().expect("test state handle");
+
+        let expire = || {
+            state.private_domains_cache.lock().unwrap().last_attempt = Instant::now()
+                .checked_sub(RELOAD_TTL + Duration::from_millis(100))
+                .unwrap();
+        };
+        let has = |d: &str| state.get_private_domains().iter().any(|x| x == d);
+
+        for d in [
+            "cli.nav.no",
+            "global-a.nav.no",
+            "global-b.nav.no",
+            "mimir.nav.cloud.nais.io",
+        ] {
+            assert!(has(d), "{d} must be allowed at startup");
+        }
+
+        // The reload that fires 5 seconds into a real session.
+        expire();
+        assert!(
+            has("mimir.nav.cloud.nais.io"),
+            "trust-approved repo domain must survive the config reload"
+        );
+        assert!(has("cli.nav.no"), "CLI domain must survive the reload");
+        assert!(
+            has("global-a.nav.no") && has("global-b.nav.no"),
+            "multi-line config array must still be read on reload"
+        );
+
+        // Revoking one entry from the config file takes effect within the TTL.
+        std::fs::write(
+            &config_path,
+            "[proxy]\nallow_private_domains = [\"global-a.nav.no\"]  # b revoked\n",
+        )
+        .unwrap();
+        expire();
+        assert!(has("global-a.nav.no"), "remaining config entry stays");
+        assert!(
+            !has("global-b.nav.no"),
+            "config-file domain must be revocable by editing the file"
+        );
+        assert!(has("mimir.nav.cloud.nais.io") && has("cli.nav.no"));
+
+        // Dropping the section revokes the rest of the file's entries.
+        std::fs::write(&config_path, "[allow]\nread = []\n").unwrap();
+        expire();
+        assert!(
+            !has("global-a.nav.no"),
+            "removing the section must revoke its domains"
+        );
+        assert!(
+            has("mimir.nav.cloud.nais.io") && has("cli.nav.no"),
+            "once-read sources are not revoked by a config edit"
+        );
+
+        handle.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn is_blocked_in_list_matches_exact_and_subdomain() {
         let blocked = vec!["evil.com".to_string(), "bad.org".to_string()];
@@ -2568,6 +2768,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -2604,6 +2805,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -2635,7 +2837,7 @@ mod tests {
             }),
             default_allowlist: Vec::new(),
             subscription_blocklist: Vec::new(),
-            cli_private_domains: Vec::new(),
+            sticky_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
@@ -2682,7 +2884,7 @@ mod tests {
             allowed_domains_file: file,
             allowlist_cache: Mutex::new(DomainCache::new(initial)),
             default_allowlist,
-            cli_private_domains: Vec::new(),
+            sticky_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
@@ -2709,7 +2911,7 @@ mod tests {
             allowed_domains_file: None,
             allowlist_cache: Mutex::new(DomainCache::new(Vec::new())),
             default_allowlist: Vec::new(),
-            cli_private_domains: Vec::new(),
+            sticky_private_domains: Vec::new(),
             config_file: None,
             private_domains_cache: Mutex::new(DomainCache::new(Vec::new())),
             allowed_ports: vec![443],
@@ -2885,6 +3087,7 @@ mod tests {
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             port: 0,
             domain_collector: collector,
+            state: None,
         };
         let observed = handle.observed_domains();
         let hosts: Vec<&str> = observed.iter().map(|o| o.host.as_str()).collect();
@@ -2928,6 +3131,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -3140,6 +3344,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -3214,6 +3419,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -3438,6 +3644,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(), // NOT allow-listed
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -3498,6 +3705,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: vec!["corp.internal".to_string()], // allow-listed
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -3949,6 +4157,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains: Vec::new(),
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -4159,6 +4368,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains,
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
@@ -4591,6 +4801,7 @@ mod tests {
             subscription_blocklist: Vec::new(),
             cli_private_domains,
             config_private_domains: Vec::new(),
+            repo_private_domains: Vec::new(),
             config_file: None,
             log_file: None,
             log_level: ProxyLogLevel::None,
