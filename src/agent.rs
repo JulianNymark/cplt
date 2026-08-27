@@ -5,8 +5,10 @@
 //! different binary names, config directories, and runtime requirements, but
 //! shares the same core sandbox infrastructure.
 
+use crate::ui;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 // ── Per-agent default allowlists ─────────────────────────────────────────────
 //
@@ -719,6 +721,10 @@ impl Agent {
 
         // For Copilot, track editor shims as fallback
         let mut editor_shim: Option<PathBuf> = None;
+        // Windows-side installs reached through WSL interop, tracked only so the
+        // failure can name the cause instead of "not found in PATH".
+        let mut windows_interop: Option<PathBuf> = None;
+        let wsl = cfg!(target_os = "linux") && is_wsl();
 
         for binary_name in binary_names {
             for dir in path_var.split(':') {
@@ -747,6 +753,25 @@ impl Agent {
                     std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
                 if self_exe.as_ref() == Some(&resolved) {
                     continue; // skip cplt aliased as this binary
+                }
+
+                // Under WSL the Windows PATH is appended to the distro's, so an
+                // agent installed on the Windows side turns up here as
+                // /mnt/c/.../<binary>: a Windows executable, or the npm shim
+                // that execs `node`. Neither runs in the Linux sandbox. Skip it
+                // and keep looking — a distro-side install normally comes first
+                // in PATH anyway (#188). Checked after canonicalization so a
+                // distro-side symlink into /mnt is caught too, matching what
+                // `cplt doctor` reports.
+                if is_wsl_interop_binary(&resolved, wsl) {
+                    if windows_interop.is_none() {
+                        ui::warn(&format!(
+                            "Ignoring {} — Windows install reached through WSL interop",
+                            resolved.display()
+                        ));
+                        windows_interop = Some(resolved);
+                    }
+                    continue;
                 }
 
                 // Copilot-specific: prefer standalone over editor shims
@@ -787,6 +812,20 @@ impl Agent {
             Agent::Shell => unreachable!("Shell is resolved via $SHELL above"),
         };
 
+        if let Some(win) = windows_interop {
+            return Err(format!(
+                "{} resolves to a Windows install reached through WSL interop:\n  \
+                 {}\n  \
+                 Under WSL, /mnt/<drive>/ is the Windows filesystem: that binary is a Windows \
+                 executable (npm installs it as a shim that execs `node`), so it cannot run in \
+                 the Linux sandbox — and unless you installed Node in the distro too, the shim \
+                 has no `node` to exec.\n  \
+                 Fix: install Node and the agent inside the WSL distro. {install_hint}",
+                self.display_name(),
+                win.display()
+            ));
+        }
+
         Err(format!(
             "{} not found in PATH. {install_hint}",
             self.display_name()
@@ -805,6 +844,13 @@ impl Agent {
             .ok()
             .and_then(|p| std::fs::canonicalize(&p).ok());
 
+        // Same WSL interop rule as `resolve_binary`: a Windows-side copilot must
+        // not win auto-detection over a working distro-side agent (#188).
+        let wsl = cfg!(target_os = "linux") && is_wsl();
+        let usable = |resolved: &PathBuf| {
+            self_exe.as_ref() != Some(resolved) && !is_wsl_interop_binary(resolved, wsl)
+        };
+
         let mut found_copilot = false;
         let mut found_opencode = false;
         let mut found_gemini = false;
@@ -816,7 +862,7 @@ impl Agent {
                 if candidate.is_file() {
                     let resolved =
                         std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
-                    if self_exe.as_ref() != Some(&resolved) {
+                    if usable(&resolved) {
                         found_copilot = true;
                     }
                 }
@@ -826,7 +872,7 @@ impl Agent {
                 if candidate.is_file() {
                     let resolved =
                         std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
-                    if self_exe.as_ref() != Some(&resolved) {
+                    if usable(&resolved) {
                         found_opencode = true;
                     }
                 }
@@ -836,7 +882,7 @@ impl Agent {
                 if candidate.is_file() {
                     let resolved =
                         std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
-                    if self_exe.as_ref() != Some(&resolved) {
+                    if usable(&resolved) {
                         found_gemini = true;
                     }
                 }
@@ -848,7 +894,7 @@ impl Agent {
                     if candidate.is_file() {
                         let resolved =
                             std::fs::canonicalize(candidate).unwrap_or_else(|_| candidate.clone());
-                        if self_exe.as_ref() != Some(&resolved) {
+                        if usable(&resolved) {
                             found_antigravity = true;
                             break;
                         }
@@ -922,6 +968,87 @@ pub fn canonicalize_agent_dirs(dirs: &mut [AgentDir]) {
             dir.path = resolved;
         }
     }
+}
+
+/// Are we running inside WSL? Cached — it cannot change within a process.
+///
+/// Two independent signals, both cheap reads of kernel-owned state:
+///
+/// - `/run/WSL` exists. WSL's own init creates it; this is snapd's primary
+///   signal, and it survives a custom `[wsl2] kernel=` whose
+///   `CONFIG_LOCALVERSION` drops the marker below.
+/// - the kernel name in `/proc/sys/kernel/osrelease` (what systemd reads) or
+///   `/proc/version` names WSL. They cover the reverse case: snapd notes that
+///   `/run/WSL` can be missing under undocumented circumstances.
+///
+/// Deliberately *not* used: `WSL_DISTRO_NAME` and `WSL_INTEROP`. Both are
+/// absent under `sudo`, in systemd units and in cron (microsoft/WSL#5914,
+/// #9719) — and any user can export them, which disqualifies them from a
+/// decision that refuses to run an agent.
+pub fn is_wsl() -> bool {
+    static WSL: OnceLock<bool> = OnceLock::new();
+    *WSL.get_or_init(|| {
+        Path::new("/run/WSL").exists()
+            || ["/proc/sys/kernel/osrelease", "/proc/version"]
+                .iter()
+                .any(|f| std::fs::read_to_string(f).is_ok_and(|s| names_wsl_kernel(&s)))
+    })
+}
+
+/// Does this kernel release or version string come from a WSL kernel?
+///
+/// Case-insensitive on purpose: WSL2 writes `-microsoft-standard-WSL2` with a
+/// lowercase m, WSL1 wrote `4.4.0-19041-Microsoft` with a capital one, so a
+/// case-sensitive match for either spelling misses the other. `wsl` is matched
+/// too, as systemd does, for kernels that carry only that marker.
+fn names_wsl_kernel(s: &str) -> bool {
+    let s = s.to_ascii_lowercase();
+    s.contains("microsoft") || s.contains("wsl")
+}
+
+/// Must this resolved agent binary be refused as a Windows interop install?
+///
+/// The path shape alone is not enough — see [`is_windows_interop_path`] — so
+/// callers pass the WSL signal from [`is_wsl`] and this is the only place the
+/// two are combined.
+pub fn is_wsl_interop_binary(path: &Path, wsl: bool) -> bool {
+    wsl && is_windows_interop_path(path)
+}
+
+/// Is this path on a Windows drive exposed to WSL as `/mnt/<drive>/…`?
+///
+/// WSL2 mounts the Windows drives under `/mnt/c`, `/mnt/d`, … and (with
+/// interop enabled, the default) appends the Windows `PATH` to the distro's
+/// `PATH`. A tool installed on the Windows side therefore resolves inside the
+/// distro to `/mnt/c/Users/<user>/AppData/Roaming/npm/<name>` — a Windows
+/// executable, or the npm-generated shim that execs `node`. Neither runs in
+/// the Linux sandbox (#188).
+///
+/// The single-letter component is what separates a drive mount from an
+/// ordinary `/mnt/data`-style mount point — and, deliberately, from `/mnt/wsl`
+/// and `/mnt/wslg`, which are WSL's own tmpfs and WSLg, not Windows paths.
+/// `/mnt/c` is also a perfectly ordinary mount on a non-WSL machine (a NAS, a
+/// second disk), so callers must gate this on [`is_wsl`]: on a Linux box that
+/// is not WSL, a real agent under `/mnt/d` has to keep working.
+///
+/// Known ceiling: `/mnt` is only the *default* automount root. `[automount]
+/// root` in `/etc/wsl.conf` relocates it (Microsoft's own example is
+/// `/windir/c`), automount can be switched off, and drives can be mounted
+/// anywhere with `mount -t drvfs`. Such a setup is simply not detected — the
+/// agent then fails later with its path in the message, which is the failure
+/// mode we prefer over refusing a working install. The exact answer is the
+/// longest-matching mount for the path in `/proc/self/mountinfo` having fstype
+/// `9p` with `aname=drvfs`, `virtiofs`, `virtio-plan9`, or `drvfs`; worth
+/// parsing if relocated automount roots ever show up in a bug report.
+pub fn is_windows_interop_path(path: &Path) -> bool {
+    let mut parts = path.components();
+    matches!(parts.next(), Some(std::path::Component::RootDir))
+        && parts.next().is_some_and(|c| c.as_os_str() == "mnt")
+        && parts.next().is_some_and(|c| {
+            let drive = c.as_os_str().as_encoded_bytes();
+            drive.len() == 1 && drive[0].is_ascii_alphabetic()
+        })
+        && parts.next().is_some()
 }
 
 /// Check if a copilot binary is a VS Code/Cursor/editor shim script.
@@ -1041,6 +1168,97 @@ mod tests {
             process_exec: false,
             write_files: vec![],
         }
+    }
+
+    /// The exact path from the #188 report: Copilot CLI installed on the
+    /// Windows side, resolved inside the distro through WSL interop.
+    ///
+    /// Pure path logic, so it runs on every platform. What is *not* covered
+    /// here: the `is_wsl() && …` gating at the three call sites, which needs a
+    /// real WSL environment (or process-wide env mutation) to exercise.
+    #[test]
+    fn windows_interop_path_detects_npm_shim_on_c_drive() {
+        assert!(is_windows_interop_path(Path::new(
+            "/mnt/c/Users/someone/AppData/Roaming/npm/copilot"
+        )));
+        assert!(is_windows_interop_path(Path::new("/mnt/d/tools/copilot")));
+        // Drive letters are lowercase by default but casing is configurable.
+        assert!(is_windows_interop_path(Path::new("/mnt/C/tools/copilot")));
+    }
+
+    #[test]
+    fn windows_interop_path_ignores_ordinary_mounts_and_linux_paths() {
+        // Multi-character component: an ordinary mount point, not a drive.
+        assert!(!is_windows_interop_path(Path::new("/mnt/data/bin/copilot")));
+        assert!(!is_windows_interop_path(Path::new("/mnt/c1/bin/copilot")));
+        // A single component that is not a drive letter.
+        assert!(!is_windows_interop_path(Path::new("/mnt/1/bin/copilot")));
+        assert!(!is_windows_interop_path(Path::new(
+            "/usr/local/bin/copilot"
+        )));
+        assert!(!is_windows_interop_path(Path::new(
+            "/home/user/.local/bin/copilot"
+        )));
+        // WSL's own mounts: /mnt/wsl is its tmpfs, /mnt/wslg is WSLg. Neither
+        // is a Windows path, and both must stay usable.
+        assert!(!is_windows_interop_path(Path::new("/mnt/wsl/bin/copilot")));
+        assert!(!is_windows_interop_path(Path::new("/mnt/wslg/bin/copilot")));
+        // A drive root is not a binary, and only absolute paths are mounts.
+        assert!(!is_windows_interop_path(Path::new("/mnt/c")));
+        assert!(!is_windows_interop_path(Path::new("mnt/c/bin/copilot")));
+        assert!(!is_windows_interop_path(Path::new("sub/mnt/c/copilot")));
+        // "mnt" must be the first component, not any component.
+        assert!(!is_windows_interop_path(Path::new("/opt/mnt/c/copilot")));
+    }
+
+    /// The gate itself: `/mnt/c` on a plain Linux box is a NAS, a second disk,
+    /// an encrypted volume — an agent there is real and must keep working.
+    #[test]
+    fn wsl_interop_binary_only_fires_under_wsl() {
+        let win = Path::new("/mnt/c/Users/someone/AppData/Roaming/npm/copilot");
+        assert!(is_wsl_interop_binary(win, true));
+        assert!(!is_wsl_interop_binary(win, false));
+        assert!(!is_wsl_interop_binary(
+            Path::new("/usr/local/bin/copilot"),
+            true
+        ));
+    }
+
+    /// `/mnt/c` is an ordinary mount point on plenty of non-WSL Linux boxes, so
+    /// the interop rule hangs entirely off this signal. Real strings from
+    /// `/proc/sys/kernel/osrelease` and `/proc/version`, WSL2 and WSL1 against
+    /// a stock distro kernel.
+    #[test]
+    fn wsl_kernel_names_distinguish_wsl_from_stock_kernels() {
+        // osrelease, one short line — what systemd reads.
+        assert!(names_wsl_kernel("5.15.167.4-microsoft-standard-WSL2"));
+        assert!(names_wsl_kernel("6.6.87.2-microsoft-standard-WSL2+"));
+        // WSL1 spelled it with a capital M, WSL2 with a lowercase one: a
+        // case-sensitive match for either spelling misses the other.
+        assert!(names_wsl_kernel("4.4.0-19041-Microsoft"));
+        // /proc/version, the long form.
+        assert!(names_wsl_kernel(
+            "Linux version 5.15.167.4-microsoft-standard-WSL2 \
+             (root@941d701f84f1) (gcc (GCC) 11.2.0, GNU ld (GNU Binutils) 2.37) #1 SMP"
+        ));
+        // A kernel carrying only the WSL marker, which systemd also matches.
+        assert!(names_wsl_kernel("6.18.0-wsl-custom"));
+
+        assert!(!names_wsl_kernel("6.8.0-45-generic"));
+        assert!(!names_wsl_kernel(
+            "Linux version 6.8.0-45-generic (buildd@lcy02-amd64-091) \
+             (x86_64-linux-gnu-gcc-13 (Ubuntu 13.2.0-23ubuntu4) 13.2.0) #45-Ubuntu SMP"
+        ));
+        assert!(!names_wsl_kernel(""));
+    }
+
+    /// Nothing on macOS may be treated as WSL — neither `/run/WSL` nor the
+    /// `/proc` files exist there, and the call sites are
+    /// `cfg!(target_os = "linux")`-gated anyway.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn is_wsl_is_false_on_macos() {
+        assert!(!is_wsl());
     }
 
     /// Dotfile managers routinely symlink `~/.config/<agent>` elsewhere. Both
