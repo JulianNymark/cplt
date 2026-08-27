@@ -1439,10 +1439,13 @@ fn resolve_context(cli: &Cli, check_mode: bool) -> anyhow::Result<ResolvedContex
                 .collect();
             unapproved_proposals = resolved.apply_repo_config(&loaded.config, &approved_refs);
         }
-        Ok(None) => {} // No .cplt.toml — nothing to do
+        Ok(None) => {} // No .cplt.toml in HEAD — warn_repo_config_discrepancy explains why
         Err(e) => {
             ui::warn(&format!("Failed to load .cplt.toml: {e}"));
         }
+    }
+    if !resolved.quiet {
+        warn_repo_config_discrepancy(&project_dir);
     }
 
     // Reconcile proxy.forced vs allow_localhost_any (#53). Done here, after all
@@ -4126,8 +4129,9 @@ fn run_config_show() -> ExitCode {
                     ui::color(ui::RESET)
                 );
             }
-            Ok(None) => {} // No .cplt.toml — nothing to show
+            Ok(None) => {} // No .cplt.toml in HEAD — explained below if one is on disk
         }
+        warn_repo_config_discrepancy(dir);
     }
 
     ExitCode::SUCCESS
@@ -4767,8 +4771,23 @@ fn run_trust_command(action: Option<TrustAction>) -> ExitCode {
     let loaded = match repo_config::load_repo_config(&project_dir) {
         Ok(Some(l)) => l,
         Ok(None) => {
-            ui::info("No .cplt.toml found in this repository.");
-            return ExitCode::SUCCESS;
+            // "Not found" means "not found in git HEAD" — say which of the very
+            // different on-disk situations this actually is (#183).
+            let state = repo_config::repo_config_state(&project_dir);
+            let msg = state.explain().unwrap_or_default();
+            return match state {
+                repo_config::RepoConfigState::Missing
+                | repo_config::RepoConfigState::NotAGitRepo { has_file: false } => {
+                    ui::info(&msg);
+                    ExitCode::SUCCESS
+                }
+                // A file is there but cplt cannot use it — the user asked for
+                // something that did not happen, so this is a failure.
+                _ => {
+                    ui::error(&msg);
+                    ExitCode::FAILURE
+                }
+            };
         }
         Err(e) => {
             ui::error(&format!("Failed to load .cplt.toml: {e}"));
@@ -4798,6 +4817,17 @@ fn trust_show(project_dir: &std::path::Path, loaded: &repo_config::LoadedRepoCon
     println!("{blue}[cplt]{nc} ── Repo Config Trust ──────────────────────────────");
     println!("{blue}[cplt]{nc}  Source: {}", source_label(loaded.source));
     println!();
+
+    // Anything but the committed copy is refused by the accept guard. Say so
+    // here, and below never advertise a `cplt trust accept` that would exit 1.
+    let blocked = match repo_config::repo_config_state(project_dir) {
+        repo_config::RepoConfigState::Committed => None,
+        state => state.explain(),
+    };
+    if let Some(msg) = &blocked {
+        ui::warn(msg);
+        println!();
+    }
 
     // Deny section
     if !loaded.config.deny.paths.is_empty() || !loaded.config.deny.env.is_empty() {
@@ -4864,7 +4894,11 @@ fn trust_show(project_dir: &std::path::Path, loaded: &repo_config::LoadedRepoCon
 
         if hash_mismatch {
             println!("{blue}[cplt]{nc}  {red}⚠ Permissions have changed since last approval!{nc}");
-            println!("{blue}[cplt]{nc}  {red}  Run `cplt trust accept --all` to re-approve.{nc}");
+            if blocked.is_none() {
+                println!(
+                    "{blue}[cplt]{nc}  {red}  Run `cplt trust accept --all` to re-approve.{nc}"
+                );
+            }
         }
 
         // Finding 4: approval is bound to the local checkout path. If this repo's
@@ -4879,11 +4913,13 @@ fn trust_show(project_dir: &std::path::Path, loaded: &repo_config::LoadedRepoCon
                     &entry.repo.path
                 }
             );
-            println!(
-                "{blue}[cplt]{nc}  {red}  Run `cplt trust accept` to approve at this path.{nc}"
-            );
+            if blocked.is_none() {
+                println!(
+                    "{blue}[cplt]{nc}  {red}  Run `cplt trust accept` to approve at this path.{nc}"
+                );
+            }
         }
-    } else if has_pending {
+    } else if has_pending && blocked.is_none() {
         println!();
         println!("{blue}[cplt]{nc}  {yellow}To approve all pending permissions:{nc}");
         println!("{blue}[cplt]{nc}    cplt trust accept --all");
@@ -4924,15 +4960,14 @@ fn trust_accept(
         return ExitCode::SUCCESS;
     }
 
-    // Guard: refuse to approve uncommitted .cplt.toml changes.
-    // This ensures approved configs are auditable in git history and prevents
-    // a malicious process from injecting permissions and immediately accepting them.
-    if is_cplt_toml_uncommitted(project_dir) {
-        ui::error(
-            ".cplt.toml has uncommitted changes.\n  \
-             Commit the file first so permissions are auditable in git history:\n    \
-             git add .cplt.toml && git commit -m \"chore: update cplt sandbox config\"",
-        );
+    // Guard: approve ONLY the committed config, so every granted permission is
+    // auditable in git history and no process can inject permissions and
+    // immediately accept them. Stated as "anything but Committed" on purpose —
+    // enumerating the bad states is how the not-a-git-repo case slipped through,
+    // and `git status` cannot see a gitignored .cplt.toml at all (#183).
+    let state = repo_config::repo_config_state(project_dir);
+    if state != repo_config::RepoConfigState::Committed {
+        ui::error(&state.explain().unwrap_or_default());
         return ExitCode::FAILURE;
     }
 
@@ -5086,15 +5121,23 @@ fn trust_accept(
     ExitCode::SUCCESS
 }
 
-/// Check if .cplt.toml has uncommitted changes (staged or unstaged).
-fn is_cplt_toml_uncommitted(project_dir: &std::path::Path) -> bool {
-    let output = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--", ".cplt.toml"])
-        .current_dir(project_dir)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => !o.stdout.is_empty(),
-        _ => false, // If git fails (not a repo, etc.), don't block
+/// Warn when the `.cplt.toml` on disk is not the one cplt is reading.
+///
+/// cplt loads the config from git HEAD, so an uncommitted file — or one edited
+/// since the last commit — is silently not in effect. Says nothing when there is
+/// no `.cplt.toml` at all, or when the committed file is what the user sees.
+fn warn_repo_config_discrepancy(project_dir: &std::path::Path) {
+    let state = repo_config::repo_config_state(project_dir);
+    if matches!(
+        state,
+        repo_config::RepoConfigState::Committed
+            | repo_config::RepoConfigState::Missing
+            | repo_config::RepoConfigState::NotAGitRepo { has_file: false }
+    ) {
+        return;
+    }
+    if let Some(msg) = state.explain() {
+        ui::warn(&msg);
     }
 }
 
