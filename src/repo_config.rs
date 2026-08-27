@@ -113,6 +113,14 @@ pub enum RepoConfigSource {
 pub struct LoadedRepoConfig {
     pub config: RepoConfig,
     pub source: RepoConfigSource,
+    /// The directory the `.cplt.toml` was read from — the anchor for its
+    /// relative paths. This is NOT always `project_dir`: `git cat-file blob
+    /// HEAD:.cplt.toml` resolves repo-root-relative regardless of cwd, so a
+    /// `--project-dir <subdir>` run reads the *root's* config and its paths
+    /// must anchor to the root. Anchoring to the subdir instead would emit a
+    /// deny rule for a directory the repo never named — a plausible-looking
+    /// absolute rule protecting the wrong place.
+    pub dir: PathBuf,
 }
 
 /// Read `.cplt.toml` from the project directory.
@@ -130,6 +138,7 @@ pub fn load_repo_config(project_dir: &Path) -> Result<Option<LoadedRepoConfig>, 
         return Ok(Some(LoadedRepoConfig {
             config,
             source: RepoConfigSource::GitHead,
+            dir: canonical(git_toplevel(project_dir).unwrap_or_else(|| project_dir.to_path_buf())),
         }));
     }
 
@@ -149,10 +158,44 @@ pub fn load_repo_config(project_dir: &Path) -> Result<Option<LoadedRepoConfig>, 
         return Ok(Some(LoadedRepoConfig {
             config,
             source: RepoConfigSource::WorkingTree,
+            // The working-tree fallback reads `<project_dir>/.cplt.toml`
+            // literally, so here the project dir *is* the config's directory.
+            dir: canonical(project_dir.to_path_buf()),
         }));
     }
 
     Ok(None)
+}
+
+/// Canonicalize, keeping the input on failure.
+///
+/// `dir` anchors every relative path in the config AND is the containment
+/// boundary for approved allow paths, which are compared against it with
+/// `starts_with`. Both need it to match what `canonicalize` produces for paths
+/// under it, or a repo behind a symlinked checkout would read as "outside the
+/// repo". Callers already pass a canonical path on the enforcing path; this is
+/// belt-and-braces for the ones that may not.
+fn canonical(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+/// The git toplevel for `project_dir` — the directory `HEAD:.cplt.toml`
+/// resolves against. `None` when git cannot answer (not a repo, git missing).
+fn git_toplevel(project_dir: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let root = String::from_utf8(output.stdout).ok()?;
+    let root = root.trim();
+    if root.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(root))
 }
 
 /// Read `.cplt.toml` from git HEAD (the latest committed version).
@@ -314,11 +357,36 @@ fn reject_path_traversal(path: &str, context: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject a path that names a whole tree root rather than something within it.
+///
+/// `""`, `"."` and `"./"` all normalize to nothing, so they anchor to the repo
+/// root; `"/"` is the filesystem root. As a deny entry, either one blocks read
+/// AND write of the entire checkout (or the entire machine) — a committed
+/// version bricks cplt for everyone who clones. `"."` meaning "the repo" is at
+/// least arguable; an empty string landing in the same place is not, and neither
+/// is worth supporting when `[deny]` exists to carve out parts of a tree.
+fn reject_root_path(path: &str, context: &str) -> Result<(), String> {
+    let normalized = crate::config::lexically_normalized(std::path::Path::new(path));
+    if normalized.as_os_str().is_empty() {
+        return Err(format!(
+            "{context} entry {path:?} resolves to the repository root, which would deny \
+             the entire checkout. Name a path inside the repo instead."
+        ));
+    }
+    if normalized == std::path::Path::new("/") {
+        return Err(format!(
+            "{context} entry {path:?} is the filesystem root, which would deny everything."
+        ));
+    }
+    Ok(())
+}
+
 /// Validate the repo config for safety.
 fn validate_repo_config(config: &RepoConfig) -> Result<(), String> {
     // Validate deny paths don't contain SBPL injection characters or traversal
     for path in &config.deny.paths {
         reject_path_traversal(path, "deny.paths")?;
+        reject_root_path(path, "deny.paths")?;
         crate::sandbox::validate_sbpl_path(&PathBuf::from(path))?;
     }
 
@@ -624,6 +692,27 @@ read = ["~/.gradle/../../.ssh/id_rsa"]
         let result = validate_repo_config(&config);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("'..'"));
+    }
+
+    #[test]
+    fn rejects_deny_paths_naming_a_whole_tree_root() {
+        // A committed `""` or `"."` denies read AND write of the entire
+        // checkout, bricking cplt for everyone who clones. All spellings that
+        // normalize to nothing land on the repo root, so all are rejected.
+        for entry in ["\"\"", "\".\"", "\"./\"", "\"./.\""] {
+            let toml_str = format!("[deny]\npaths = [{entry}]\n");
+            let config = parse_repo_config(&toml_str).unwrap();
+            let err = validate_repo_config(&config)
+                .expect_err("{entry} must be rejected, not silently denied as the repo root");
+            assert!(
+                err.contains("repository root"),
+                "{entry}: unexpected error {err}"
+            );
+        }
+        // The filesystem root gets its own message — it is not the repo root.
+        let config = parse_repo_config("[deny]\npaths = [\"/\"]\n").unwrap();
+        let err = validate_repo_config(&config).expect_err("\"/\" must be rejected");
+        assert!(err.contains("filesystem root"), "unexpected error {err}");
     }
 
     #[test]

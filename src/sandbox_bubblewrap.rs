@@ -338,12 +338,14 @@ impl DenyMasks {
 
 /// Build mount masks from the user's deny paths.
 ///
-/// CLI and global-config inputs arrive canonicalized (`canonicalize_deny_paths`
-/// and `resolve_config_path` both hard-fail on paths that do not resolve), so
-/// for those the checks here only guard against races (a path deleted since
-/// startup). Repo `.cplt.toml` paths do NOT: they are merely `~`-expanded
-/// (navikt/cplt#179), so relative and unresolvable entries reach this function
-/// and the absolute check and re-canonicalization are real filtering for them.
+/// Every input now arrives absolute: CLI and global-config paths are
+/// canonicalized up front (`canonicalize_deny_paths` and `resolve_config_path`
+/// both hard-fail on paths that do not resolve), and repo `.cplt.toml` paths
+/// are anchored and canonicalize-if-present by `resolve_repo_path`
+/// (navikt/cplt#179). So the absolute check below is a backstop, not routine
+/// filtering, and re-canonicalization mainly guards races (a path deleted since
+/// startup). The one case still expected here is a repo deny path naming a
+/// directory that does not exist yet — enforceable on macOS, unmaskable here.
 /// Entries that cannot be masked are recorded in `skipped` for the caller to
 /// warn about:
 ///
@@ -1060,6 +1062,11 @@ mod tests {
     }
 
     // Deny masks are skipped under /tmp, so their tests need a base outside it.
+    //
+    // Only CARGO_TARGET_DIR is guarded; the CARGO_MANIFEST_DIR fallback is not.
+    // A CI checkout under /tmp would put the fallback base under /tmp too and
+    // silently void every test using this helper (they would assert on paths
+    // the /tmp skip removes). Not worth a guard until a runner does that.
     fn non_tmp_tempdir() -> tempfile::TempDir {
         // A CARGO_TARGET_DIR under /tmp (a common build-speed setup) falls
         // back to the manifest's target/ — a /tmp base would void these tests.
@@ -1178,6 +1185,36 @@ mod tests {
         // before we know whether bwrap will be used at all.
         assert_eq!(masks.skipped(), [secret.canonicalize().unwrap()]);
         assert_eq!(masks.placeholder_error(), Some("no scratch dir available"));
+    }
+
+    #[test]
+    fn resolved_repo_deny_path_is_masked_not_skipped() {
+        // Issue #179, Linux half: a relative `.cplt.toml` deny path used to
+        // arrive here verbatim and land in `skipped` (see the test below).
+        // apply_repo_config now anchors it to the repo root, so it masks.
+        let base = non_tmp_tempdir();
+        let secret = base.path().join("secrets");
+        std::fs::create_dir(&secret).expect("create secrets");
+
+        let mut resolved = crate::config::Config::default()
+            .merge(crate::config::CliFlags::default())
+            .expect("merge");
+        let repo_config = crate::repo_config::RepoConfig {
+            deny: crate::repo_config::DenySection {
+                paths: vec!["secrets".to_string()],
+                env: vec![],
+            },
+            ..Default::default()
+        };
+        resolved.apply_repo_config(&repo_config, base.path(), &[]);
+
+        let masks = build_deny_masks(&resolved.deny_paths, None);
+        assert!(
+            masks.skipped().is_empty(),
+            "an anchored repo deny path must not be skipped: {:?}",
+            masks.skipped()
+        );
+        assert_eq!(masks.mask_count(), 1);
     }
 
     #[test]

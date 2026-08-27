@@ -1437,7 +1437,8 @@ fn resolve_context(cli: &Cli, check_mode: bool) -> anyhow::Result<ResolvedContex
                 .iter()
                 .map(std::string::String::as_str)
                 .collect();
-            unapproved_proposals = resolved.apply_repo_config(&loaded.config, &approved_refs);
+            unapproved_proposals =
+                resolved.apply_repo_config(&loaded.config, &loaded.dir, &approved_refs);
         }
         Ok(None) => {} // No .cplt.toml in HEAD — warn_repo_config_discrepancy explains why
         Err(e) => {
