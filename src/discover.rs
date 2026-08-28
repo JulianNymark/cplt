@@ -986,6 +986,53 @@ pub fn git_common_dir(home_dir: &Path, project_dir: &Path) -> Option<PathBuf> {
     if !resolved.starts_with(home_dir) {
         return None;
     }
+    // `--git-common-dir` is not trustworthy on its own: git derives it from a
+    // `commondir` file inside the gitdir, which sits in the project tree the
+    // agent can write. Planting one makes git name *another repository*, and
+    // the checks above wave it through — it is a real git repo under $HOME, so
+    // it is neither an unsafe root nor outside home. The grant that follows
+    // would hand over that repo's whole object store (every file ever
+    // committed, reachable with `git cat-file` regardless of the working-tree
+    // deny) plus its refs.
+    //
+    // Only two layouts are legitimate, and both are relative to the gitdir git
+    // actually resolved for this project:
+    //   - separate gitdir / plain repo: the common dir *is* the gitdir
+    //   - worktree: the common dir is `<gitdir>/../..`, because git writes
+    //     literally `../..` into `<main>/.git/worktrees/<name>/commondir`
+    // A steered commondir satisfies neither.
+    let git_dir = crate::git::command(project_dir, &["rev-parse", "--absolute-git-dir"])?
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))?;
+    let git_dir = std::fs::canonicalize(&git_dir).unwrap_or(git_dir);
+    let is_worktree_layout = git_dir.parent().and_then(Path::parent) == Some(resolved.as_path());
+    if resolved != git_dir && !is_worktree_layout {
+        return None;
+    }
+    // An unsafe character here must not brick the launch. `prepare()` validates
+    // every path it interpolates into the SBPL profile and returns Err on the
+    // first bad one, aborting the run — and this path comes off the filesystem,
+    // not out of the user's own config, so a directory named with a quote is
+    // enough to stop cplt starting at all. The pressure that creates is to
+    // rerun the agent unsandboxed, which costs far more than what is dropped
+    // here.
+    //
+    // Skipping is the safe direction because what gets dropped is a *grant*,
+    // not a deny: the gitdir denies are keyed on `<project>/.git` and are
+    // emitted either way, and without this grant the common dir is not writable
+    // at all — it lies outside both the project tree and the granted home
+    // directories. The cost is that in-worktree git fails inside the sandbox,
+    // loudly, which the warning explains.
+    if let Err(e) = crate::sandbox::validate_sbpl_path(&resolved) {
+        ui::warn(&format!(
+            "Ignoring the shared git directory {}: {e}\n\
+             Git operations in this worktree will fail inside the sandbox.",
+            resolved.display()
+        ));
+        return None;
+    }
     if resolved.is_dir() {
         Some(resolved)
     } else {
@@ -1140,6 +1187,148 @@ fn find_native_modules(home_dir: &Path, module_name: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run git in `dir`, ignoring the developer's own git config.
+    fn git_in(dir: &Path, args: &[&str]) -> bool {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    /// A `commondir` file planted inside the project's own gitdir must not be
+    /// able to steer the sandbox grant at a different repository.
+    ///
+    /// Git reads `$GIT_DIR/commondir` for any gitdir, not only worktrees, and
+    /// its contents come straight back out of `git rev-parse
+    /// --git-common-dir`. The under-$HOME and unsafe-root checks do not catch
+    /// it: the target is a genuine repo in a perfectly ordinary place. Without
+    /// the layout check the victim's whole object store would be granted
+    /// read+write.
+    #[test]
+    fn git_common_dir_rejects_a_planted_commondir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = &std::fs::canonicalize(tmp.path()).expect("canonicalize tmp");
+        let home = home.as_path();
+        let attacker = home.join("attacker");
+        let victim = home.join("victim");
+        std::fs::create_dir_all(&attacker).expect("mkdir attacker");
+        std::fs::create_dir_all(&victim).expect("mkdir victim");
+        if !git_in(&attacker, &["init", "-q", "-b", "main"])
+            || !git_in(&victim, &["init", "-q", "-b", "main"])
+        {
+            eprintln!("SKIPPED: git unavailable");
+            return;
+        }
+
+        // Sanity: an ordinary repo is not a worktree, so there is no grant.
+        assert_eq!(
+            git_common_dir(home, &attacker),
+            None,
+            "a plain repo must not produce a common-dir grant"
+        );
+
+        // The agent has write access to its own project tree, so it can write
+        // this file. Git now reports the victim's .git as the common dir.
+        std::fs::write(
+            attacker.join(".git/commondir"),
+            victim.join(".git").to_string_lossy().as_bytes(),
+        )
+        .expect("plant commondir");
+
+        assert_eq!(
+            git_common_dir(home, &attacker),
+            None,
+            "a planted commondir must not grant access to another repository"
+        );
+    }
+
+    /// The layout check must not break the case it exists to allow: a real
+    /// `git worktree add` still resolves to the main repo's `.git`.
+    #[test]
+    fn git_common_dir_still_resolves_a_real_worktree() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = &std::fs::canonicalize(tmp.path()).expect("canonicalize tmp");
+        let home = home.as_path();
+        let main = home.join("main");
+        std::fs::create_dir_all(&main).expect("mkdir main");
+        if !git_in(&main, &["init", "-q", "-b", "main"]) {
+            eprintln!("SKIPPED: git unavailable");
+            return;
+        }
+        std::fs::write(main.join("f.txt"), "x").expect("write");
+        assert!(git_in(&main, &["add", "-A"]), "git add");
+        assert!(git_in(&main, &["commit", "-qm", "init"]), "git commit");
+
+        let wt = home.join("wt");
+        assert!(
+            git_in(
+                &main,
+                &["worktree", "add", "-q", "-b", "feat", &wt.to_string_lossy()]
+            ),
+            "git worktree add"
+        );
+
+        let expected = std::fs::canonicalize(main.join(".git")).expect("canonicalize .git");
+        assert_eq!(
+            git_common_dir(home, &wt),
+            Some(expected),
+            "a real worktree must still resolve to the main repo's .git"
+        );
+    }
+
+    /// A common dir that cannot be interpolated into the profile must be
+    /// skipped, not turned into a launch failure.
+    ///
+    /// `prepare()` returns Err on the first path containing an SBPL-unsafe
+    /// character, and this path is read off the filesystem — so a directory
+    /// named with a quote would otherwise stop cplt starting at all, whose only
+    /// remedy is to run the agent unsandboxed.
+    #[test]
+    fn git_common_dir_skips_an_unquotable_path_instead_of_failing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = &std::fs::canonicalize(tmp.path()).expect("canonicalize tmp");
+        let home = home.as_path();
+        let main = home.join("ma\"in");
+        std::fs::create_dir_all(&main).expect("mkdir main");
+        if !git_in(&main, &["init", "-q", "-b", "main"]) {
+            eprintln!("SKIPPED: git unavailable");
+            return;
+        }
+        std::fs::write(main.join("f.txt"), "x").expect("write");
+        assert!(git_in(&main, &["add", "-A"]), "git add");
+        assert!(git_in(&main, &["commit", "-qm", "init"]), "git commit");
+
+        let wt = home.join("wt");
+        assert!(
+            git_in(
+                &main,
+                &["worktree", "add", "-q", "-b", "feat", &wt.to_string_lossy()],
+            ),
+            "git worktree add"
+        );
+
+        // Precondition: this really is a path prepare() would reject.
+        assert!(
+            crate::sandbox::validate_sbpl_path(&main.join(".git")).is_err(),
+            "fixture must produce an SBPL-unsafe path"
+        );
+        assert_eq!(
+            git_common_dir(home, &wt),
+            None,
+            "an unquotable common dir must be skipped, not returned for \
+             prepare() to hard-error on"
+        );
+    }
 
     #[test]
     fn which_resolved_finds_common_tools() {

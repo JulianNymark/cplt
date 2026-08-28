@@ -464,6 +464,20 @@ fn create_mask_placeholder(scratch: &Path) -> Result<PathBuf, String> {
 /// blocks the user's *next* out-of-sandbox git. This also matches the git
 /// command guard, which explicitly allows `git config user.name`.
 ///
+/// This trade was made for the *project's own* repository, so it is worth
+/// asking whether it still holds for a `git_common_dir` the agent had a hand in
+/// choosing. It does, now: `commondir` inside a gitdir is agent-writable and
+/// git reads it for any gitdir, so a planted one used to make
+/// `git rev-parse --git-common-dir` name a different repository — and this ro-
+/// protect set follows `git_common_dir`, so on Linux that yielded a writable
+/// `.git/config` in a repo the user will later `git pull`, i.e. `core.hooksPath`
+/// in someone else's repo. `discover::git_common_dir` now rejects a steered
+/// value, so the only common dir that reaches here is the main repo of a real
+/// worktree of the user's own project — exactly the case the trade above is
+/// about, where `git config user.email` is a normal thing for an agent to do.
+/// The set is therefore left as it is. Were the source-level check ever
+/// removed, `config` would have to be added here.
+///
 /// RESIDUAL: because `.git/config` stays writable, an agent can still set
 /// `core.hooksPath` to redirect hooks to a writable directory. The read-only
 /// `.git/hooks` bind therefore only mitigates the *direct* persistence vector
