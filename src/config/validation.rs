@@ -70,6 +70,28 @@ fn top_level_keys() -> Vec<&'static str> {
 /// automatically cover any option present in the registry.
 pub(super) fn describe_unknown_key(path: &str) -> String {
     if let Some((section, key)) = path.split_once('.') {
+        // A section name showing up as a key inside another section is a dotted
+        // key written below the wrong header: TOML scopes `allow.read = [...]`
+        // under the preceding `[git_guard]` header as `git_guard.allow.read`,
+        // so the grant is silently dropped (#228).
+        if known_sections().contains(&key) {
+            let example = section_keys(key).first().copied().unwrap_or("x");
+            // Repeating the section name under its own header (`[allow]` +
+            // `allow.read = ...`) needs the opposite advice: drop the prefix.
+            if section == key {
+                return format!(
+                    "unknown key '{key}' in [{section}]: the [{section}] header already \
+                     scopes its keys, so '{key}.{example} = ...' reads as \
+                     '{section}.{key}.{example}' — drop the '{key}.' prefix and write \
+                     '{example} = ...'"
+                );
+            }
+            return format!(
+                "unknown key '{key}' in [{section}]: '{key}' is a top-level section; TOML \
+                 scopes '{key}.{example} = ...' written under [{section}] as \
+                 '{section}.{key}.{example}' — move it under its own [{key}] header"
+            );
+        }
         // Exclude the reported key itself from the suggestion candidates. The
         // candidates come from CONFIG_KEYS (a superset that includes repo-only
         // keys like `deny.env`), so a key that is valid in the registry but not
@@ -635,5 +657,62 @@ some_new_option = true
         // A real typo of a user-struct key still gets a suggestion.
         let msg = describe_unknown_key("sandbox.inherit_evn");
         assert!(msg.contains("did you mean 'inherit_env'"), "got: {msg}");
+    }
+
+    /// #228: a dotted key like `allow.read = [...]` written below another
+    /// section's header is scoped INTO that section by TOML, so the grant is
+    /// silently dropped. The message must explain that, not just "unknown key".
+    #[test]
+    fn section_name_used_as_key_explains_toml_scoping() {
+        let toml =
+            "[git_guard]\nenabled = true\n\nallow.read = [\"~/.gradle/gradle.properties\"]\n";
+        let diagnostics = validate_config(toml);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|d| d.message.contains("unknown key 'allow' in [git_guard]"))
+            .unwrap_or_else(|| panic!("should flag allow under git_guard: {diagnostics:?}"));
+        // The example subkey comes from the registry, so assert the shape of the
+        // hint rather than pinning whichever key happens to be listed first.
+        assert!(
+            diagnostic.message.contains("allow.") && diagnostic.message.contains("= ..."),
+            "got: {}",
+            diagnostic.message
+        );
+        assert!(
+            diagnostic.message.contains("[allow]"),
+            "got: {}",
+            diagnostic.message
+        );
+    }
+
+    /// Line-continuation (`\` at end of line) in the scoping messages must not
+    /// leak the source indentation into the rendered warning.
+    #[test]
+    fn scoping_messages_render_without_runs_of_whitespace() {
+        for msg in [
+            describe_unknown_key("git_guard.allow"),
+            describe_unknown_key("allow.allow"),
+        ] {
+            assert!(
+                !msg.contains("  "),
+                "double space in rendered message: {msg}"
+            );
+        }
+    }
+
+    /// The scoping warning names the fully-qualified path TOML actually builds.
+    #[test]
+    fn scoping_message_shows_the_fully_qualified_path() {
+        let msg = describe_unknown_key("git_guard.allow");
+        assert!(msg.contains("'git_guard.allow."), "got: {msg}");
+    }
+
+    /// The same detection must give the opposite advice when the section name is
+    /// repeated under its own header: the prefix is redundant, not misplaced.
+    #[test]
+    fn section_name_repeated_under_its_own_header_says_drop_the_prefix() {
+        let msg = describe_unknown_key("allow.allow");
+        assert!(msg.contains("drop the 'allow.' prefix"), "got: {msg}");
+        assert!(!msg.contains("move it"), "got: {msg}");
     }
 }
