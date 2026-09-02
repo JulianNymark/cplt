@@ -422,7 +422,7 @@ impl Discovery {
         }
         if !self.auth.any_auth_available() {
             println!(
-                "  {}✗{} No auth mechanism available — Copilot will fail to authenticate",
+                "  {}✗{} No auth mechanism available, Copilot will fail to authenticate",
                 ui::stdout_color(ui::RED),
                 ui::stdout_color(ui::RESET)
             );
@@ -458,9 +458,9 @@ impl Discovery {
                 // `which` only lands here when no Linux-side install exists.
                 if crate::agent::is_wsl_interop_binary(&agent.path, wsl) {
                     println!(
-                        "  {}✗{} {} ({}): {} — Windows install reached through WSL interop, \
-                         cannot run in the Linux sandbox. Install Node and {} inside the WSL \
-                         distro.",
+                        "  {}✗{} {} ({}): {} is a Windows install reached through WSL \
+                         interop and cannot run in the Linux sandbox. Install Node and {} \
+                         inside the WSL distro.",
                         ui::stdout_color(ui::RED),
                         ui::stdout_color(ui::RESET),
                         agent.name,
@@ -599,7 +599,7 @@ impl Discovery {
             );
         } else {
             println!(
-                "  {}✗{} ~/.copilot not found — Copilot CLI may not be installed",
+                "  {}✗{} ~/.copilot not found, Copilot CLI may not be installed",
                 ui::stdout_color(ui::RED),
                 ui::stdout_color(ui::RESET)
             );
@@ -662,7 +662,7 @@ impl Discovery {
             );
         } else {
             println!(
-                "{}[doctor]{} Critical issues found — sandbox may not work correctly",
+                "{}[doctor]{} Critical issues found, the sandbox may not work correctly",
                 ui::stdout_color(ui::RED),
                 ui::stdout_color(ui::RESET)
             );
