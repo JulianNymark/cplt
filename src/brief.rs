@@ -10,12 +10,16 @@
 //!    (`CPLT_BRIEF.md`) — accurate for exactly this launch.
 //! 2. A short, sandbox-agnostic managed block inserted into the
 //!    project-root `AGENTS.md` (created if absent) — opt-in via
-//!    `sandbox.agents_md`, persistent, and left for the user to review and
-//!    commit. Delimited by stable markers so it can be inserted, updated in
+//!    `--agents-md` / `sandbox.agents_md`, persistent, and left for the user
+//!    to review and commit. Delimited by stable markers so it can be inserted, updated in
 //!    place, or safely skipped without ever duplicating or mangling
 //!    hand-written content.
 //!
 //! Implements design issue #148 (agent-facing sandbox policy exposure).
+//!
+//! EXPERIMENTAL: both layers are off by default and unstable. Nothing else in
+//! cplt reads what they emit, so the wording and the AGENTS.md markers may
+//! change, or the feature may be removed.
 
 use std::path::Path;
 
@@ -34,7 +38,7 @@ pub const BLOCK_END: &str = "<!-- cplt:sandbox end -->";
 /// Rendered from the live resolved config: if the user allowed `~/.aws`,
 /// this must not claim AWS is blocked. Kept short — a few lines, not a
 /// policy dump (`--verbose` / `cplt config show` cover that).
-pub fn generate_session_brief(resolved: &Resolved, agent: Agent) -> String {
+pub fn generate_session_brief(resolved: &Resolved, agent: Agent, home: &Path) -> String {
     use std::fmt::Write as _;
 
     let mut out = String::new();
@@ -54,8 +58,10 @@ pub fn generate_session_brief(resolved: &Resolved, agent: Agent) -> String {
          command and path, and suggest the config key below.\n",
     );
     out.push_str(
-        "- Config is read-only from in here (`~/.config/cplt/config.toml`). \
-         Changes require the user to edit it and re-run.\n",
+        "- The cplt config (`~/.config/cplt/config.toml`) is not readable from \
+         in here, let alone writable — `~/.config/cplt` has no allow rule, so \
+         it falls under the profile's default deny. Only the user can change \
+         the policy, from outside the sandbox, and it takes a re-run.\n",
     );
 
     out.push_str("\n## Network\n\n");
@@ -66,24 +72,73 @@ pub fn generate_session_brief(resolved: &Resolved, agent: Agent) -> String {
         );
     } else if resolved.default_allowlist {
         out.push_str(
-            "- Fail-closed: only the agent's built-in allowlist (plus any \
-             configured `allowed_domains`) is reachable. Everything else is \
-             blocked at the proxy.\n",
+            "- Only the agent's built-in allowlist (plus any configured \
+             `allowed_domains`) is reachable. The proxy refuses everything \
+             else.\n",
         );
     } else if resolved.with_proxy {
         out.push_str(
-            "- HTTPS via a filtering CONNECT proxy. Non-HTTPS and unlisted \
-             blocked domains fail closed.\n",
+            "- HTTPS goes through a filtering CONNECT proxy, which refuses \
+             blocked domains.\n",
         );
     } else {
         out.push_str("- No proxy is active for this session.\n");
     }
-    out.push_str(
-        "- SSH is blocked: `~/.ssh` is unreadable and `SSH_AUTH_SOCK` is not \
-         passed through, so `ssh`/`scp` and git over `ssh://` or \
-         `git@host:...` remotes fail. Git over HTTPS still works — ask the \
-         user to run the SSH-only parts outside the sandbox.\n",
-    );
+    if resolved.with_proxy {
+        if resolved.proxy_forced {
+            out.push_str(
+                "- This fails closed: `proxy_forced` is on, so direct egress \
+                 is blocked by the kernel and there is no route around the \
+                 proxy.\n",
+            );
+        } else {
+            out.push_str(
+                "- Only the proxy enforces that. `proxy_forced` is off this \
+                 session, so direct `*:443` connections are still permitted \
+                 at the kernel level: a client that ignores `HTTPS_PROXY` is \
+                 not stopped. Don't treat that as an invitation — the list is \
+                 the policy — but don't report a blocked domain as \
+                 kernel-enforced either.\n",
+            );
+        }
+    }
+    if !ssh_port_open(resolved) {
+        out.push_str(
+            "- SSH is blocked, and the blocker is the port, not the keys: \
+             outbound TCP is limited to 443, so port 22 is refused however \
+             `~/.ssh` is configured. `ssh`/`scp` and git over `ssh://` or \
+             `git@host:...` remotes fail. Git over HTTPS still works — ask \
+             the user to run the SSH-only parts outside the sandbox.\n",
+        );
+        if cfg!(target_os = "linux") {
+            out.push_str(
+                "- That port limit is a Landlock rule, and Landlock only \
+                 restricts outbound connect from ABI v4 (kernel 6.7). cplt \
+                 applies its ruleset best-effort, so on an older kernel the \
+                 restriction is silently absent and the proxy is the only \
+                 network control. Treat port 22 as blocked either way — the \
+                 user configured it that way — but if a connection \
+                 unexpectedly succeeds, that is why.\n",
+            );
+        }
+    } else if !ssh_key_readable(&resolved.allow_read, home) && !ssh_agent_reaches(resolved) {
+        out.push_str(
+            "- SSH is blocked, and the blocker is the keys, not the port: \
+             port 22 is open (`allow.ports`), but no key under `~/.ssh` is \
+             readable and no agent socket reaches the sandbox, so `ssh` has \
+             nothing to authenticate with. Ask the user for an `allow.read` \
+             of the specific key file, or to run the SSH-only parts outside \
+             the sandbox.\n",
+        );
+    } else {
+        out.push_str(
+            "- SSH may work this session: port 22 is open (`allow.ports`) and \
+             the user allowed reading a key under `~/.ssh` and/or passed \
+             `SSH_AUTH_SOCK` through. If `ssh`/`scp` or a `ssh://` remote \
+             still fails, report the exact error rather than assuming the \
+             sandbox blocked it.\n",
+        );
+    }
     if resolved.git_guard.enabled && resolved.git_guard.prevent_push {
         out.push_str(
             "- `git push` is additionally gated by cplt's git guard this \
@@ -97,6 +152,20 @@ pub fn generate_session_brief(resolved: &Resolved, agent: Agent) -> String {
          and similar) are unreadable by design (EPERM). Don't retry; tell the \
          user.\n",
     );
+    // `allow.read` of a path inside one of those directories is a supported
+    // configuration — the backends re-allow it after the blanket deny — so the
+    // blanket claim above needs its exceptions spelled out, or the agent will
+    // report a working read as blocked.
+    let credential_overrides = denied_dotfile_overrides(home, &resolved.allow_read);
+    if !credential_overrides.is_empty() {
+        let _ = writeln!(
+            out,
+            "- Exceptions the user granted this session (`allow.read`), which \
+             ARE readable: {}. Use them for what they are for and don't send \
+             their contents anywhere.",
+            credential_overrides.join(", ")
+        );
+    }
     if cfg!(target_os = "linux") {
         out.push_str(
             "- Exception on Linux: registry credential files inside \
@@ -121,6 +190,98 @@ pub fn generate_session_brief(resolved: &Resolved, agent: Agent) -> String {
     );
 
     out
+}
+
+/// Can an outbound connection to port 22 leave the sandbox at all?
+///
+/// Default egress is `*:443` only — SBPL emits one `(remote ip "*:443")`, and
+/// the Landlock seed is a single `NetRule { port: 443 }`. So port 22 needs an
+/// explicit `allow.ports = [22]`…
+///
+/// …except on Linux under `allow_localhost_any`, where `restrict_net_connect`
+/// is `false` and cplt does not handle `AccessNet::ConnectTcp` at all: with no
+/// connect restriction in the ruleset, *no* port is kernel-limited. The
+/// `permissive` and `full-trust` presets both set it, so this is not a corner
+/// case. macOS is unaffected — SBPL denies `(remote tcp)` by default and can
+/// pin localhost, so its port list holds either way.
+fn ssh_port_open(resolved: &Resolved) -> bool {
+    resolved.allow_ports.contains(&22)
+        || (cfg!(target_os = "linux") && resolved.allow_localhost_any)
+}
+
+/// Is a private key under `~/.ssh` actually readable?
+///
+/// The two backends disagree, so this does too:
+///
+/// - **macOS**: `~/.ssh` is denied as a subpath, and `emit_denied_dotfile_overrides`
+///   re-allows approved paths afterwards — but it skips `*path == denied_dir`
+///   and emits `(literal ...)`, never a subpath. Only a grant naming a *file*
+///   inside `~/.ssh` opens anything.
+/// - **Linux**: Landlock has no denied-dotfile layer at all. Every `extra_read`
+///   path becomes a plain read rule, so a grant of `~/.ssh` — or of `~` — really
+///   does make the keys readable, and the brief must not claim otherwise.
+fn ssh_key_readable(allow_read: &[std::path::PathBuf], home: &Path) -> bool {
+    let ssh_dir = home.join(".ssh");
+    allow_read.iter().any(|p| {
+        if cfg!(target_os = "macos") {
+            p.starts_with(&ssh_dir) && *p != ssh_dir
+        } else {
+            p.starts_with(&ssh_dir) || ssh_dir.starts_with(p)
+        }
+    })
+}
+
+/// Does the ssh agent socket reach the sandbox?
+///
+/// `--pass-env SSH_AUTH_SOCK` delivers it: `extra_pass_env` is consumed in
+/// `build_sandbox_env`'s sanitized branch, which never consults
+/// `ENV_ALWAYS_DENY`.
+///
+/// `--inherit-env` takes the other branch, which pushes every `ENV_ALWAYS_DENY`
+/// entry — `SSH_AUTH_SOCK` among them — onto `remove`, and never looks at
+/// `extra_pass_env`. So inherit does not merely fail to help: it *cancels*
+/// `--pass-env SSH_AUTH_SOCK`. Nothing conflicts the two flags, and
+/// `sandbox.pass_env` in config makes the combination easy to hit by accident.
+///
+/// On macOS the variable alone is still not enough. The socket lives at
+/// `/private/tmp/com.apple.launchd.*/Listeners`, and the profile grants no
+/// `network-outbound unix-socket` for it — deliberately, which is why the JVM
+/// carve-out is regex-pinned to `.java_pid`. It also takes an `allow.socket`.
+fn ssh_agent_reaches(resolved: &Resolved) -> bool {
+    !resolved.inherit_env
+        && resolved.pass_env.iter().any(|v| v == "SSH_AUTH_SOCK")
+        && (!cfg!(target_os = "macos") || !resolved.allow_socket.is_empty())
+}
+
+/// The `allow.read` paths that defeat a `DENIED_DOTFILES` deny, rendered with
+/// `~` for the home prefix.
+///
+/// The Credentials section claims those directories are unreadable; this is
+/// what keeps the claim honest by naming the exceptions. Which grants count is
+/// per-backend, exactly as in [`ssh_key_readable`]: macOS re-allows approved
+/// paths per file via `emit_denied_dotfile_overrides` (which skips the
+/// directory itself), while Linux has no denied-dotfile layer at all, so a
+/// grant *at or above* the directory — `~/.aws`, or plain `~` — opens it.
+fn denied_dotfile_overrides(home: &Path, allow_read: &[std::path::PathBuf]) -> Vec<String> {
+    allow_read
+        .iter()
+        .filter(|p| {
+            crate::sandbox::DENIED_DOTFILES.iter().any(|d| {
+                let denied = home.join(d);
+                if cfg!(target_os = "macos") {
+                    p.starts_with(&denied) && **p != denied
+                } else {
+                    p.starts_with(&denied) || denied.starts_with(p)
+                }
+            })
+        })
+        .map(|p| match p.strip_prefix(home) {
+            // A grant of $HOME itself renders as `~`, not `~/`.
+            Ok(rest) if rest.as_os_str().is_empty() => "`~`".to_string(),
+            Ok(rest) => format!("`~/{}`", rest.display()),
+            Err(_) => format!("`{}`", p.display()),
+        })
+        .collect()
 }
 
 /// Write the session brief to `<scratch_dir>/CPLT_BRIEF.md`.
@@ -281,6 +442,7 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
 mod tests {
     use super::*;
     use crate::config::{GhGuardPolicy, GitGuardPolicy, Resolved};
+    use std::path::PathBuf;
 
     fn base_resolved() -> Resolved {
         Resolved {
@@ -340,15 +502,21 @@ mod tests {
         }
     }
 
+    /// Home for the render-only tests: nothing is read from it, it only has to
+    /// be a stable prefix the `~/.ssh` and credential checks can compare to.
+    fn home() -> &'static Path {
+        Path::new("/home/tester")
+    }
+
     #[test]
     fn brief_flips_env_files_warning_with_config() {
         let mut resolved = base_resolved();
         resolved.allow_env_files = false;
-        let brief = generate_session_brief(&resolved, Agent::Copilot);
+        let brief = generate_session_brief(&resolved, Agent::Copilot, home());
         assert!(brief.contains("also denied by default"));
 
         resolved.allow_env_files = true;
-        let brief = generate_session_brief(&resolved, Agent::Copilot);
+        let brief = generate_session_brief(&resolved, Agent::Copilot, home());
         assert!(!brief.contains("also denied"));
         assert!(brief.contains("readable this session"));
     }
@@ -357,22 +525,185 @@ mod tests {
     fn brief_flips_network_line_with_default_allowlist() {
         let mut resolved = base_resolved();
         resolved.default_allowlist = false;
-        let brief = generate_session_brief(&resolved, Agent::OpenCode);
-        assert!(!brief.contains("Fail-closed"));
+        let brief = generate_session_brief(&resolved, Agent::OpenCode, home());
+        assert!(!brief.contains("built-in allowlist"));
 
         resolved.default_allowlist = true;
-        let brief = generate_session_brief(&resolved, Agent::OpenCode);
-        assert!(brief.contains("Fail-closed"));
+        let brief = generate_session_brief(&resolved, Agent::OpenCode, home());
+        assert!(brief.contains("built-in allowlist"));
+    }
+
+    /// Plain proxy mode does not fail closed: direct `*:443` egress is still
+    /// allowed by the kernel unless `proxy_forced` is on (sandbox_profile.rs).
+    /// The brief must say so rather than promising a wall that isn't there.
+    #[test]
+    fn brief_claims_fail_closed_only_when_proxy_forced() {
+        let mut resolved = base_resolved();
+        resolved.default_allowlist = true;
+        resolved.proxy_forced = false;
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(
+            !brief.contains("fails closed"),
+            "plain proxy mode must not claim fail-closed:\n{brief}"
+        );
+        assert!(brief.contains("direct `*:443` connections are still permitted"));
+
+        resolved.proxy_forced = true;
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(brief.contains("fails closed"));
     }
 
     #[test]
     fn brief_says_ssh_blocked_but_not_https_git() {
         let resolved = base_resolved();
-        let brief = generate_session_brief(&resolved, Agent::Claude);
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
         assert!(brief.contains("SSH is blocked"));
         // git_guard gates HTTPS push; the sandbox itself does not block
         // HTTPS remotes, and the brief must not claim otherwise.
         assert!(brief.contains("Git over HTTPS still works"));
+    }
+
+    /// Keys and the agent socket are irrelevant while port 22 is shut, which
+    /// it is by default on both backends — so the brief must keep naming the
+    /// port as the blocker.
+    #[test]
+    fn brief_keeps_ssh_denial_without_port_22() {
+        let mut resolved = base_resolved();
+        resolved.allow_read = vec![home().join(".ssh/id_ed25519")];
+        resolved.pass_env = vec!["SSH_AUTH_SOCK".to_string()];
+        resolved.allow_socket = vec![PathBuf::from("/private/tmp/x/Listeners")];
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(brief.contains("SSH is blocked"), "{brief}");
+        assert!(brief.contains("outbound TCP is limited to 443"), "{brief}");
+    }
+
+    /// With port 22 open, an `allow.read` of a key file is enough — the brief
+    /// must not assert a blanket denial over a supported configuration.
+    #[test]
+    fn brief_drops_ssh_denial_when_port_open_and_key_readable() {
+        let mut resolved = base_resolved();
+        resolved.allow_ports = vec![22];
+        resolved.allow_read = vec![home().join(".ssh/id_ed25519")];
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(!brief.contains("SSH is blocked"), "{brief}");
+        assert!(brief.contains("SSH may work this session"));
+        // The blanket credentials claim needs the same treatment.
+        assert!(brief.contains("`~/.ssh/id_ed25519`"), "{brief}");
+    }
+
+    /// Port open, nothing to authenticate with: the blocker is the keys, and
+    /// the brief must not blame the port it just said was open.
+    #[test]
+    fn brief_blames_the_keys_when_the_port_is_open_but_nothing_authenticates() {
+        let mut resolved = base_resolved();
+        resolved.allow_ports = vec![22];
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(
+            brief.contains("the blocker is the keys, not the port"),
+            "{brief}"
+        );
+        assert!(
+            !brief.contains("outbound TCP is limited to 443"),
+            "port 22 is open — the port text is a lie here:\n{brief}"
+        );
+    }
+
+    /// `--inherit-env` takes the branch that sweeps ENV_ALWAYS_DENY (which
+    /// lists SSH_AUTH_SOCK) and never reads extra_pass_env — so it does not
+    /// merely fail to help, it cancels `--pass-env SSH_AUTH_SOCK`. Nothing in
+    /// clap conflicts the two, and `sandbox.pass_env` makes the pair easy to
+    /// hit.
+    #[test]
+    fn brief_does_not_count_the_agent_socket_under_inherit_env() {
+        let mut resolved = base_resolved();
+        resolved.allow_ports = vec![22];
+        resolved.pass_env = vec!["SSH_AUTH_SOCK".to_string()];
+        resolved.allow_socket = vec![PathBuf::from("/private/tmp/x/Listeners")];
+        resolved.inherit_env = true;
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(
+            brief.contains("the blocker is the keys, not the port"),
+            "--inherit-env strips SSH_AUTH_SOCK even with --pass-env:\n{brief}"
+        );
+
+        // Same config without inherit_env: the socket does arrive.
+        resolved.inherit_env = false;
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(brief.contains("SSH may work this session"), "{brief}");
+    }
+
+    /// macOS re-allows approved paths inside `~/.ssh` per file
+    /// (`emit_denied_dotfile_overrides` skips the directory itself and emits
+    /// `(literal ...)`), so a grant of the bare directory opens nothing.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn brief_treats_bare_ssh_dir_grant_as_no_grant_on_macos() {
+        let mut resolved = base_resolved();
+        resolved.allow_ports = vec![22];
+        resolved.allow_read = vec![home().join(".ssh")];
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(
+            brief.contains("the blocker is the keys, not the port"),
+            "{brief}"
+        );
+        assert!(
+            !brief.contains("Exceptions the user granted"),
+            "a bare directory grant is not a readable exception on macOS:\n{brief}"
+        );
+    }
+
+    /// Linux has no denied-dotfile layer — every extra_read path becomes a
+    /// plain Landlock read rule — so a grant of `~/.ssh`, or of `~`, really
+    /// does make the keys readable, and the brief must say so.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn brief_honours_a_directory_grant_on_linux() {
+        for grant in [home().join(".ssh"), home().to_path_buf()] {
+            let mut resolved = base_resolved();
+            resolved.allow_ports = vec![22];
+            resolved.allow_read = vec![grant.clone()];
+            let brief = generate_session_brief(&resolved, Agent::Claude, home());
+            assert!(
+                brief.contains("SSH may work this session"),
+                "Landlock grants {} outright:\n{brief}",
+                grant.display()
+            );
+            assert!(
+                brief.contains("Exceptions the user granted"),
+                "the credentials claim must name {}:\n{brief}",
+                grant.display()
+            );
+        }
+    }
+
+    /// Linux + allow_localhost_any sets restrict_net_connect = false, so
+    /// ConnectTcp is never handled and NO port is kernel-limited. Claiming
+    /// port 22 is denied would be a promise the kernel is not making. Both the
+    /// permissive and full-trust presets set this.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn brief_does_not_claim_port_22_is_denied_under_allow_localhost_any() {
+        let mut resolved = base_resolved();
+        resolved.allow_localhost_any = true;
+        assert!(!resolved.allow_ports.contains(&22), "port 22 not listed");
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
+        assert!(
+            !brief.contains("outbound TCP is limited to 443"),
+            "no connect restriction is in the ruleset at all:\n{brief}"
+        );
+        assert!(
+            brief.contains("the blocker is the keys, not the port"),
+            "{brief}"
+        );
+    }
+
+    /// The cplt config directory has no allow rule, so it is unreadable inside
+    /// the sandbox — not "read-only".
+    #[test]
+    fn brief_does_not_call_the_config_readable() {
+        let brief = generate_session_brief(&base_resolved(), Agent::Claude, home());
+        assert!(brief.contains("not readable from in here"), "{brief}");
+        assert!(!brief.contains("read-only from in here"));
     }
 
     #[test]
@@ -380,10 +711,10 @@ mod tests {
         let mut resolved = base_resolved();
         resolved.default_allowlist = true;
         resolved.allow_all_domains = true;
-        let brief = generate_session_brief(&resolved, Agent::Claude);
+        let brief = generate_session_brief(&resolved, Agent::Claude, home());
         assert!(
-            !brief.contains("Fail-closed"),
-            "must not claim domains fail closed under --allow-all-domains"
+            !brief.contains("built-in allowlist"),
+            "must not claim an allowlist applies under --allow-all-domains"
         );
         assert!(brief.contains("No domain allowlist"));
     }
@@ -418,9 +749,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn upsert_refuses_symlink() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-symlink");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let target = tmp.join("target.txt");
         std::fs::write(&target, "precious\n").unwrap();
         let path = tmp.join("AGENTS.md");
@@ -430,15 +760,12 @@ mod tests {
         assert!(err.contains("symlink"), "unexpected error: {err}");
         // Target untouched.
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious\n");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn upsert_creates_absent_file() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-create");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
 
         let outcome = upsert_managed_block(&path).unwrap();
@@ -446,15 +773,12 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains(BLOCK_BEGIN));
         assert!(content.contains(BLOCK_END));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn upsert_inserts_into_existing_file_without_block() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-insert");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
         std::fs::write(&path, "# My project\n\nSome existing content.\n").unwrap();
 
@@ -463,15 +787,12 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("Some existing content."));
         assert!(content.contains(BLOCK_BEGIN));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn upsert_idempotent_on_rerun() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-idempotent");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
 
         assert_eq!(upsert_managed_block(&path).unwrap(), BlockOutcome::Created);
@@ -484,15 +805,12 @@ mod tests {
         let after_second = std::fs::read_to_string(&path).unwrap();
         assert_eq!(after_first, after_second, "no duplication on re-run");
         assert_eq!(after_second.matches(BLOCK_BEGIN).count(), 1);
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn upsert_replaces_stale_block() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-stale");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
         std::fs::write(
             &path,
@@ -506,15 +824,12 @@ mod tests {
         assert!(!content.contains("stale content"));
         assert!(content.contains("footer"));
         assert_eq!(content.matches(BLOCK_BEGIN).count(), 1);
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn upsert_appends_after_hand_written_content() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-handwritten");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
         std::fs::write(
             &path,
@@ -530,15 +845,12 @@ mod tests {
             "hand-written content must survive"
         );
         assert_eq!(content.matches(BLOCK_BEGIN).count(), 1);
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn upsert_skips_ambiguous_duplicate_markers() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-ambiguous");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
         let doubled = format!("{BLOCK_BEGIN}\na\n{BLOCK_END}\n\n{BLOCK_BEGIN}\nb\n{BLOCK_END}\n");
         std::fs::write(&path, &doubled).unwrap();
@@ -547,8 +859,6 @@ mod tests {
         assert_eq!(outcome, BlockOutcome::SkippedAmbiguous);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, doubled, "ambiguous file must be left untouched");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `<!--end--><!--begin-->` with no gap: the END marker's *end* offset
@@ -557,9 +867,8 @@ mod tests {
     /// leaves the file with two marker pairs — permanently ambiguous.
     #[test]
     fn upsert_refuses_adjacent_reversed_markers() {
-        let tmp = std::env::temp_dir().join("cplt-test-brief-reversed");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
         let reversed = format!("{BLOCK_END}{BLOCK_BEGIN}\n");
         std::fs::write(&path, &reversed).unwrap();
@@ -568,8 +877,6 @@ mod tests {
         assert_eq!(outcome, BlockOutcome::SkippedAmbiguous);
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, reversed, "malformed file must be left untouched");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -577,9 +884,8 @@ mod tests {
         // A read error that ISN'T "file not found" (e.g. invalid UTF-8,
         // permission denied) must never be treated as "absent" — that would
         // silently destroy the user's existing AGENTS.md.
-        let tmp = std::env::temp_dir().join("cplt-test-brief-unreadable");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
         let path = tmp.join("AGENTS.md");
         // Invalid UTF-8 bytes make read_to_string fail with InvalidData,
         // not NotFound.
@@ -590,7 +896,5 @@ mod tests {
 
         let raw = std::fs::read(&path).unwrap();
         assert_eq!(raw, vec![0xff, 0xfe, 0x00, 0xff], "file must be untouched");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

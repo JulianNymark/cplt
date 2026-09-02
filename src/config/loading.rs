@@ -343,16 +343,14 @@ impl Config {
             !self.sandbox.validate.unwrap_or(true)
         };
 
-        // Brief: --no-brief wins, then config, then true (the session brief in
-        // the scratch dir is on by default — it never touches the project).
-        let brief = if cli.no_brief {
-            false
-        } else {
-            self.sandbox.brief.unwrap_or(true)
-        };
-        // AGENTS.md injection writes into the user's repo, so it is opt-in and
-        // gated on `brief` — `--no-brief` stays a kill switch for both layers.
-        let agents_md = brief && self.sandbox.agents_md.unwrap_or(false);
+        // Brief: off unless asked for. `--brief` turns it on for one run,
+        // `sandbox.brief = true` for good. cplt writing files an agent then
+        // reads is a behaviour change, not a default.
+        let brief = cli.brief || self.sandbox.brief.unwrap_or(false);
+        // AGENTS.md injection additionally writes into the user's repo, so it
+        // is a second opt-in gated on `brief` — with the brief off, the
+        // AGENTS.md block can never be written.
+        let agents_md = brief && (cli.agents_md || self.sandbox.agents_md.unwrap_or(false));
 
         // Allow-env-files: explicit CLI flag wins, then explicit config value,
         // then the preset baseline (false when no preset — deny by default).
@@ -1545,28 +1543,27 @@ validate = false
     }
 
     #[test]
-    fn brief_defaults_on() {
+    fn brief_defaults_off() {
         let resolved = Config::default().merge(CliFlags::default()).unwrap();
-        assert!(resolved.brief, "brief is on by default");
+        assert!(!resolved.brief, "the brief is opt-in");
     }
 
     #[test]
-    fn cli_no_brief_overrides_config() {
-        let config: Config = toml::from_str("[sandbox]\nbrief = true\n").unwrap();
-        let resolved = config
+    fn cli_brief_enables_without_config() {
+        let resolved = Config::default()
             .merge(CliFlags {
-                no_brief: true,
+                brief: true,
                 ..Default::default()
             })
             .unwrap();
-        assert!(!resolved.brief, "--no-brief wins over config");
+        assert!(resolved.brief, "--brief turns it on for one run");
     }
 
     #[test]
-    fn config_brief_false_disables() {
-        let config: Config = toml::from_str("[sandbox]\nbrief = false\n").unwrap();
+    fn config_brief_true_enables() {
+        let config: Config = toml::from_str("[sandbox]\nbrief = true\n").unwrap();
         let resolved = config.merge(CliFlags::default()).unwrap();
-        assert!(!resolved.brief);
+        assert!(resolved.brief);
     }
 
     #[test]
@@ -1579,23 +1576,54 @@ validate = false
     }
 
     #[test]
-    fn config_agents_md_true_enables() {
+    fn config_agents_md_true_needs_brief() {
+        // agents_md alone is not enough: the AGENTS.md write is gated on the
+        // brief, and the brief is off by default.
         let config: Config = toml::from_str("[sandbox]\nagents_md = true\n").unwrap();
-        let resolved = config.merge(CliFlags::default()).unwrap();
-        assert!(resolved.agents_md);
-    }
+        let resolved = config.clone().merge(CliFlags::default()).unwrap();
+        assert!(!resolved.agents_md, "no AGENTS.md write while brief is off");
 
-    #[test]
-    fn no_brief_also_disables_agents_md() {
-        let config: Config = toml::from_str("[sandbox]\nagents_md = true\n").unwrap();
         let resolved = config
             .merge(CliFlags {
-                no_brief: true,
+                brief: true,
                 ..Default::default()
             })
             .unwrap();
+        assert!(resolved.agents_md);
+    }
+
+    /// `--agents-md` is a per-run alternative to the config key, under the
+    /// same gate: it must do nothing on its own.
+    #[test]
+    fn cli_agents_md_needs_brief_too() {
+        let resolved = Config::default()
+            .merge(CliFlags {
+                agents_md: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            !resolved.agents_md,
+            "--agents-md alone must not write into the repo"
+        );
+
+        let resolved = Config::default()
+            .merge(CliFlags {
+                brief: true,
+                agents_md: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(resolved.agents_md, "--brief --agents-md writes the block");
+    }
+
+    #[test]
+    fn brief_false_kills_agents_md() {
+        let config: Config =
+            toml::from_str("[sandbox]\nbrief = false\nagents_md = true\n").unwrap();
+        let resolved = config.merge(CliFlags::default()).unwrap();
         assert!(!resolved.brief);
-        assert!(!resolved.agents_md, "--no-brief kills both layers");
+        assert!(!resolved.agents_md, "brief = false kills both layers");
     }
 
     #[test]

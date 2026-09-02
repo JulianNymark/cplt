@@ -429,7 +429,8 @@ What passes through:
 | `--allow-msbuild` | Allow MSBuild worker-node unix sockets in `/tmp`. Needed for `dotnet build`. Does not enable the persistent MSBuild Server. See [MSBuild worker-node IPC](docs/known-impacts.md#msbuild-worker-node-ipc) |
 | `--no-scratch-dir` | Disable the per-session scratch directory, which is on by default. TMPDIR will not be redirected |
 | `--scratch-dir` | Explicitly enable the per-session scratch directory. Already the default, so this is for overriding `scratch_dir = false` in config |
-| `--no-brief` | Disable the agent-facing sandbox brief written to the scratch dir (`CPLT_BRIEF.md`, on by default) and, with it, the opt-in `sandbox.agents_md` AGENTS.md block. Also `sandbox.brief = false` in config |
+| `--brief` | 🧪 Experimental. Write the agent-facing sandbox brief to the scratch dir (`CPLT_BRIEF.md`). Off by default. Also `sandbox.brief = true` in config. Unstable, so it may change or be removed in a future release |
+| `--agents-md` | 🧪 Experimental. With `--brief`, also write the managed cplt block into the project's `AGENTS.md`. Off by default. Also `sandbox.agents_md = true` in config. No effect without `--brief`. Unstable, so it may change or be removed in a future release |
 | `--allow-tmp-exec` | ⚠️ Dangerous. Allow exec from system temp dirs (`/private/tmp`, `/private/var/folders`). Prefer the scratch dir |
 | `--allow-cache-exec <SUBDIR>` | Allow exec from one `~/Library/Caches/<SUBDIR>`. Repeatable. For tools that cache compiled binaries there, such as Playwright and pnpm dlx |
 | `--allow-cache-exec-any` | ⚠️ Dangerous. Allow exec from all of `~/Library/Caches`. Prefer `--allow-cache-exec <SUBDIR>` |

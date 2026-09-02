@@ -168,21 +168,28 @@ For arrays of objects, multi-line values, and other complex configuration, edit 
 
 **Dotted keys:** a dotted key belongs to whatever section header precedes it. `allow.read = [...]` is valid on its own — above every header, or written as `read = [...]` under `[allow]` — but the same line below `[git_guard]` means `git_guard.allow.read`. cplt then sees an unknown key and ignores it, with a warning at launch and an error from `cplt config validate`, so the grant never takes effect.
 
-## Agent sandbox brief (`sandbox.brief`, `sandbox.agents_md`)
+## Agent sandbox brief (`sandbox.brief`, `sandbox.agents_md`) — EXPERIMENTAL
+
+> **EXPERIMENTAL.** Both keys, and the `--brief` / `--agents-md` flags, are
+> unstable: their names, defaults and output are not covered by any stability
+> guarantee and may change or be removed in a future release. Don't build
+> tooling on the brief's wording or on the AGENTS.md block's markers.
 
 An agent inside the sandbox has no way of knowing it is sandboxed: it hits
 `EPERM`, assumes a bug, and retries. cplt can hand it the answer up front, in
-two layers.
+two layers. Both are off by default — cplt writing files that an agent then
+reads is a behaviour change, so you ask for it.
 
-**`sandbox.brief` (default `true`)** — writes `CPLT_BRIEF.md` into the
+**`sandbox.brief` (default `false`)** — writes `CPLT_BRIEF.md` into the
 per-session scratch directory (the one `$TMPDIR` points at inside the sandbox).
 It is rendered from the resolved policy for *that* launch — network mode,
 `.env` handling, credential denies — and disappears with the scratch dir when
-the session ends. It never touches your project.
+the session ends. It never touches your project. Turn it on for one run with
+`--brief`, or for good with `cplt config set sandbox.brief true`.
 
-**`sandbox.agents_md` (default `false`, opt-in)** — additionally injects a
-managed block into `<project>/AGENTS.md`, creating the file if it does not
-exist. This writes into your repository, which is why it is off by default:
+**`sandbox.agents_md` (default `false`)** — additionally injects a managed
+block into `<project>/AGENTS.md`, creating the file if it does not exist. This
+writes into your repository, so it is a second opt-in on top of the first:
 
 - The block is delimited by `<!-- cplt:sandbox begin -->` /
   `<!-- cplt:sandbox end -->` markers. Re-runs replace it in place; content
@@ -194,16 +201,19 @@ exist. This writes into your repository, which is why it is off by default:
   repo untouched.
 - Skipped outside a git work tree, and skipped with a warning if the file
   somehow ends up with more than one marker pair.
+- It requires `sandbox.brief` as well. With the brief off — the default — the
+  AGENTS.md block is never written, whatever `agents_md` says.
 
-Turn it on globally:
+Turn both on for one run, or globally:
 
 ```bash
+cplt --brief --agents-md            # this launch only
+cplt config set sandbox.brief true  # every launch
 cplt config set sandbox.agents_md true
 ```
 
 Both are global-only keys — a repository cannot ask cplt to write into its own
-`AGENTS.md`. `--no-brief` (or `sandbox.brief = false`) disables both layers for
-a run.
+`AGENTS.md`.
 
 ## Per-repo configuration (`.cplt.toml`)
 

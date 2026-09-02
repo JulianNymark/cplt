@@ -494,10 +494,17 @@ grants exec to every binary cached by any application. Prefer
     #[arg(long)]
     no_validate: bool,
 
-    /// Disable the agent-facing sandbox brief (scratch `CPLT_BRIEF.md`, on by
-    /// default) and, with it, the opt-in `sandbox.agents_md` AGENTS.md block.
+    /// EXPERIMENTAL. Write the agent-facing sandbox brief to the scratch dir
+    /// (`CPLT_BRIEF.md`). Off by default, unstable, and may be removed in a
+    /// future release. Also the gate for --agents-md.
     #[arg(long)]
-    no_brief: bool,
+    brief: bool,
+
+    /// EXPERIMENTAL. With --brief, also write the managed cplt block into the
+    /// project's AGENTS.md. Off by default, unstable, and may be removed in a
+    /// future release. Has no effect without --brief (or `sandbox.brief`).
+    #[arg(long)]
+    agents_md: bool,
 
     /// Print the generated sandbox profile (SBPL) and exit.
     /// Useful for debugging or auditing the sandbox rules.
@@ -1284,7 +1291,8 @@ fn resolve_context(cli: &Cli, check_mode: bool) -> anyhow::Result<ResolvedContex
             cli.no_allow_env_files,
         ),
         no_validate: cli.no_validate,
-        no_brief: cli.no_brief,
+        brief: cli.brief,
+        agents_md: cli.agents_md,
         pass_env: cli.pass_env.clone(),
         inherit_env: cli.inherit_env,
         allow_lifecycle_scripts: config::FeatureToggle::from_pair(
@@ -1732,8 +1740,8 @@ fn resolve_domain_allowlist_decision(
     }
 }
 
-/// Session layer of the sandbox brief (issue #148; opt-out via --no-brief /
-/// sandbox.brief = false): a fresh scratch `CPLT_BRIEF.md` rendered from the
+/// Session layer of the sandbox brief (issue #148; opt-in via `--brief` /
+/// `sandbox.brief = true`): a fresh scratch `CPLT_BRIEF.md` rendered from the
 /// resolved policy, never a static template.
 ///
 /// Safe for every entry point — the scratch dir is created per run and torn
@@ -1745,15 +1753,24 @@ fn write_session_sandbox_brief(
     resolved: &config::Resolved,
     active_agent: agent::Agent,
     scratch_path: Option<&Path>,
+    home_dir: &Path,
 ) {
     if !resolved.brief {
         return;
     }
-    if let Some(scratch) = scratch_path {
-        let content = brief::generate_session_brief(resolved, active_agent);
-        if let Err(e) = brief::write_session_brief(scratch, &content) {
-            ui::warn(&format!("Could not write sandbox brief: {e}"));
-        }
+    let Some(scratch) = scratch_path else {
+        // The brief lives in the scratch dir and nowhere else, so
+        // `--no-scratch-dir` means there is none — say so, because the
+        // AGENTS.md block still points agents at `$TMPDIR/CPLT_BRIEF.md`.
+        ui::warn(
+            "The sandbox brief was requested but no scratch dir is in use \
+             (--no-scratch-dir): no CPLT_BRIEF.md will be written.",
+        );
+        return;
+    };
+    let content = brief::generate_session_brief(resolved, active_agent, home_dir);
+    if let Err(e) = brief::write_session_brief(scratch, &content) {
+        ui::warn(&format!("Could not write sandbox brief: {e}"));
     }
 }
 
@@ -1761,7 +1778,8 @@ fn write_session_sandbox_brief(
 /// project root, written BEFORE the agent process starts (this whole setup
 /// phase is unsandboxed) and left for the user to review and commit.
 ///
-/// Opt-in via `sandbox.agents_md` — it writes into the user's repository, which
+/// Opt-in via `--agents-md` / `sandbox.agents_md`, and gated on the brief being
+/// on at all — it writes into the user's repository, which
 /// is not something to do by default. Only the agent-launch path calls it, and
 /// only once the launch has been confirmed: `cplt check`, `cplt exec` and every
 /// early return (`--print-profile`, a declined prompt) must leave the project
@@ -2454,7 +2472,7 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     // Agent-facing sandbox brief (issue #148), session layer only. The
     // AGENTS.md layer writes into the user's repo and must not run until the
     // launch is confirmed — see the call after prompt_confirm below.
-    write_session_sandbox_brief(&resolved, active_agent, scratch_path);
+    write_session_sandbox_brief(&resolved, active_agent, scratch_path, &home_dir);
 
     // macOS-only, opt-in (sandbox.gradle_init): install the guarded Gradle
     // init script so sandboxed builds keep the preferIPv4Stack workaround for
@@ -2975,7 +2993,7 @@ fn prepare_shell_sandbox(
     // See the agent-path call site: agent-facing sandbox brief (issue #148).
     // Session layer only — `cplt check` and `cplt exec` must not write
     // AGENTS.md into the user's project. See `apply_persistent_sandbox_brief`.
-    write_session_sandbox_brief(resolved, active_agent, scratch_path);
+    write_session_sandbox_brief(resolved, active_agent, scratch_path, home_dir);
 
     // See the agent-path call site: guarded Gradle init script (opt-in via
     // sandbox.gradle_init) so sandboxed builds keep the preferIPv4Stack

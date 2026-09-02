@@ -151,13 +151,14 @@ pub fn default_config_contents() -> String {
 # Disable to save ~200ms startup if you trust your config.
 # validate = true
 #
-# Write the per-session agent-facing sandbox brief to the scratch dir as
-# CPLT_BRIEF.md (default: true). Never touches the project directory.
-# brief = true
+# EXPERIMENTAL (unstable, may be removed): write the per-session agent-facing
+# sandbox brief to the scratch dir as CPLT_BRIEF.md (default: false). Never
+# touches the project directory.
+# brief = false
 #
-# Also inject the managed cplt sandbox block into the project's AGENTS.md on
-# every launch (default: false). Opt-in — it writes into your repo, so review
-# and commit the result yourself.
+# EXPERIMENTAL (unstable, may be removed): also inject the managed cplt sandbox
+# block into the project's AGENTS.md on every launch (default: false). Requires
+# brief = true, and writes into your repo — review and commit it yourself.
 # agents_md = false
 #
 # Allow Copilot to read .env files and private keys (.pem, .key)

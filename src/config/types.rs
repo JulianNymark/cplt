@@ -570,11 +570,12 @@ pub struct SandboxConfig {
     /// Run sandbox-exec validation test on startup (default: true).
     pub validate: Option<bool>,
     /// Write the per-session agent-facing sandbox brief to the scratch dir
-    /// (default: true). Disable with `--no-brief` or `sandbox.brief = false`.
+    /// (default: false — opt-in). Enable with `--brief` or
+    /// `sandbox.brief = true`.
     pub brief: Option<bool>,
     /// Also inject the managed sandbox block into the project's `AGENTS.md`
     /// (default: false — opt-in, since it writes into the user's repo).
-    /// Requires `brief`; `--no-brief` turns both off.
+    /// Requires `brief`: with the brief off, this never fires.
     pub agents_md: Option<bool>,
     /// Allow reading .env files and private keys in project dir (default: false).
     pub allow_env_files: Option<bool>,
@@ -842,7 +843,11 @@ pub struct CliFlags {
     /// Preset-controlled toggle (see `allow_localhost_any`).
     pub allow_env_files: FeatureToggle,
     pub no_validate: bool,
-    pub no_brief: bool,
+    /// `--brief`: opt in to the agent-facing sandbox brief for this run.
+    pub brief: bool,
+    /// `--agents-md`: also write the managed AGENTS.md block for this run.
+    /// Still gated on `brief`, exactly like `sandbox.agents_md`.
+    pub agents_md: bool,
     pub pass_env: Vec<String>,
     pub inherit_env: bool,
     /// Preset-controlled toggle (see `allow_localhost_any`).
