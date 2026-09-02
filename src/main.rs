@@ -5,8 +5,8 @@ use clap::{Parser, Subcommand};
 #[cfg(target_os = "macos")]
 use cplt::gradle_init;
 use cplt::{
-    agent, audit, brief, check, config, discover, gh_proxy, proxy, repo_config, sandbox, scratch,
-    subscriptions, trust, update,
+    agent, audit, brief, check, config, discover, gh_proxy, git, proxy, repo_config, sandbox,
+    scratch, subscriptions, trust, update,
 };
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
@@ -1823,12 +1823,17 @@ fn apply_persistent_sandbox_brief(resolved: &config::Resolved, project_dir: &Pat
 ///
 /// Bare repos and plain directories both answer no: `--is-inside-work-tree`
 /// prints `false` for a bare repo and fails outright outside a repository.
+///
+/// Goes through the hardened parent-side invoker (`git::command`, #210/#211):
+/// this runs in the parent, before the sandbox exists, in a directory the
+/// untrusted project controls, so it must not be a raw `Command::new("git")`.
+/// `rev-parse` is on `CONTENT_FREE_SUBCOMMANDS`, so the invoker never has to
+/// consult the repo config to decide, and returns `None` only for refused
+/// args — which a fixed arg list is not.
 fn in_git_work_tree(dir: &Path) -> bool {
-    std::process::Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(dir)
-        .output()
-        .is_ok_and(|o| o.status.success() && o.stdout.starts_with(b"true"))
+    git::command(dir, &["rev-parse", "--is-inside-work-tree"])
+        .and_then(|mut cmd| cmd.output().ok())
+        .is_some_and(|o| o.status.success() && o.stdout.starts_with(b"true"))
 }
 
 fn start_proxy_if_enabled(
