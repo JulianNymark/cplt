@@ -257,6 +257,55 @@ pub fn build_sandbox_env(
     env
 }
 
+/// Whether the user explicitly re-allowed `$HOME/.npmrc` via `--allow-read` / `allow.read`.
+///
+/// Both entry points canonicalize before the path reaches `extra_read`
+/// (`canonicalize_paths` in main.rs, `resolve_config_path` in config/path.rs), so a
+/// stow/chezmoi `~/.npmrc -> ~/dotfiles/npmrc` is stored as the link *target*. Compare
+/// canonicalized, or the flag reads false for exactly the users who opted in and the
+/// `NPM_CONFIG_USERCONFIG` redirect silently ignores the token they asked for.
+pub fn npmrc_explicitly_allowed(home_dir: &Path, extra_read: &[std::path::PathBuf]) -> bool {
+    let npmrc = home_dir.join(".npmrc");
+    let resolved = std::fs::canonicalize(&npmrc).unwrap_or(npmrc);
+    extra_read.iter().any(|p| p == &resolved)
+}
+
+/// Where to point `NPM_CONFIG_USERCONFIG`, or `None` when the injection must be skipped.
+///
+/// The sandbox denies `~/.npmrc` (it holds registry auth tokens). npm, pnpm and bun
+/// treat the resulting EACCES/EPERM as "no user config"; yarn 1 only tolerates
+/// ENOENT/EISDIR and aborts the whole install (#180). Pointing the user-config path
+/// at a file that does not exist inside the scratch dir turns the denial into ENOENT,
+/// which every one of them handles. Semantically a no-op: the real `~/.npmrc` was
+/// unreadable in the sandbox either way.
+///
+/// Skipped when:
+/// - the user opted back into `~/.npmrc` via `allow.read` (`npmrc_allowed`) — they
+///   want the token, and redirecting would silently break private-registry auth;
+/// - the user set `NPM_CONFIG_USERCONFIG` themselves (it is on `ENV_ALLOWLIST`);
+/// - there is no scratch dir — without one there is no session-scoped writable location
+///   to point at, and leaving the denial in place is better than inventing a target.
+pub fn npmrc_userconfig_override(
+    parent_env: &[(String, String)],
+    scratch_dir: Option<&Path>,
+    npmrc_allowed: bool,
+) -> Option<std::path::PathBuf> {
+    if npmrc_allowed {
+        return None;
+    }
+    // Case-insensitive: npm and yarn both lowercase `npm_config_*` env keys, so a user's
+    // `npm_config_userconfig` (which `--inherit-env` passes through) is the same setting.
+    // Injecting the uppercase form alongside it makes which one wins depend on env order.
+    if parent_env
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("NPM_CONFIG_USERCONFIG") && !v.is_empty())
+    {
+        return None;
+    }
+    // "npmrc" (no dot) so it cannot collide with a real dotfile the agent creates.
+    Some(scratch_dir?.join("npmrc"))
+}
+
 /// Dangerous NODE_OPTIONS flags that allow code preloading or module interception.
 const NODE_OPTIONS_DANGEROUS: &[&str] = &[
     "--require",

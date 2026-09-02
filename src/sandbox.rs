@@ -62,7 +62,7 @@ pub use policy::{
 pub use profile::{ProfileOptions, generate_profile};
 
 // Environment construction — already platform-agnostic.
-pub use env::{SandboxEnv, build_sandbox_env};
+pub use env::{SandboxEnv, build_sandbox_env, npmrc_explicitly_allowed, npmrc_userconfig_override};
 
 // Landlock policy types — cross-platform for testing.
 pub use landlock_mod::{
@@ -168,6 +168,9 @@ pub struct PreparedSandbox {
     allow_localhost: Vec<u16>,
     /// Whether all localhost ports are open (`--allow-localhost-any`).
     allow_localhost_any: bool,
+    /// Whether the user explicitly re-allowed `$HOME/.npmrc` via `allow.read`.
+    /// Suppresses the `NPM_CONFIG_USERCONFIG` redirect (see #180).
+    npmrc_allowed: bool,
     /// Landlock + seccomp pre-computed sandbox data (Linux only).
     /// Built in the parent process; applied in pre_exec.
     #[cfg(target_os = "linux")]
@@ -341,6 +344,7 @@ fn prepare_impl(
         agent: config.agent,
         allow_localhost: config.localhost_ports.to_vec(),
         allow_localhost_any: config.allow_localhost_any,
+        npmrc_allowed: env::npmrc_explicitly_allowed(config.home_dir, config.extra_read),
     })
 }
 
@@ -476,6 +480,7 @@ fn prepare_impl(
         agent: config.agent,
         allow_localhost: config.localhost_ports.to_vec(),
         allow_localhost_any: config.allow_localhost_any,
+        npmrc_allowed: env::npmrc_explicitly_allowed(config.home_dir, config.extra_read),
         precomputed,
         bwrap_wrapper,
     })
