@@ -1770,12 +1770,15 @@ fn write_session_sandbox_brief(
         return;
     }
     let Some(scratch) = scratch_path else {
-        // The brief lives in the scratch dir and nowhere else, so
-        // `--no-scratch-dir` means there is none — say so, because the
-        // AGENTS.md block still points agents at `$TMPDIR/CPLT_BRIEF.md`.
+        // The brief lives in the scratch dir and nowhere else, so no scratch
+        // dir means no brief — say so, because the AGENTS.md block still
+        // points agents at `$TMPDIR/CPLT_BRIEF.md`. Both ways of turning the
+        // scratch dir off land here, and naming only the flag sends anyone who
+        // disabled it in config looking for a flag they never passed.
         ui::warn(
             "The sandbox brief was requested but no scratch dir is in use \
-             (--no-scratch-dir): no CPLT_BRIEF.md will be written.",
+             (--no-scratch-dir, or sandbox.scratch_dir = false in the config): \
+             no CPLT_BRIEF.md will be written.",
         );
         return;
     };
