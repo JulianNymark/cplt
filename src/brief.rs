@@ -337,12 +337,47 @@ pub fn managed_block() -> String {
          can widen the policy, from outside the sandbox (`allow.read` / \
          `allow.write` / allowed domains in the cplt config, or `cplt trust` \
          for keys this repo proposes).\n\
-         - The policy resolved for the current session is written to \
-         `$TMPDIR/CPLT_BRIEF.md` (cplt redirects `$TMPDIR` to a per-session \
-         scratch dir). `cplt check` reports the same policy from outside the \
-         sandbox.\n\
+         - When the session brief is enabled, the policy resolved for that run \
+         is written to `$TMPDIR/CPLT_BRIEF.md` (cplt redirects `$TMPDIR` to a \
+         per-session scratch dir). It is not always present: this block is \
+         committed and outlives the flags that produced it, and `--no-brief` \
+         with `--agents-md` writes this file without that one. `cplt check` \
+         reports the same policy from outside the sandbox either way.\n\
          {BLOCK_END}"
     )
+}
+
+#[cfg(test)]
+mod md_probe {
+    /// Four leading spaces make Markdown render a line as a code block, which
+    /// would swallow the `## Sandbox` heading and the prose under it. The `\n\`
+    /// continuations do not produce them — Rust strips the newline and the
+    /// following indentation — but an explicit `\x20` can, so this checks the
+    /// rendered output rather than the literal.
+    ///
+    /// Lines inside the leading HTML comment are exempt: Markdown does not
+    /// render comment content, and one line there is deliberately indented.
+    #[test]
+    fn managed_block_has_no_markdown_indentation() {
+        let b = super::managed_block();
+        let mut in_comment = false;
+        for (n, line) in b.lines().enumerate() {
+            if line.contains("<!--") {
+                in_comment = true;
+            }
+            let ends_comment = line.contains("-->");
+            if !in_comment {
+                assert!(
+                    !line.starts_with("    "),
+                    "line {n} starts with 4 spaces, which Markdown renders as a \
+                     code block: {line:?}"
+                );
+            }
+            if ends_comment {
+                in_comment = false;
+            }
+        }
+    }
 }
 
 /// Outcome of inserting/updating the managed block in an AGENTS.md file.
