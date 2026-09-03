@@ -170,7 +170,8 @@ For arrays of objects, multi-line values, and other complex configuration, edit 
 
 ## Agent sandbox brief (`sandbox.brief`, `sandbox.agents_md`) — EXPERIMENTAL
 
-> **EXPERIMENTAL.** Both keys, and the `--brief` / `--agents-md` flags, are
+> **EXPERIMENTAL.** Both keys, and the `--brief` / `--no-brief` /
+> `--agents-md` / `--no-agents-md` flags, are
 > unstable: their names, defaults and output are not covered by any stability
 > guarantee and may change or be removed in a future release. Don't build
 > tooling on the brief's wording or on the AGENTS.md block's markers.
@@ -211,6 +212,16 @@ cplt --brief --agents-md            # this launch only
 cplt config set sandbox.brief true  # every launch
 cplt config set sandbox.agents_md true
 ```
+
+And back off again for a single run, without editing the config:
+
+```bash
+cplt --no-brief       # no CPLT_BRIEF.md, and no AGENTS.md block either
+cplt --no-agents-md   # keep the brief, leave the repository alone
+```
+
+The flag always beats the config key, in both directions. `--no-brief` covers
+both layers because the AGENTS.md block is gated on the brief.
 
 Both are global-only keys — a repository cannot ask cplt to write into its own
 `AGENTS.md`.

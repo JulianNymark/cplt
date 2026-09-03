@@ -497,14 +497,25 @@ grants exec to every binary cached by any application. Prefer
     /// EXPERIMENTAL. Write the agent-facing sandbox brief to the scratch dir
     /// (`CPLT_BRIEF.md`). Off by default, unstable, and may be removed in a
     /// future release. Also the gate for --agents-md.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_brief")]
     brief: bool,
+
+    /// Disable the sandbox brief for this run, overriding `sandbox.brief` in
+    /// the config. Also suppresses the AGENTS.md block, which is gated on the
+    /// brief.
+    #[arg(long)]
+    no_brief: bool,
 
     /// EXPERIMENTAL. With --brief, also write the managed cplt block into the
     /// project's AGENTS.md. Off by default, unstable, and may be removed in a
     /// future release. Has no effect without --brief (or `sandbox.brief`).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_agents_md")]
     agents_md: bool,
+
+    /// Disable the AGENTS.md block for this run, overriding
+    /// `sandbox.agents_md` in the config. Leaves the scratch-dir brief alone.
+    #[arg(long)]
+    no_agents_md: bool,
 
     /// Print the generated sandbox profile (SBPL) and exit.
     /// Useful for debugging or auditing the sandbox rules.
@@ -1291,8 +1302,8 @@ fn resolve_context(cli: &Cli, check_mode: bool) -> anyhow::Result<ResolvedContex
             cli.no_allow_env_files,
         ),
         no_validate: cli.no_validate,
-        brief: cli.brief,
-        agents_md: cli.agents_md,
+        brief: config::FeatureToggle::from_pair(cli.brief, cli.no_brief),
+        agents_md: config::FeatureToggle::from_pair(cli.agents_md, cli.no_agents_md),
         pass_env: cli.pass_env.clone(),
         inherit_env: cli.inherit_env,
         allow_lifecycle_scripts: config::FeatureToggle::from_pair(

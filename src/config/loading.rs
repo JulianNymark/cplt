@@ -346,11 +346,19 @@ impl Config {
         // Brief: off unless asked for. `--brief` turns it on for one run,
         // `sandbox.brief = true` for good. cplt writing files an agent then
         // reads is a behaviour change, not a default.
-        let brief = cli.brief || self.sandbox.brief.unwrap_or(false);
+        //
+        // `--no-brief` is the way back out for one run: without it, config-on
+        // could only be undone by editing the config, which is no use in a
+        // shared repo or a CI job. Flag beats config in both directions.
+        let brief = cli.brief.resolve(self.sandbox.brief.unwrap_or(false));
         // AGENTS.md injection additionally writes into the user's repo, so it
         // is a second opt-in gated on `brief` — with the brief off, the
-        // AGENTS.md block can never be written.
-        let agents_md = brief && (cli.agents_md || self.sandbox.agents_md.unwrap_or(false));
+        // AGENTS.md block can never be written, whichever layer turned the
+        // brief off.
+        let agents_md = brief
+            && cli
+                .agents_md
+                .resolve(self.sandbox.agents_md.unwrap_or(false));
 
         // Allow-env-files: explicit CLI flag wins, then explicit config value,
         // then the preset baseline (false when no preset — deny by default).
@@ -1552,7 +1560,7 @@ validate = false
     fn cli_brief_enables_without_config() {
         let resolved = Config::default()
             .merge(CliFlags {
-                brief: true,
+                brief: FeatureToggle::ForceOn,
                 ..Default::default()
             })
             .unwrap();
@@ -1585,7 +1593,7 @@ validate = false
 
         let resolved = config
             .merge(CliFlags {
-                brief: true,
+                brief: FeatureToggle::ForceOn,
                 ..Default::default()
             })
             .unwrap();
@@ -1598,7 +1606,7 @@ validate = false
     fn cli_agents_md_needs_brief_too() {
         let resolved = Config::default()
             .merge(CliFlags {
-                agents_md: true,
+                agents_md: FeatureToggle::ForceOn,
                 ..Default::default()
             })
             .unwrap();
@@ -1609,12 +1617,60 @@ validate = false
 
         let resolved = Config::default()
             .merge(CliFlags {
-                brief: true,
-                agents_md: true,
+                brief: FeatureToggle::ForceOn,
+                agents_md: FeatureToggle::ForceOn,
                 ..Default::default()
             })
             .unwrap();
         assert!(resolved.agents_md, "--brief --agents-md writes the block");
+    }
+
+    /// The escape hatch for config-on: `sandbox.brief = true` is set for the
+    /// whole machine (or checked in), and one run wants out. Without
+    /// `--no-brief` the only way back is editing config.
+    #[test]
+    fn no_brief_overrides_config_on_and_kills_agents_md() {
+        let config: Config = toml::from_str("[sandbox]\nbrief = true\nagents_md = true\n").unwrap();
+        let resolved = config
+            .merge(CliFlags {
+                brief: FeatureToggle::ForceOff,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!resolved.brief, "--no-brief beats sandbox.brief = true");
+        assert!(
+            !resolved.agents_md,
+            "--no-brief must suppress the AGENTS.md write too — it is gated on the brief"
+        );
+    }
+
+    /// The narrower hatch: keep the scratch-dir brief, drop the write into the
+    /// repository.
+    #[test]
+    fn no_agents_md_overrides_config_on_and_leaves_the_brief() {
+        let config: Config = toml::from_str("[sandbox]\nbrief = true\nagents_md = true\n").unwrap();
+        let resolved = config
+            .merge(CliFlags {
+                agents_md: FeatureToggle::ForceOff,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(resolved.brief, "--no-agents-md must not touch the brief");
+        assert!(
+            !resolved.agents_md,
+            "--no-agents-md beats sandbox.agents_md = true"
+        );
+    }
+
+    /// Contradictory flags cannot reach clap (`conflicts_with`), but the
+    /// resolver must still be unambiguous: off wins, like every other
+    /// `FeatureToggle` pair.
+    #[test]
+    fn brief_flags_are_unambiguous_when_both_are_set() {
+        assert_eq!(
+            FeatureToggle::from_pair(true, true),
+            FeatureToggle::ForceOff
+        );
     }
 
     #[test]

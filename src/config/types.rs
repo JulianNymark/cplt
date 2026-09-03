@@ -843,11 +843,14 @@ pub struct CliFlags {
     /// Preset-controlled toggle (see `allow_localhost_any`).
     pub allow_env_files: FeatureToggle,
     pub no_validate: bool,
-    /// `--brief`: opt in to the agent-facing sandbox brief for this run.
-    pub brief: bool,
-    /// `--agents-md`: also write the managed AGENTS.md block for this run.
-    /// Still gated on `brief`, exactly like `sandbox.agents_md`.
-    pub agents_md: bool,
+    /// `--brief` / `--no-brief`: the agent-facing sandbox brief for this run.
+    /// Tri-state so a config `sandbox.brief = true` can be turned off for one
+    /// run without editing the config.
+    pub brief: FeatureToggle,
+    /// `--agents-md` / `--no-agents-md`: the managed AGENTS.md block for this
+    /// run. Still gated on `brief`, exactly like `sandbox.agents_md`, so
+    /// `--no-brief` suppresses it too.
+    pub agents_md: FeatureToggle,
     pub pass_env: Vec<String>,
     pub inherit_env: bool,
     /// Preset-controlled toggle (see `allow_localhost_any`).
