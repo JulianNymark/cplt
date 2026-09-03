@@ -543,7 +543,7 @@ fn emit_system_access(
     sbpl!(sb);
 
     // Launch Services — allows `open` to launch URLs in the default browser.
-    // Needed for OAuth code flows (MCP servers, Gemini CLI, gh auth).
+    // Needed for OAuth code flows (MCP servers, Antigravity, gh auth).
     // Opt-in because it lets the agent leverage the user's browser session state.
     if allow_browser {
         sbpl!(sb, ";; Launch Services (OAuth browser flows)");

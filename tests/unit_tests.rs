@@ -1075,7 +1075,6 @@ fn profile_denies_host_persistence_paths_for_every_agent() {
         for agent in [
             cplt::agent::Agent::Copilot,
             cplt::agent::Agent::OpenCode,
-            cplt::agent::Agent::Gemini,
             cplt::agent::Agent::Antigravity,
             cplt::agent::Agent::Pi,
             cplt::agent::Agent::Claude,
@@ -1130,19 +1129,19 @@ fn profile_denies_host_persistence_paths_for_every_agent() {
 
 /// A user `allow.write` must NOT reopen the host-persistence denies.
 ///
-/// `allow.write = ["~/.gemini"]` is an ordinary thing to write — `is_unsafe_root`
+/// `allow.write = ["~/.claude"]` is an ordinary thing to write — `is_unsafe_root`
 /// only rejects `~` itself — and while these denies lived beside the dir-wide
 /// allow in `emit_home_access` it silently reopened every one of them, including
-/// Claude's pre-existing `statusline.sh`/`plugins`. SBPL is last-match-wins, so
+/// Claude's `statusline.sh`/`plugins`. SBPL is last-match-wins, so
 /// the fix is placement: `emit_host_persistence_denies` runs at the tail, after
 /// `emit_user_allows`. This test fails if it is ever moved back before it.
 #[test]
 fn host_persistence_denies_survive_a_later_user_allow_write() {
     let home = std::path::Path::new("/Users/test");
-    let agent_dirs = cplt::agent::Agent::Gemini.config_dirs(home);
+    let agent_dirs = cplt::agent::Agent::Claude.config_dirs(home);
     // The whole config dir, not just the file: the wider grant is the one that
     // used to swallow the denies.
-    let settings = home.join(".gemini");
+    let settings = home.join(".claude");
     let p = generate_profile(&ProfileOptions {
         project_dir: std::path::Path::new("/projects/app"),
         home_dir: home,
@@ -1172,7 +1171,7 @@ fn host_persistence_denies_survive_a_later_user_allow_write() {
         allow_msbuild: false,
         allow_docker: false,
         electron_app_dir: None,
-        agent: cplt::agent::Agent::Gemini,
+        agent: cplt::agent::Agent::Claude,
         agent_dirs: &agent_dirs,
         allow_cache_exec: &[],
         allow_cache_exec_any: false,
@@ -1182,10 +1181,10 @@ fn host_persistence_denies_survive_a_later_user_allow_write() {
     // agent-dir grant itself, so the LAST occurrence is the user's allow.write
     // and the one the denies have to outlive.
     let allow = p
-        .rfind("(allow file-write* (subpath \"/Users/test/.gemini\"))")
+        .rfind("(allow file-write* (subpath \"/Users/test/.claude\"))")
         .expect("user allow.write must be emitted");
-    for sub in cplt::agent::Agent::Gemini.host_persistence_denies() {
-        let line = format!("(deny file-write* (subpath \"/Users/test/.gemini/{sub}\"))");
+    for sub in cplt::agent::Agent::Claude.host_persistence_denies() {
+        let line = format!("(deny file-write* (subpath \"/Users/test/.claude/{sub}\"))");
         let deny = p.find(&line).expect("persistence deny must be emitted");
         assert!(
             deny > allow,
