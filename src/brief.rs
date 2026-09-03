@@ -350,6 +350,53 @@ pub enum BlockOutcome {
     SkippedAmbiguous,
 }
 
+/// Write `content` to `path` by renaming a fresh file over it.
+///
+/// `fs::write` opens the path and follows whatever is there: a symlink writes
+/// through to the target, a hard link writes through to the other name. This
+/// runs unsandboxed, at launch, on a path a hostile repo controls, so neither
+/// is acceptable — and a check before the write only narrows the window, it
+/// does not close it. `rename(2)` replaces the *directory entry*: it never
+/// follows a symlink at the destination, and it breaks a hard link instead of
+/// writing through it, so the check above is left as the diagnostic and this is
+/// the barrier.
+///
+/// The temp file is created in the same directory (rename cannot cross
+/// filesystems) with `create_new`, so it can never land on an existing file,
+/// and is removed if anything after it fails.
+fn write_replacing(path: &Path, content: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .unwrap_or(std::ffi::OsStr::new("AGENTS.md"));
+    let tmp = dir.join(format!(
+        ".{}.cplt.{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create_new(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        // Keep the file's own mode when replacing one — rename installs the
+        // temp file's permissions, and silently loosening (or tightening) a
+        // file in the user's repo is not this function's business.
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        std::fs::rename(&tmp, path)
+    };
+
+    write().map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("cannot write {}: {e}", path.display())
+    })
+}
+
 /// Insert or update the managed sandbox block in `path` (typically the
 /// project-root `AGENTS.md`).
 ///
@@ -362,15 +409,29 @@ pub enum BlockOutcome {
 pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
     let block = managed_block();
 
-    // Symlink guard (pre-sandbox write): this function runs BEFORE the
-    // sandbox is entered, with full host privileges, on a path supplied by
-    // the (possibly untrusted) project repo. A symlinked AGENTS.md would
-    // redirect fs::write to an arbitrary host file (e.g. ~/.zshrc).
-    // symlink_metadata does not follow the link — refuse outright.
+    // Link guard (pre-sandbox write): this function runs BEFORE the sandbox is
+    // entered, with full host privileges, on a path supplied by the (possibly
+    // untrusted) project repo. A link at AGENTS.md redirects the write to an
+    // arbitrary host file (e.g. ~/.zshrc) — and there are two kinds.
+    //
+    // symlink_metadata does not follow the link, so it sees both: `is_symlink`
+    // for the soft case, `nlink() > 1` for the hard one. A hard link has no
+    // "target" to inspect — the file simply has another name somewhere else,
+    // and any write through this one is a write through that one. Refuse both.
+    //
+    // The check is the diagnostic, not the barrier: `write_replacing` below
+    // renames a fresh file over the path, which cannot follow either kind of
+    // link, so nothing rides on this staying race-free.
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
             return Err(format!(
                 "{} is a symlink — refusing to write (possible hostile repo)",
+                path.display()
+            ));
+        }
+        Ok(meta) if std::os::unix::fs::MetadataExt::nlink(&meta) > 1 => {
+            return Err(format!(
+                "{} is a hard link — refusing to write (possible hostile repo)",
                 path.display()
             ));
         }
@@ -380,8 +441,7 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
     let existing = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::write(path, format!("{block}\n"))
-                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            write_replacing(path, &format!("{block}\n"))?;
             return Ok(BlockOutcome::Created);
         }
         // Any other error (permission denied, not valid UTF-8, etc.) — refuse
@@ -402,8 +462,9 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
         let end_start = existing.find(BLOCK_END).unwrap();
         // END must open after BEGIN opens. Comparing the two *start* offsets
         // (rather than `end < start`, where `end` is past the END marker) also
-        // catches the adjacent case `<!--end--><!--begin-->`: there the two
-        // happen to be equal, the slice below would be empty, and we would
+        // catches the adjacent case `<!--end--><!--begin-->`: there the END
+        // marker's *end* offset is exactly the BEGIN marker's start, so
+        // `end < start` is false, the slice below would be empty, and we would
         // splice a second pair of markers into the file — corrupting it into
         // the permanently-ambiguous state.
         if end_start < start {
@@ -418,8 +479,7 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
         new_content.push_str(&existing[..start]);
         new_content.push_str(&block);
         new_content.push_str(&existing[end..]);
-        std::fs::write(path, new_content)
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        write_replacing(path, &new_content)?;
         return Ok(BlockOutcome::Updated);
     }
 
@@ -433,8 +493,7 @@ pub fn upsert_managed_block(path: &Path) -> Result<BlockOutcome, String> {
     }
     new_content.push_str(&block);
     new_content.push('\n');
-    std::fs::write(path, new_content)
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    write_replacing(path, &new_content)?;
     Ok(BlockOutcome::Inserted)
 }
 
@@ -760,6 +819,70 @@ mod tests {
         assert!(err.contains("symlink"), "unexpected error: {err}");
         // Target untouched.
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious\n");
+    }
+
+    /// The other half of the same hole. A hard link has no target to inspect —
+    /// `AGENTS.md` simply *is* a second name for a file outside the project, so
+    /// the symlink check sees an ordinary regular file and every write through
+    /// it lands on the user's real file, unsandboxed, at launch.
+    #[test]
+    #[cfg(unix)]
+    fn upsert_refuses_hard_link() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
+        let target = tmp.join("target.txt");
+        std::fs::write(&target, "precious\n").unwrap();
+        let path = tmp.join("AGENTS.md");
+        std::fs::hard_link(&target, &path).unwrap();
+
+        let err = upsert_managed_block(&path).unwrap_err();
+        assert!(err.contains("hard link"), "unexpected error: {err}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious\n");
+    }
+
+    /// The barrier, independent of the check: even if a link appears between
+    /// the guard and the write, `rename` replaces the directory entry and
+    /// cannot write through to the other name. Exercised directly on
+    /// `write_replacing`, which is the only thing that touches the file.
+    #[test]
+    #[cfg(unix)]
+    fn write_replacing_does_not_follow_a_link() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tmp = tmpdir.path();
+
+        let target = tmp.join("target.txt");
+        std::fs::write(&target, "precious\n").unwrap();
+        let hard = tmp.join("hard.md");
+        std::fs::hard_link(&target, &hard).unwrap();
+        write_replacing(&hard, "new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious\n");
+        assert_eq!(std::fs::read_to_string(&hard).unwrap(), "new\n");
+
+        let soft_target = tmp.join("soft-target.txt");
+        std::fs::write(&soft_target, "precious\n").unwrap();
+        let soft = tmp.join("soft.md");
+        std::os::unix::fs::symlink(&soft_target, &soft).unwrap();
+        write_replacing(&soft, "new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&soft_target).unwrap(), "precious\n");
+        assert!(
+            !std::fs::symlink_metadata(&soft)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the symlink must be replaced, not written through"
+        );
+
+        // No temp files left behind on the happy path.
+        let leftovers: Vec<_> = std::fs::read_dir(tmp)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".cplt."))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
     }
 
     #[test]
