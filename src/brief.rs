@@ -70,11 +70,22 @@ pub fn generate_session_brief(resolved: &Resolved, agent: Agent, home: &Path) ->
             "- No domain allowlist this session (`--allow-all-domains`): any \
              domain is reachable except the ones on the blocklist.\n",
         );
-    } else if resolved.default_allowlist {
+    } else if resolved.default_allowlist && resolved.with_proxy {
         out.push_str(
             "- Only the agent's built-in allowlist (plus any configured \
              `allowed_domains`) is reachable. The proxy refuses everything \
              else.\n",
+        );
+    } else if resolved.default_allowlist {
+        // `proxy.default_allowlist = true` with `--no-proxy` is a reachable
+        // combination, and the allowlist is enforced BY the proxy. Claiming it
+        // is in force with no proxy running would be the brief telling the
+        // agent the opposite of the truth, which is the one thing it must not
+        // do.
+        out.push_str(
+            "- An allowlist is configured but NOT in force: the proxy that \
+             enforces it is disabled for this session, so domain filtering is \
+             not applied.\n",
         );
     } else if resolved.with_proxy {
         out.push_str(
@@ -947,6 +958,39 @@ mod tests {
         assert!(!content.contains("stale content"));
         assert!(content.contains("footer"));
         assert_eq!(content.matches(BLOCK_BEGIN).count(), 1);
+    }
+
+    /// The allowlist is enforced BY the proxy, so `default_allowlist = true`
+    /// with `--no-proxy` must not be described as filtering. A brief that
+    /// overstates the policy is worse than no brief: the agent plans around a
+    /// restriction that is not there.
+    #[test]
+    fn brief_does_not_claim_filtering_without_a_proxy() {
+        let mut resolved = base_resolved();
+        resolved.default_allowlist = true;
+        resolved.with_proxy = false;
+        let brief = generate_session_brief(
+            &resolved,
+            crate::agent::Agent::Copilot,
+            std::path::Path::new("/projects/app"),
+        );
+        assert!(
+            !brief.contains("The proxy refuses everything"),
+            "must not claim proxy enforcement with the proxy off:\n{brief}"
+        );
+        assert!(
+            brief.contains("NOT in force"),
+            "must say the allowlist is not applied:\n{brief}"
+        );
+
+        // With the proxy on, the original wording stands.
+        resolved.with_proxy = true;
+        let brief = generate_session_brief(
+            &resolved,
+            crate::agent::Agent::Copilot,
+            std::path::Path::new("/projects/app"),
+        );
+        assert!(brief.contains("The proxy refuses everything"));
     }
 
     #[test]
