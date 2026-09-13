@@ -230,6 +230,28 @@ the agent may do with the credentials it holds.
 brew install navikt/tap/cplt
 ```
 
+### mise
+
+```bash
+mise use -g 'github:navikt/cplt@<version>'
+```
+
+mise picks the right release asset for your platform and verifies its build
+provenance attestation.
+
+Pin the version. Our version strings are not comparable semver — they carry
+leading zeros and two hyphens — so `mise latest` can resolve to an older
+release than the newest one ([navikt/copilot#818](https://github.com/navikt/copilot/issues/818)).
+
+### apt (Debian/Ubuntu)
+
+Every release ships a `.deb` for amd64 and arm64. Download it from the
+[latest release](https://github.com/navikt/cplt/releases/latest) and install it:
+
+```bash
+sudo apt install ./cplt_<version>_amd64.deb
+```
+
 ### curl | bash
 
 ```bash
