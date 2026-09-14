@@ -1258,6 +1258,7 @@ The update mechanism downloads releases from GitHub, verifies SHA256 checksums, 
 - Staging happens in `~/.config/cplt/update/<128 random bits>`, not the system temp directory. Sandboxed agents can write throughout `/tmp` and `/var/folders`; `~/.config/cplt` is a hard deny (`DENIED_DOTFILES`), so a sandboxed process cannot reach the staged files at all
 - The staging directory is created with `mkdir(2)` at mode 0700, which fails with `EEXIST` rather than adopting a directory that is already there
 - The extracted binary is held open, and its `(dev, ino)` is re-checked before the unsandboxed `--version` probe and again before install. The install copies from that descriptor, so the bytes that are validated are the bytes that land on disk even if the path is repointed
+- A package-manager-owned binary is never replaced. `cplt update` resolves its own path and refuses when Homebrew owns it (`/Cellar/`, `/homebrew/`) or, on Linux, when dpkg does — a path under `/usr` outside `/usr/local`, confirmed by `dpkg-query -S`. It prints that manager's upgrade command instead. Overwriting a managed binary leaves the package database describing a version that is no longer on disk, and the manager's next upgrade reverts the update without saying so. The dpkg probe fails open: a missing `dpkg-query`, an error, or a timeout all read as unmanaged, so a hand-installed `/usr/bin/cplt` still self-updates rather than being stranded with no upgrade path
 
 **Not verified:**
 - There is no cryptographic signature, neither GPG nor Sigstore. `SHA256SUMS` and the binary come from the same GitHub release, so a compromised release controls both. This matches most Go/Rust CLI tools but is weaker than signed package managers.
@@ -1274,10 +1275,12 @@ Note what that does and does not buy: the signature covers the archive, and the
 from, so it attests that you got the bytes the archive publisher published, not
 that the release itself is independently trustworthy.
 
-`cplt update` recognises a Homebrew-managed binary and refuses to touch it, but
-it has no equivalent check for a dpkg-managed one. On an apt install, upgrade
-with `sudo apt upgrade`; `cplt update` would replace `/usr/bin/cplt` without
-dpkg knowing.
+`cplt update` recognises a Homebrew- or dpkg-managed binary, refuses to touch
+it, and prints that manager's upgrade command. On an apt install, upgrade with
+`sudo apt upgrade cplt`; that is the route that keeps dpkg's database honest.
+The `.deb` itself carries no signature and no checksum list, so its integrity
+rests on the archive signature above, or on the GitHub release it was
+downloaded from, not on dpkg.
 
 ### Install script security (`install.sh`)
 
