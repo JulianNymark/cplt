@@ -10,6 +10,9 @@ use std::process::Command;
 use super::env::build_sandbox_env;
 use super::policy::HardeningCategory;
 use crate::agent::Agent;
+pub(crate) use crate::discover::bounded_stdout;
+#[cfg(test)]
+use crate::discover::gh_auth_token;
 use crate::ui;
 
 /// Config filenames that mise searches for in ancestor directories.
@@ -314,6 +317,8 @@ fn configure_command(
     // Install command wrappers if scratch dir exists and features are enabled.
     // - gh proxy: intercepts gh commands and blocks destructive operations
     // - git push prevention: blocks git push while allowing all other git operations
+    // An ambient locator is not a cache grant, even with --pass-env.
+    cmd.env_remove(GH_TOKEN_DIR_ENV);
     if let Some(scratch) = scratch_dir {
         // Where `cplt git-gate` records a `push -u` it stripped. Not TMPDIR:
         // `--pass-env TMPDIR` points that elsewhere. Only when the parent will
@@ -416,87 +421,7 @@ pub(super) const GH_TOKEN_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "COPILOT
 /// answers from its own credential store rather than echoing back an ambient
 /// value.
 pub(super) fn extract_gh_token() -> Option<String> {
-    gh_auth_token(&trusted_gh()?, GH_AUTH_TOKEN_TIMEOUT)
-}
-
-/// Ceiling on the `gh auth token` handover. A local credential store answers in
-/// milliseconds; this only bounds a `gh` that never answers at all.
-///
-/// Unbounded, this was the single blocking wait between the startup banner and
-/// exec: `configure_command` reaches it on every launch that caches a token
-/// (Copilot's serve-once cache, `block_auth_token` on by default, or the gh
-/// guard's exec cache), so a wedged `gh` hung cplt itself with the
-/// banner as the last thing on screen and nothing pointing at the cause.
-const GH_AUTH_TOKEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How long to wait for the drained stdout after `gh` has already exited.
-///
-/// Everything `gh` wrote is in the pipe by then, so the reader reaches EOF at
-/// once — unless a descendant `gh` left behind still holds the write end, which
-/// is the one case this bounds.
-const GH_AUTH_TOKEN_EOF_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// Run `gh auth token` and return what it printed, or `None` on any failure —
-/// a non-zero exit, unreadable output, or a `gh` that outlives `timeout`.
-///
-/// Degrading is the whole point: no token means the agent's GitHub API calls
-/// fail, which is recoverable and visible. A hang means cplt never starts.
-///
-/// Bounded in the same shape as [`crate::audit`]'s git probe: stdout is drained
-/// on a helper thread so `gh` can never block writing into a full pipe while the
-/// main thread waits, and on timeout the child is killed and reaped.
-///
-/// The reader is never joined, on either path. A descendant that outlives `gh`
-/// keeps the write end of the pipe open, so the reader sees no EOF even once
-/// the child is reaped — joining there would reinstate exactly the
-/// hang this exists to remove. It hands its buffer over a channel instead, and
-/// both the wait for the child and the wait for that buffer are bounded.
-///
-/// `stdin` is closed explicitly. `Command::output` gave the child a null stdin
-/// for free; a spawned child inherits the terminal instead, and a `gh` that
-/// decides to prompt would then block on a read nobody answers.
-#[allow(clippy::disallowed_methods)] // gh resolved by trusted_gh() at the call site
-fn gh_auth_token(gh: &Path, timeout: std::time::Duration) -> Option<String> {
-    let mut cmd = std::process::Command::new(gh);
-    cmd.args(["auth", "token", "--hostname", "github.com"]);
-    for var in GH_TOKEN_VARS {
-        cmd.env_remove(var);
-    }
-    let buf = bounded_stdout(cmd, timeout)?;
-    let token = String::from_utf8_lossy(&buf).trim().to_string();
-    (!token.is_empty()).then_some(token)
-}
-
-/// Run `cmd` with null stdin and stderr and return its stdout, or `None` on
-/// spawn failure, non-zero exit, or a child outliving `timeout` (killed and
-/// reaped). See [`gh_auth_token`] for why the reader is never joined.
-pub(crate) fn bounded_stdout(
-    mut cmd: std::process::Command,
-    timeout: std::time::Duration,
-) -> Option<Vec<u8>> {
-    use std::io::Read as _;
-    let mut child = cmd
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let mut stdout = child.stdout.take()?;
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        let _ = tx.send(buf);
-    });
-
-    let status = crate::audit::wait_timeout(&mut child, timeout)?;
-
-    // The child is gone, so its own write end is closed. A descendant it left
-    // behind may still hold the other one, which is why this wait is bounded
-    // too: an unbounded one here is the same hang in a different place.
-    let buf = rx.recv_timeout(GH_AUTH_TOKEN_EOF_GRACE).ok()?;
-    status.success().then_some(buf)
+    crate::discover::stored_gh_token()
 }
 
 /// Whether the child will already have a usable GitHub token in its own
@@ -555,7 +480,7 @@ fn inject_gh_token_if_needed(
 /// `$XDG_CONFIG_HOME/gh`, then `~/.config/gh`.
 pub(super) fn gh_hosts_yml() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
-    super::policy::gh_config_dir(&home).map(|d| d.join("hosts.yml"))
+    crate::discover::gh_hosts_yml(&home)
 }
 
 /// Cache the GitHub token to a file in the scratch dir.
@@ -594,15 +519,15 @@ fn should_cache_token(
     deny_env: &[String],
     substitute: Option<&crate::agent::KeychainSubstitute>,
 ) -> bool {
-    if agent != Agent::Copilot || substitute_carries_gh_token(substitute) {
-        return false;
-    }
-    // GH_TOKEN specifically, not any of the three. #225 asks for the cache to
-    // follow the injection target: denying GH_TOKEN is the repo saying "no
-    // GitHub credential", while denying only COPILOT_GITHUB_TOKEN is a narrower
-    // statement that should not cost the agent the cache channel as well.
-    let target_denied = deny_env.iter().any(|d| d == "GH_TOKEN");
-    !target_denied && !child_keeps_a_github_token(deny_env)
+    crate::discover::gh_token_cache_eligibility(
+        agent,
+        deny_env,
+        substitute,
+        false,
+        false,
+        cfg!(target_os = "linux"),
+    )
+    .0
 }
 
 /// Whether to write `.gh-exec-token`, the file `cplt gh-gate` reads to set
@@ -621,17 +546,15 @@ fn should_cache_exec_token(
     substitute: Option<&crate::agent::KeychainSubstitute>,
     hosts_yml_exists: bool,
 ) -> bool {
-    hosts_yml_exists
-        && !substitute_carries_gh_token(substitute)
-        && !deny_env.iter().any(|d| d == "GH_TOKEN")
-        && (agent != Agent::Copilot
-            // gh reads only GH_TOKEN/GITHUB_TOKEN, not COPILOT_GITHUB_TOKEN.
-            // On macOS gh has the Keychain unless a substitute dropped it.
-            || ((cfg!(target_os = "linux") || substitute.is_some())
-                && !GH_TOKEN_VARS[..2].iter().any(|var| {
-                    !deny_env.iter().any(|d| d == var)
-                        && std::env::var(var).is_ok_and(|v| !v.trim().is_empty())
-                })))
+    crate::discover::gh_token_cache_eligibility(
+        agent,
+        deny_env,
+        substitute,
+        hosts_yml_exists,
+        false,
+        cfg!(target_os = "linux"),
+    )
+    .1
 }
 
 /// The scratch dir holding `.gh-exec-token`, for `cplt gh-gate`.
@@ -646,9 +569,12 @@ pub const SCRATCH_DIR_ENV: &str = "__CPLT_SCRATCH_DIR";
 /// The effective child env, `--pass-env` included: a token gh will use there
 /// makes the host credential in `.gh-exec-token` pointless. Blank counts as
 /// unset, as in `cplt gh-gate`.
-fn child_env_has_gh_token(cmd: &Command) -> bool {
+fn child_env_has_gh_token(cmd: &Command, deny_env: &[String]) -> bool {
     cmd.get_envs().any(|(k, v)| {
         (k == "GH_TOKEN" || k == "GITHUB_TOKEN")
+            // Cache setup precedes the deny sweep in every launch backend.
+            // A credential removed there must not suppress the guard's cache.
+            && !deny_env.iter().any(|d| k == d.as_str())
             && v.is_some_and(|v| !v.to_string_lossy().trim().is_empty())
     })
 }
@@ -662,7 +588,7 @@ fn cache_gh_token_to_file(
     block_auth_token: bool,
 ) {
     let serve = block_auth_token && should_cache_token(agent, deny_env, substitute);
-    let exec = !child_env_has_gh_token(cmd)
+    let exec = !child_env_has_gh_token(cmd, deny_env)
         && should_cache_exec_token(
             agent,
             deny_env,
@@ -678,14 +604,14 @@ fn cache_gh_token_to_file(
         }
         return;
     };
+    // Both consumers must locate the producer's scratch dir, not an explicitly
+    // passed TMPDIR that may contain another session's stale credential.
+    cmd.env(GH_TOKEN_DIR_ENV, scratch_dir);
     if serve {
         write_token_file(&scratch_dir.join(".gh-token"), &token);
     }
     if exec {
         write_token_file(&scratch_dir.join(".gh-exec-token"), &token);
-        // `--pass-env TMPDIR` points the child's TMPDIR elsewhere; tell the
-        // gate where the cache really is.
-        cmd.env(GH_TOKEN_DIR_ENV, scratch_dir);
         // OpenCode: the same token as its GitHub Copilot login, when the user
         // has none of their own (#695). OpenCode reads OPENCODE_AUTH_CONTENT
         // instead of auth.json, so the real file is never read or rewritten
@@ -2140,6 +2066,30 @@ mod gh_token_extraction_tests {
         );
     }
 
+    #[test]
+    fn stored_gh_token_lookup_is_host_pinned_and_ignores_exported_tokens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gh = gh_stub(
+            dir.path(),
+            r#"[ "$*" = 'auth token --hostname github.com' ] || exit 41
+[ -z "${GH_TOKEN+x}${GITHUB_TOKEN+x}${COPILOT_GITHUB_TOKEN+x}" ] || exit 42
+echo gho_stored_fixture"#,
+        );
+        temp_env::with_vars(
+            [
+                ("GH_TOKEN", Some("ambient-gh")),
+                ("GITHUB_TOKEN", Some("ambient-github")),
+                ("COPILOT_GITHUB_TOKEN", Some("ambient-copilot")),
+            ],
+            || {
+                assert_eq!(
+                    gh_auth_token(&gh, Duration::from_secs(10)),
+                    Some("gho_stored_fixture".to_string())
+                );
+            },
+        );
+    }
+
     /// A `gh` that fails hands over nothing — including when it prints to
     /// stdout on the way out, which `.trim()` alone would have accepted.
     #[test]
@@ -2272,7 +2222,7 @@ mod gh_token_extraction_tests {
             for (k, v) in vars {
                 cmd.env(k, v);
             }
-            child_env_has_gh_token(&cmd)
+            child_env_has_gh_token(&cmd, &[])
         };
         assert!(!has(&[]));
         assert!(has(&[("GH_TOKEN", "ghp_x")]));
@@ -2281,7 +2231,7 @@ mod gh_token_extraction_tests {
         assert!(!has(&[("COPILOT_GITHUB_TOKEN", "ghp_x")]), "gh ignores it");
         let mut cmd = Command::new("true");
         cmd.env("GH_TOKEN", "ghp_x").env_remove("GH_TOKEN");
-        assert!(!child_env_has_gh_token(&cmd), "removed is unset");
+        assert!(!child_env_has_gh_token(&cmd, &[]), "removed is unset");
     }
 
     /// The exec cache is written for every agent once gh is configured, and
@@ -2313,6 +2263,45 @@ mod gh_token_extraction_tests {
             "credential.https://github.com.helper".into()
         )));
         assert!(github_credential_helper_config(Some("x")).is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // never spawned; only child env and cache gating are inspected
+    fn exec_cache_ignores_a_token_removed_after_cache_setup() {
+        temp_env::with_vars(
+            [
+                ("GH_TOKEN", None),
+                ("GITHUB_TOKEN", Some("gho_denied_fixture")),
+                ("COPILOT_GITHUB_TOKEN", Some("gho_copilot_fixture")),
+            ],
+            || {
+                let sub = crate::agent::KeychainSubstitute::EnvVar("COPILOT_GITHUB_TOKEN");
+                let deny = vec!["GITHUB_TOKEN".to_string()];
+                let mut cmd = Command::new("/usr/bin/true");
+                cmd.env_clear().env("GITHUB_TOKEN", "gho_denied_fixture");
+                cmd.env("COPILOT_GITHUB_TOKEN", "gho_copilot_fixture");
+                assert!(child_env_has_gh_token(&cmd, &[]));
+                assert!(!child_env_has_gh_token(&cmd, &deny));
+                assert!(should_cache_exec_token(
+                    Agent::Copilot,
+                    &deny,
+                    Some(&sub),
+                    true
+                ));
+                assert!(!should_cache_exec_token(
+                    Agent::Copilot,
+                    &["GH_TOKEN".into()],
+                    Some(&sub),
+                    true
+                ));
+                apply_deny_env_and_credential(&mut cmd, &deny, Some(&sub));
+                assert!(!child_env_has_gh_token(&cmd, &deny));
+                assert!(
+                    !cmd.get_envs()
+                        .any(|(k, v)| k == "GITHUB_TOKEN" && v.is_some())
+                );
+            },
+        );
     }
 
     #[test]

@@ -851,20 +851,25 @@ pub fn linux_keyring_finding(
     linux: bool,
     session_bus: bool,
     env_token: bool,
-    inject_token: bool,
+    stored_token_handover: bool,
 ) -> Option<Finding> {
-    (linux && agent == Agent::Copilot && session_bus && !env_token && !inject_token).then(|| {
-        Finding::warning(
-            "Copilot keeps its login in the system keyring, which the sandbox cannot reach \
-             (D-Bus is masked): inside cplt it asks you to sign in again, or to store the \
-             token in plain text.",
-            Some(
-                "export COPILOT_GITHUB_TOKEN, or run `gh auth login` on the host and \
-                 `cplt config set gh_guard.inject_token true --force` (needs gh_guard.enabled)"
-                    .to_string(),
-            ),
-        )
-    })
+    (linux && agent == Agent::Copilot && session_bus && !env_token && !stored_token_handover).then(
+        || {
+            Finding::warning(
+                "If Copilot's login is in the system keyring, the sandbox cannot reach it \
+             (D-Bus is masked): Copilot may ask you to sign in again or store the token \
+             in plain text. The stored login was not checked.",
+                Some(
+                    "export a valid COPILOT_GITHUB_TOKEN, or clear COPILOT_GITHUB_TOKEN, GH_TOKEN \
+                 and GITHUB_TOKEN in a subshell and run `gh auth login --hostname github.com \
+                 --web` on the host. The one-shot cache needs gh_guard.enabled, scratch_dir \
+                 and gh_guard.block_auth_token enabled, with GH_TOKEN not denied; alternatively \
+                 enable gh_guard.inject_token with --force and leave a token variable permitted"
+                        .to_string(),
+                ),
+            )
+        },
+    )
 }
 
 // ── Rendering ──────────────────────────────────────────────────
@@ -996,7 +1001,7 @@ pub struct AuthDecision<'a> {
     pub macos: bool,
     /// The first of the agent's token variables exported and not in `deny.env`.
     pub env_token: Option<&'a str>,
-    /// `gh auth token` succeeds on the host.
+    /// Trusted gh returned a stored github.com token; validity is not checked.
     pub gh_login: bool,
     /// Copilot's keytar module is installed. Whether it holds a login is not
     /// checked; kept so a Linux keytar user gets no false blocking finding.
@@ -1023,8 +1028,13 @@ pub fn auth_report(d: &AuthDecision<'_>, home: &Path) -> (Option<String>, String
         Some(KeychainSubstitute::File(p)) => format!("{} (token file)", tilde(p, home)),
         None => match d.env_token {
             Some(v) => format!("{v} (exported)"),
-            None if d.macos && d.agent.needs_keychain() => format!("{name}'s own login (Keychain)"),
-            None if d.agent == Agent::Copilot && d.gh_login => "gh login".to_string(),
+            None if d.macos && d.agent.needs_keychain() => {
+                format!("left to {name}: Keychain access granted, stored login not checked")
+            }
+            None if d.agent == Agent::Copilot && d.gh_login => {
+                "stored gh token for github.com found (validity and handover not checked)"
+                    .to_string()
+            }
             None if d.agent == Agent::Copilot && d.other_login => {
                 "not checked (Copilot's keytar module is installed)".to_string()
             }
@@ -1040,9 +1050,13 @@ pub fn auth_report(d: &AuthDecision<'_>, home: &Path) -> (Option<String>, String
                  checks no account and has no fallback, so a stale token means a sign-in \
                  failure."
             ),
-            Some(format!(
-                "unset {v}, run `gh auth refresh`, or set sandbox.keychain_substitute=false"
-            )),
+            Some(
+                "clear COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN in a subshell, then run \
+                 `gh auth login --hostname github.com --web` on the host; to test native login, \
+                 set both sandbox.keychain_substitute=false and gh_guard.inject_token=false \
+                 and restore their actual prior values afterwards"
+                    .to_string(),
+            ),
         )),
         None if d.agent == Agent::Copilot
             && d.env_token.is_none()
@@ -1051,9 +1065,11 @@ pub fn auth_report(d: &AuthDecision<'_>, home: &Path) -> (Option<String>, String
             && !d.macos =>
         {
             Some(Finding::blocking(
-                "No auth for Copilot: gh is not logged in and none of COPILOT_GITHUB_TOKEN, \
-                 GH_TOKEN, GITHUB_TOKEN is set.",
-                "gh auth login",
+                "No credential source discovered for Copilot: no stored gh token for github.com \
+                 was retrieved and none of COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN \
+                 reaches the sandbox.",
+                "clear COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN in a subshell, then run \
+                 `gh auth login --hostname github.com --web` on the host",
             ))
         }
         _ => None,
@@ -1583,7 +1599,11 @@ mod tests {
         assert_eq!(auth, "GH_TOKEN (exported, used as-is)");
         let f = f.expect("an exported token used as-is is a warning");
         assert_eq!(f.level, Level::Warning);
-        assert!(f.fix.unwrap().contains("gh auth refresh"));
+        assert!(
+            f.fix
+                .unwrap()
+                .contains("gh auth login --hostname github.com --web")
+        );
     }
 
     #[test]
@@ -1640,17 +1660,34 @@ mod tests {
     }
 
     #[test]
+    fn keychain_grant_does_not_claim_a_stored_login() {
+        for agent in [Agent::Copilot, Agent::Claude] {
+            let (kc, auth, finding) = auth_report(&decision(agent, true), Path::new("/fixture"));
+            assert_eq!(kc.as_deref(), Some("granted"));
+            assert!(auth.contains("stored login not checked"), "{auth}");
+            assert!(finding.is_none());
+        }
+    }
+
+    #[test]
     fn auth_copilot_on_linux_without_login_blocks() {
         let (kc, auth, f) = auth_report(&decision(Agent::Copilot, false), Path::new("/home/u"));
         assert!(kc.is_none());
         assert_eq!(auth, "none");
-        assert_eq!(f.unwrap().level, Level::Blocking);
+        let finding = f.unwrap();
+        assert_eq!(finding.level, Level::Blocking);
+        let fix = finding.fix.unwrap();
+        assert!(fix.contains("gh auth login --hostname github.com --web"));
+        assert!(fix.contains("COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN"));
         let d = AuthDecision {
             gh_login: true,
             ..decision(Agent::Copilot, false)
         };
         let (_, auth, f) = auth_report(&d, Path::new("/home/u"));
-        assert_eq!(auth, "gh login");
+        assert_eq!(
+            auth,
+            "stored gh token for github.com found (validity and handover not checked)"
+        );
         assert!(f.is_none());
         let (_, auth, _) = auth_report(&decision(Agent::Shell, false), Path::new("/home/u"));
         assert_eq!(auth, "none (the shell needs no login)");
@@ -1722,7 +1759,10 @@ mod tests {
 
     #[test]
     fn linux_keyring_only_when_no_token_reaches_copilot() {
-        assert!(linux_keyring_finding(Agent::Copilot, true, true, false, false).is_some());
+        let finding = linux_keyring_finding(Agent::Copilot, true, true, false, false).unwrap();
+        let fix = finding.fix.unwrap();
+        assert!(fix.contains("gh auth login --hostname github.com --web"));
+        assert!(fix.contains("one-shot cache"));
         assert!(linux_keyring_finding(Agent::Copilot, false, true, false, false).is_none());
         assert!(linux_keyring_finding(Agent::Copilot, true, false, false, false).is_none());
         assert!(linux_keyring_finding(Agent::Copilot, true, true, true, false).is_none());

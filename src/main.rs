@@ -2130,18 +2130,84 @@ fn inject_token_is_inert(gh_guard: &config::GhGuardPolicy) -> bool {
 fn inject_token_deprecation_line(
     gh_guard: &config::GhGuardPolicy,
     macos: bool,
-    gh_token: bool,
+    gh_token: impl FnOnce() -> bool,
 ) -> Option<&'static str> {
-    (macos && gh_token && gh_guard.inject_token && gh_guard.enabled).then_some(
+    (macos && gh_guard.inject_token && gh_guard.enabled && gh_token()).then_some(
         "gh_guard.inject_token is deprecated: gh gets its token without it. Remove the key.",
     )
 }
 
-/// The sandbox gets an exec token for gh: gh is logged in on the host and
-/// `GH_TOKEN` is not denied. Without it, the deprecation notes would tell a
-/// user to drop the one token that works.
-fn gh_exec_token_available(deny_env: &[String]) -> bool {
-    !deny_env.iter().any(|v| v == "GH_TOKEN") && cplt::sandbox::gh_configured()
+/// Removal advice needs successful retrieval and an eligible replacement,
+/// not just hosts.yml. Otherwise it can remove the only working credential.
+fn gh_exec_token_available(
+    resolved: &config::Resolved,
+    agent: agent::Agent,
+    substitute: Option<&agent::KeychainSubstitute>,
+) -> bool {
+    if !(cfg!(target_os = "macos") && resolved.gh_guard.inject_token
+        || agent != agent::Agent::Copilot
+            && resolved
+                .pass_env
+                .iter()
+                .any(|v| v == "GH_TOKEN" || v == "GITHUB_TOKEN"))
+    {
+        return false;
+    }
+    gh_exec_token_replacement(
+        resolved,
+        agent,
+        substitute,
+        cplt::sandbox::gh_configured(),
+        discover::stored_gh_token_available,
+    )
+}
+
+fn gh_exec_token_replacement(
+    resolved: &config::Resolved,
+    agent: agent::Agent,
+    substitute: Option<&agent::KeychainSubstitute>,
+    hosts_yml_exists: bool,
+    stored_token: impl FnOnce() -> bool,
+) -> bool {
+    // Test the replacement after removing the passed token, not the current
+    // child env that intentionally suppresses that replacement.
+    let (_, exec) = discover::gh_token_cache_eligibility(
+        agent,
+        &resolved.deny_env,
+        substitute,
+        hosts_yml_exists,
+        false,
+        cfg!(target_os = "linux"),
+    );
+    resolved.gh_guard.enabled
+        && resolved.scratch_dir
+        && !resolved.inherit_env
+        && exec
+        && stored_token()
+}
+
+fn copilot_stored_token_handover(
+    resolved: &config::Resolved,
+    substitute: Option<&agent::KeychainSubstitute>,
+    stored_token: bool,
+) -> bool {
+    if !stored_token || !resolved.gh_guard.enabled || !resolved.scratch_dir {
+        return false;
+    }
+    let (serve, _) = discover::gh_token_cache_eligibility(
+        agent::Agent::Copilot,
+        &resolved.deny_env,
+        substitute,
+        false,
+        false,
+        true,
+    );
+    (resolved.gh_guard.block_auth_token && serve && discover::gh_wrapper_available())
+        || (resolved.gh_guard.inject_token
+            && agent::Agent::Copilot
+                .keychain_substitute_env_vars()
+                .iter()
+                .any(|v| !resolved.deny_env.iter().any(|d| d == v)))
 }
 
 /// Notes `cplt check` prints for weaker auth paths that have a replacement (#695).
@@ -2177,12 +2243,12 @@ fn auth_deprecation_notes(
     notes
 }
 
-fn warn_inject_token_without_guard(resolved: &config::Resolved) {
-    if let Some(line) = inject_token_deprecation_line(
-        &resolved.gh_guard,
-        cfg!(target_os = "macos"),
-        gh_exec_token_available(&resolved.deny_env),
-    ) {
+fn warn_inject_token_without_guard(resolved: &config::Resolved, agent: agent::Agent) {
+    if let Some(line) =
+        inject_token_deprecation_line(&resolved.gh_guard, cfg!(target_os = "macos"), || {
+            gh_exec_token_available(resolved, agent, None)
+        })
+    {
         ui::warn(line);
     }
     if inject_token_is_inert(&resolved.gh_guard) {
@@ -4377,7 +4443,7 @@ fn run(mut cli: Cli) -> anyhow::Result<ExitCode> {
     warn_exec_tool_dir_shadowing(&resolved, &home_dir, active_agent);
     warn_write_granted_repos(&resolved, &project_dir, &repo_paths);
     warn_repo_under_no_exec_cache(&resolved, &home_dir, &project_dir, &repo_paths);
-    warn_inject_token_without_guard(&resolved);
+    warn_inject_token_without_guard(&resolved, active_agent);
 
     // Probe the host for everything the sandbox profile depends on.
     let probe = HostProbe::probe(&mut resolved, &home_dir, &project_dir);
@@ -5047,9 +5113,7 @@ fn exec_gh_token() -> Option<String> {
     if set("GH_TOKEN") || set("GITHUB_TOKEN") {
         return None;
     }
-    let tmpdir = std::env::var_os(sandbox::GH_TOKEN_DIR_ENV)
-        .or_else(|| std::env::var_os("TMPDIR"))
-        .filter(|v| !v.is_empty())?;
+    let tmpdir = gh_token_cache_dir()?;
     let token =
         cplt::untrusted::read_untrusted(&Path::new(&tmpdir).join(".gh-exec-token"), 64 * 1024)
             .ok()??;
@@ -5069,15 +5133,10 @@ fn is_gh_auth_token_request(args: &[String]) -> bool {
 /// Deletes the file after reading so subsequent calls by subprocesses fail.
 /// Returns ExitCode::SUCCESS if token found, FAILURE otherwise.
 fn serve_cached_gh_token() -> ExitCode {
-    // TMPDIR is set to the scratch dir inside the sandbox
-    let tmpdir = std::env::var("TMPDIR")
-        .or_else(|_| std::env::var("TMP"))
-        .unwrap_or_default();
-
-    if tmpdir.is_empty() {
+    let Some(tmpdir) = gh_token_cache_dir() else {
         eprintln!("⚠️ BLOCKED by sandbox: 'gh auth token'. No cached token available.");
         return ExitCode::FAILURE;
-    }
+    };
 
     let token_path = Path::new(&tmpdir).join(".gh-token");
 
@@ -5095,6 +5154,22 @@ fn serve_cached_gh_token() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Both caches live in the actual scratch dir, even with --pass-env TMPDIR.
+/// An explicit marker must not fall back to a different directory on failure.
+fn gh_token_cache_dir() -> Option<std::ffi::OsString> {
+    std::env::var_os(sandbox::GH_TOKEN_DIR_ENV)
+        .or_else(|| {
+            // A wrapped launch without a locator did not grant a cache. Do not
+            // consume a stale token from a caller-supplied temporary directory.
+            if std::env::var_os("__CPLT_WRAPPED").is_some() {
+                None
+            } else {
+                std::env::var_os("TMPDIR").or_else(|| std::env::var_os("TMP"))
+            }
+        })
+        .filter(|v| !v.is_empty())
 }
 
 /// Parse JSON-encoded allow_push rules from the CLI flag.
@@ -6284,7 +6359,7 @@ fn run_exec_command(
     warn_exec_tool_dir_shadowing(&resolved, &home_dir, active_agent);
     warn_write_granted_repos(&resolved, &project_dir, &repo_paths);
     warn_repo_under_no_exec_cache(&resolved, &home_dir, &project_dir, &repo_paths);
-    warn_inject_token_without_guard(&resolved);
+    warn_inject_token_without_guard(&resolved, active_agent);
 
     // Build the resolved Shell sandbox (discovery → proxy → prepare). Shared
     // with `cplt check`, which runs its probes under the identical policy.
@@ -6897,7 +6972,7 @@ fn run_check_command(
             &resolved.pass_env,
             active_agent,
             cfg!(target_os = "macos"),
-            gh_exec_token_available(&resolved.deny_env),
+            gh_exec_token_available(&resolved, active_agent, prepared.keychain_substitute()),
         ) {
             println!("\nNote: {note}");
         }
@@ -7912,7 +7987,7 @@ fn run_doctor(cli: &Cli, verbose: bool) -> ExitCode {
         &resolved,
         active_agent,
         cfg!(target_os = "macos"),
-        gh_exec_token_available(&resolved.deny_env),
+        gh_exec_token_available(&resolved, active_agent, keychain_substitute.as_ref()),
     ));
 
     // ── enforcement: the regime, and why ──
@@ -8089,12 +8164,7 @@ fn run_doctor(cli: &Cli, verbose: bool) -> ExitCode {
         cfg!(target_os = "linux"),
         std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
         env_token.is_some(),
-        // What the launch needs to inject: the guard on, the key set, and a
-        // `gh auth token` that succeeds into a GH_TOKEN deny.env leaves alone.
-        resolved.gh_guard.enabled
-            && resolved.gh_guard.inject_token
-            && auth.gh_cli_auth
-            && gh_exec_token_available(&resolved.deny_env),
+        copilot_stored_token_handover(&resolved, keychain_substitute.as_ref(), auth.gh_cli_auth),
     ));
     for message in write_granted_repos_messages(&resolved, &project_dir, &repo_paths)
         .into_iter()
@@ -13118,6 +13188,48 @@ mod tests {
     }
 
     #[test]
+    fn unwrapped_cache_lookup_preserves_tmpdir_and_tmp_fallback() {
+        temp_env::with_vars(
+            [
+                (sandbox::GH_TOKEN_DIR_ENV, None),
+                ("__CPLT_WRAPPED", None),
+                ("TMPDIR", Some("/legacy-tmpdir")),
+                ("TMP", Some("/legacy-tmp")),
+            ],
+            || assert_eq!(gh_token_cache_dir(), Some("/legacy-tmpdir".into())),
+        );
+        temp_env::with_vars(
+            [
+                (sandbox::GH_TOKEN_DIR_ENV, None),
+                ("__CPLT_WRAPPED", None),
+                ("TMPDIR", None),
+                ("TMP", Some("/legacy-tmp")),
+            ],
+            || assert_eq!(gh_token_cache_dir(), Some("/legacy-tmp".into())),
+        );
+    }
+
+    #[test]
+    fn wrapped_cache_lookup_requires_a_locator() {
+        temp_env::with_vars(
+            [
+                (sandbox::GH_TOKEN_DIR_ENV, None),
+                ("__CPLT_WRAPPED", Some("1")),
+                ("TMPDIR", Some("/stale")),
+                ("TMP", Some("/also-stale")),
+            ],
+            || assert!(gh_token_cache_dir().is_none()),
+        );
+        temp_env::with_vars(
+            [
+                (sandbox::GH_TOKEN_DIR_ENV, Some("")),
+                ("TMPDIR", Some("/stale")),
+            ],
+            || assert!(gh_token_cache_dir().is_none()),
+        );
+    }
+
+    #[test]
     fn exec_gh_token_prefers_token_dir_over_tmpdir() {
         pin_tempfile_dir();
         let cache = tempfile::tempdir().unwrap();
@@ -14113,26 +14225,159 @@ mod tests {
             ..config::GhGuardPolicy::default()
         };
         assert!(
-            inject_token_deprecation_line(&config::GhGuardPolicy::default(), true, true).is_none()
+            inject_token_deprecation_line(&config::GhGuardPolicy::default(), true, || panic!(
+                "default must not probe gh"
+            ))
+            .is_none()
         );
-        assert!(inject_token_deprecation_line(&policy(false, true), true, true).is_none());
         assert!(
-            inject_token_deprecation_line(&policy(true, false), true, true).is_none(),
+            inject_token_deprecation_line(&policy(false, true), true, || panic!(
+                "unset must not probe gh"
+            ))
+            .is_none()
+        );
+        assert!(
+            inject_token_deprecation_line(&policy(true, false), true, || panic!(
+                "guard off must not probe gh"
+            ))
+            .is_none(),
             "inert warning covers it"
         );
-        assert!(inject_token_deprecation_line(&policy(true, true), true, true).is_some());
+        assert!(inject_token_deprecation_line(&policy(true, true), true, || true).is_some());
         assert!(
-            inject_token_deprecation_line(&policy(true, true), true, false).is_none(),
+            inject_token_deprecation_line(&policy(true, true), true, || false).is_none(),
             "nothing replaces the injected token without an exec token"
         );
         assert!(
-            inject_token_deprecation_line(&policy(true, true), false, true).is_none(),
+            inject_token_deprecation_line(&policy(true, true), false, || panic!(
+                "Linux must not probe gh for deprecation"
+            ))
+            .is_none(),
             "Linux still needs it"
         );
     }
 
     /// Each doctor config finding fires on its condition and only then, and
     /// names variables, never values.
+    #[test]
+    fn auth_cache_diagnostics_require_retrieval_and_effective_routes() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        let gh = bin.path().join("gh");
+        std::fs::write(&gh, "#!/bin/sh\nexit 99\n").unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        temp_env::with_vars(
+            [
+                ("GH_TOKEN", None::<&str>),
+                ("GITHUB_TOKEN", None),
+                ("COPILOT_GITHUB_TOKEN", None),
+                ("PATH", bin.path().to_str()),
+            ],
+            || {
+                assert!(
+                    discover::gh_wrapper_available(),
+                    "fixture discovered without execution"
+                );
+                let mut r = config::Config::default()
+                    .merge(config::CliFlags::default())
+                    .unwrap();
+                r.gh_guard.enabled = true;
+                r.scratch_dir = true;
+                r.gh_guard.block_auth_token = true;
+                r.pass_env = vec!["GH_TOKEN".into()];
+                let replacement = |r: &config::Resolved, hosts, retrieved| {
+                    gh_exec_token_replacement(r, agent::Agent::OpenCode, None, hosts, || retrieved)
+                };
+                assert!(
+                    !replacement(&r, true, false),
+                    "hosts.yml is not a credential"
+                );
+                assert!(replacement(&r, true, true));
+                assert!(!replacement(&r, false, true));
+                assert!(
+                    config_findings(
+                        &r,
+                        agent::Agent::OpenCode,
+                        false,
+                        replacement(&r, true, false)
+                    )
+                    .is_empty()
+                );
+                assert!(
+                    copilot_stored_token_handover(&r, None, true),
+                    "default one-shot route"
+                );
+                temp_env::with_var("PATH", Some("/synthetic/no-gh"), || {
+                    let handover = copilot_stored_token_handover(&r, None, true);
+                    assert!(
+                        !handover,
+                        "stored retrieval success does not install a PATH wrapper"
+                    );
+                    assert!(
+                        cplt::doctor::linux_keyring_finding(
+                            agent::Agent::Copilot,
+                            true,
+                            true,
+                            false,
+                            handover,
+                        )
+                        .is_some()
+                    );
+                    r.gh_guard.inject_token = true;
+                    assert!(copilot_stored_token_handover(&r, None, true));
+                    r.gh_guard.inject_token = false;
+                });
+                assert!(
+                    cplt::doctor::linux_keyring_finding(
+                        agent::Agent::Copilot,
+                        true,
+                        true,
+                        false,
+                        copilot_stored_token_handover(&r, None, true),
+                    )
+                    .is_none()
+                );
+                assert!(!copilot_stored_token_handover(&r, None, false));
+                r.scratch_dir = false;
+                assert!(!replacement(&r, true, true));
+                assert!(!copilot_stored_token_handover(&r, None, true));
+                assert!(
+                    cplt::doctor::linux_keyring_finding(
+                        agent::Agent::Copilot,
+                        true,
+                        true,
+                        false,
+                        copilot_stored_token_handover(&r, None, true),
+                    )
+                    .is_some()
+                );
+                r.scratch_dir = true;
+                r.gh_guard.enabled = false;
+                assert!(!replacement(&r, true, true));
+                assert!(!copilot_stored_token_handover(&r, None, true));
+                r.gh_guard.enabled = true;
+                r.gh_guard.block_auth_token = false;
+                assert!(!copilot_stored_token_handover(&r, None, true));
+                r.gh_guard.inject_token = true;
+                assert!(copilot_stored_token_handover(&r, None, true));
+                r.deny_env = vec!["GH_TOKEN".into()];
+                assert!(!replacement(&r, true, true));
+                assert!(
+                    copilot_stored_token_handover(&r, None, true),
+                    "injection can use GITHUB_TOKEN"
+                );
+                r.gh_guard.inject_token = false;
+                r.gh_guard.block_auth_token = true;
+                assert!(!copilot_stored_token_handover(&r, None, true));
+                r.deny_env.clear();
+                let sub = agent::KeychainSubstitute::EnvVar("COPILOT_GITHUB_TOKEN");
+                assert!(copilot_stored_token_handover(&r, Some(&sub), true));
+                r.inherit_env = true;
+                assert!(!replacement(&r, true, true));
+            },
+        );
+    }
+
     #[test]
     fn doctor_config_findings_fire_on_their_condition() {
         let resolve = |toml: &str| {

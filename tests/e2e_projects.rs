@@ -180,6 +180,435 @@ mod project_tests {
 
     // ── TempProject ────────────────────────────────────────────────
 
+    #[test]
+    fn copilot_auth_handover_keeps_keychain_only_without_a_substitute() {
+        use std::os::unix::fs::PermissionsExt;
+        require_sandbox!();
+        let home = home_temp_dir("copilot-auth");
+        let project = TempProject::new("copilot-auth");
+        let bin = home.path().join("bin");
+        let keychains = home.path().join("Library/Keychains");
+        for dir in [&bin, &keychains, &home.path().join("gh")] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let config = home.path().join("cplt.toml");
+        let path = std::env::join_paths([bin.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+            .unwrap();
+        let agent = bin.join("copilot");
+        fs::write(
+            &agent,
+            r#"#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = --version ]; then echo '1.0.86'; exit 0; fi
+done
+if [ "$GH_TOKEN" = fixture-secret ]; then echo TOKEN_PRESENT; else echo TOKEN_ABSENT; fi
+if /bin/cat "$HOME/Library/Keychains/probe" >/dev/null 2>&1; then
+  echo KEYCHAIN_FILE_READ_ALLOWED
+else
+  echo KEYCHAIN_FILE_READ_DENIED
+fi
+if /bin/sh -c 'echo updated > "$HOME/Library/Keychains/probe"' 2>/dev/null; then
+  echo KEYCHAIN_FILE_WRITE_ALLOWED
+else
+  echo KEYCHAIN_FILE_WRITE_DENIED
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+
+        for (enabled, token, denied) in [
+            (true, Some("fixture-secret"), true),
+            (true, None, false),
+            (false, Some("fixture-secret"), false),
+        ] {
+            fs::write(
+                &config,
+                format!("[sandbox]\nkeychain_substitute = {enabled}\n"),
+            )
+            .unwrap();
+            fs::write(keychains.join("probe"), "original").unwrap();
+            let mut cmd = cplt_cmd();
+            cmd.env_clear()
+                .env("CPLT_CONFIG", &config)
+                .env("NO_COLOR", "1")
+                .env("HOME", home.path())
+                .env("GH_CONFIG_DIR", home.path().join("gh"))
+                .env("PATH", &path)
+                .current_dir(project.path())
+                .args([
+                    "--agent",
+                    "copilot",
+                    "--yes",
+                    "--no-validate",
+                    "--no-proxy",
+                    "--no-scratch-dir",
+                ]);
+            if let Some(token) = token {
+                cmd.env("GH_TOKEN", token);
+            }
+            let out = cmd.output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success(),
+                "key={enabled}, token={token:?}: {stdout}\n{stderr}"
+            );
+            assert!(
+                stdout.contains(if token.is_some() {
+                    "TOKEN_PRESENT"
+                } else {
+                    "TOKEN_ABSENT"
+                }),
+                "{stdout}"
+            );
+            for operation in ["READ", "WRITE"] {
+                let result = if denied { "DENIED" } else { "ALLOWED" };
+                assert!(
+                    stdout.contains(&format!("KEYCHAIN_FILE_{operation}_{result}")),
+                    "{stdout}"
+                );
+            }
+            assert!(!stdout.contains("fixture-secret"), "{stdout}");
+            assert!(!stderr.contains("fixture-secret"), "{stderr}");
+            assert_eq!(
+                fs::read_to_string(keychains.join("probe")).unwrap(),
+                if denied { "original" } else { "updated\n" }
+            );
+        }
+    }
+
+    #[test]
+    fn copilot_one_shot_cache_uses_scratch_with_passed_tmpdir() {
+        use std::os::unix::fs::PermissionsExt;
+        require_sandbox!();
+        assert!(
+            [
+                "/usr/bin/gh",
+                "/bin/gh",
+                "/usr/local/bin/gh",
+                "/opt/homebrew/bin/gh"
+            ]
+            .iter()
+            .any(|p| Path::new(p).is_file()),
+            "trusted gh required for synthetic stored-token retrieval"
+        );
+        let home = home_temp_dir("copilot-cache-tmpdir");
+        let project = TempProject::new("copilot-cache-tmpdir");
+        project.git_init();
+        let bin = home.path().join("bin");
+        let gh_config = home.path().join("gh");
+        let other = project.path().join("other-tmp");
+        for dir in [&bin, &gh_config, &other] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(
+            gh_config.join("hosts.yml"),
+            "github.com:\n    user: fixture\n    oauth_token: synthetic-one-shot-secret\n",
+        )
+        .unwrap();
+        fs::write(other.join(".gh-token"), "synthetic-stale-secret").unwrap();
+        let config = home.path().join("cplt.toml");
+        fs::write(&config, "[sandbox]\nkeychain_substitute = false\n").unwrap();
+        let agent = bin.join("copilot");
+        fs::write(
+            &agent,
+            r#"#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = --version ]; then echo '1.0.94'; exit 0; fi
+done
+[ "$TMPDIR" = "$PWD/other-tmp" ] || exit 41
+[ -z "$GH_TOKEN$GITHUB_TOKEN$COPILOT_GITHUB_TOKEN" ] || exit 43
+wrapper=$(command -v gh) || exit 51
+case "$wrapper" in */bin/gh) ;; *) exit 52 ;; esac
+/usr/bin/grep -q 'gh-gate' "$wrapper" || exit 53
+expect_cache_refused() {
+  diagnostic=$(gh auth token 2>&1)
+  status=$?
+  [ "$status" = 1 ] || exit 54
+  [ "$diagnostic" = "⚠️ BLOCKED by sandbox: 'gh auth token'. No cached token available." ] || exit 55
+}
+if [ "$EXPECT_DENIED" = 1 ]; then
+  [ -z "$__CPLT_GH_TOKEN_DIR" ] || exit 44
+  expect_cache_refused
+  echo CACHE_DENIED
+  exit 0
+fi
+[ -n "$__CPLT_GH_TOKEN_DIR" ] && [ "$__CPLT_GH_TOKEN_DIR" != "$TMPDIR" ] || exit 42
+token=$(gh auth token 2>/dev/null) || exit 45
+[ "$token" = synthetic-one-shot-secret ] || exit 46
+[ ! -f "$__CPLT_GH_TOKEN_DIR/.gh-token" ] || exit 47
+expect_cache_refused
+[ "$(/bin/cat "$TMPDIR/.gh-token")" = synthetic-stale-secret ] || exit 49
+echo SCRATCH_CACHE_CONSUMED_ONCE
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([
+            bin.as_path(),
+            Path::new("/opt/homebrew/bin"),
+            Path::new("/usr/local/bin"),
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ])
+        .unwrap();
+        for deny in ["", "GH_TOKEN"] {
+            let denied = !deny.is_empty();
+            project.write_file(
+                ".cplt.toml",
+                &if denied {
+                    format!("[deny]\nenv = [\"{deny}\"]\n")
+                } else {
+                    String::new()
+                },
+            );
+            let out = cplt_cmd()
+                .env_clear()
+                .env("CPLT_CONFIG", &config)
+                .env("NO_COLOR", "1")
+                .env("HOME", home.path())
+                .env("GH_CONFIG_DIR", &gh_config)
+                .env("PATH", &path)
+                .env("TMPDIR", &other)
+                .env("EXPECT_DENIED", if denied { "1" } else { "0" })
+                // A passed ambient marker must not displace the producer's locator.
+                .env("__CPLT_GH_TOKEN_DIR", &other)
+                .current_dir(project.path())
+                .args([
+                    "--agent",
+                    "copilot",
+                    "--yes",
+                    "--no-validate",
+                    "--no-proxy",
+                    "--no-audit",
+                    "--no-git-guard",
+                    "--gh-guard",
+                    "--pass-env",
+                    "TMPDIR",
+                    "--pass-env",
+                    "EXPECT_DENIED",
+                    "--pass-env",
+                    "__CPLT_GH_TOKEN_DIR",
+                ])
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{stdout}\n{stderr}");
+            assert!(
+                stdout.contains(if denied {
+                    "CACHE_DENIED"
+                } else {
+                    "SCRATCH_CACHE_CONSUMED_ONCE"
+                }),
+                "{stdout}"
+            );
+            for token in ["synthetic-one-shot-secret", "synthetic-stale-secret"] {
+                assert!(!stdout.contains(token) && !stderr.contains(token));
+            }
+            assert_eq!(
+                fs::read_to_string(other.join(".gh-token")).unwrap(),
+                "synthetic-stale-secret"
+            );
+        }
+    }
+
+    #[test]
+    fn copilot_and_gh_credentials_stay_separate_through_full_launch() {
+        use std::os::unix::fs::PermissionsExt;
+        require_sandbox!();
+        let Some(gh) = [
+            "/usr/bin/gh",
+            "/bin/gh",
+            "/usr/local/bin/gh",
+            "/opt/homebrew/bin/gh",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file()) else {
+            assert!(
+                !require_sandbox_enforced(),
+                "credential-source test requires gh in a trusted install directory"
+            );
+            eprintln!("SKIPPED: credential-source test needs gh in a trusted install directory");
+            return;
+        };
+        let home = home_temp_dir("copilot-credential-sources");
+        let project = TempProject::new("copilot-credential-sources");
+        project.git_init();
+        assert!(
+            git_cmd(project.path())
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/fixture/repo.git"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let bin = home.path().join("bin");
+        let gh_config = home.path().join(".config/gh");
+        let keychains = home.path().join("Library/Keychains");
+        for dir in [&bin, &gh_config, &keychains] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        // A real trusted gh reads only this synthetic store; no PATH substitution
+        // or credential-store lookup is needed to exercise parent extraction.
+        fs::write(
+            gh_config.join("hosts.yml"),
+            "github.com:\n    user: fixture-gh\n    oauth_token: synthetic-gh-credential\n    git_protocol: https\n",
+        )
+        .unwrap();
+        fs::write(keychains.join("probe"), "synthetic-keychain-file").unwrap();
+        let agent = bin.join("copilot");
+        fs::write(
+            &agent,
+            r#"#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = --version ]; then echo '1.0.94'; exit 0; fi
+done
+case "$COPILOT_GITHUB_TOKEN" in
+  synthetic-copilot-credential) echo COPILOT_SOURCE_EXPLICIT ;;
+  '') echo COPILOT_SOURCE_ABSENT ;;
+  *) exit 41 ;;
+esac
+[ -z "$GH_TOKEN$GITHUB_TOKEN" ] || exit 42
+if [ -n "$__CPLT_GH_TOKEN_DIR" ]; then
+  [ "$(/bin/cat "$__CPLT_GH_TOKEN_DIR/.gh-exec-token")" = synthetic-gh-credential ] || exit 43
+  echo GH_EXEC_CACHE_PRESENT
+else
+  echo GH_EXEC_CACHE_ABSENT
+fi
+if /bin/cat "$HOME/Library/Keychains/probe" >/dev/null 2>&1; then
+  echo KEYCHAIN_FILE_ALLOWED
+else
+  echo KEYCHAIN_FILE_DENIED
+fi
+gh api repos/fixture/repo --hostname github.com || exit 44
+echo AGENT_COMPLETED
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+        let child_gh = bin.join("gh");
+        // Only the sandboxed gh is fake. It checks the gate's env without making
+        // an HTTP request; the unsandboxed parent still resolves trusted gh.
+        fs::write(&child_gh, r#"#!/bin/sh
+[ "$1 $2" = 'api repos/fixture/repo' ] || exit 45
+token="$GH_TOKEN"
+if [ -z "$token" ]; then
+  if /usr/bin/grep -q 'oauth_token: synthetic-gh-credential' "$HOME/.config/gh/hosts.yml" 2>/dev/null; then token=synthetic-gh-credential; fi
+fi
+case "$token" in
+  synthetic-gh-credential) echo GH_SOURCE_STORED ;;
+  '') echo GH_SOURCE_ABSENT ;;
+  *) exit 46 ;;
+esac
+"#).unwrap();
+        fs::set_permissions(child_gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([
+            bin.as_path(),
+            gh.parent().unwrap(),
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ])
+        .unwrap();
+        let config = home.path().join("cplt.toml");
+        fs::write(&config, "[sandbox]\nkeychain_substitute = true\n").unwrap();
+        for (guard, deny, copilot, cache, stored, keychain) in [
+            (true, "", true, true, true, false),
+            (true, "\"GITHUB_TOKEN\"", true, true, true, false),
+            (false, "", true, false, false, false),
+            (true, "\"GH_TOKEN\"", true, false, false, false),
+            (
+                true,
+                "\"COPILOT_GITHUB_TOKEN\", \"GH_TOKEN\", \"GITHUB_TOKEN\"",
+                false,
+                false,
+                false,
+                true,
+            ),
+            (
+                false,
+                "\"COPILOT_GITHUB_TOKEN\", \"GH_TOKEN\", \"GITHUB_TOKEN\"",
+                false,
+                false,
+                false,
+                true,
+            ),
+        ] {
+            project.write_file(".cplt.toml", &format!("[deny]\nenv = [{deny}]\n"));
+            let mut cmd = cplt_cmd();
+            cmd.env_clear()
+                .env("CPLT_CONFIG", &config)
+                .env("NO_COLOR", "1")
+                .env("HOME", home.path())
+                .env("GH_CONFIG_DIR", &gh_config)
+                .env("PATH", &path)
+                .env("COPILOT_GITHUB_TOKEN", "synthetic-copilot-credential")
+                .current_dir(project.path())
+                .args([
+                    "--agent",
+                    "copilot",
+                    "--yes",
+                    "--no-proxy",
+                    "--no-audit",
+                    "--no-git-guard",
+                    if guard { "--gh-guard" } else { "--no-gh-guard" },
+                ]);
+            if deny == "\"GITHUB_TOKEN\"" {
+                // The effective child env must win over an ambient token that
+                // is removed only after cache setup.
+                cmd.env("GITHUB_TOKEN", "synthetic-denied-credential");
+            }
+            let out = cmd.output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success(),
+                "guard={guard}, deny={deny}: {stdout}\n{stderr}"
+            );
+            for expected in [
+                if copilot {
+                    "COPILOT_SOURCE_EXPLICIT"
+                } else {
+                    "COPILOT_SOURCE_ABSENT"
+                },
+                if cache {
+                    "GH_EXEC_CACHE_PRESENT"
+                } else {
+                    "GH_EXEC_CACHE_ABSENT"
+                },
+                if stored {
+                    "GH_SOURCE_STORED"
+                } else {
+                    "GH_SOURCE_ABSENT"
+                },
+                if keychain {
+                    "KEYCHAIN_FILE_ALLOWED"
+                } else {
+                    "KEYCHAIN_FILE_DENIED"
+                },
+                "AGENT_COMPLETED",
+            ] {
+                assert!(
+                    stdout.contains(expected),
+                    "expected {expected}: {stdout}\n{stderr}"
+                );
+            }
+            for secret in [
+                "synthetic-copilot-credential",
+                "synthetic-gh-credential",
+                "synthetic-denied-credential",
+            ] {
+                assert!(!stdout.contains(secret) && !stderr.contains(secret));
+            }
+        }
+    }
+
     /// A temporary project directory with realistic file structure.
     ///
     /// Backed by a `tempfile::TempDir` so it auto-deletes on drop — including
