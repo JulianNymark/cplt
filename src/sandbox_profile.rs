@@ -239,7 +239,7 @@ pub fn generate_profile_with_playwright_socket_dir(
     // write allow above. It ends with K/N's lock `file-write-data` allow,
     // which is why it sits here and not at the tail: the denies below
     // (nested `.git` creation, #576) must follow every write allow.
-    emit_toolchain_write_deny(&mut sb, &home, config.extra_deny);
+    emit_toolchain_write_deny(&mut sb, config, &home);
     // Sensitive project file denies MUST come after all user-configured allows.
     // SBPL uses last-match-wins, so a user allow like `allow.read = ["~/Repos"]`
     // would override the .env deny if emitted before it.
@@ -1977,7 +1977,7 @@ fn emit_toolchain_exec(sb: &mut String, home: &str) {
 /// `allow.write` covering `~/.gradle` (or any parent) would otherwise override
 /// a write-deny emitted alongside the exec allow and silently reopen the hole.
 /// Same rationale as `emit_dotnet_exec_denies`.
-fn emit_toolchain_write_deny(sb: &mut String, home: &str, extra_deny: &[PathBuf]) {
+fn emit_toolchain_write_deny(sb: &mut String, config: &SandboxConfig, home: &str) {
     sbpl!(
         sb,
         ";; Provisioned toolchains — exec-allowed paths stay read-only"
@@ -1991,7 +1991,7 @@ fn emit_toolchain_write_deny(sb: &mut String, home: &str, extra_deny: &[PathBuf]
     // Emitted after the user's `--deny-path` rules, so it would reopen one
     // covering the lock: withheld then, like the opt-in re-allows.
     const LOCK: &str = ".konan/dependencies/cache/.lock";
-    if let Some(deny) = overlapping_home_deny(extra_deny, home, LOCK) {
+    if let Some(deny) = overlapping_home_deny(config.extra_deny, home, LOCK) {
         withhold_reallow(sb, "Kotlin/Native", &format!("~/{LOCK}"), deny);
     } else {
         sbpl!(sb, "(allow file-write-data (literal \"{home}/{LOCK}\"))");

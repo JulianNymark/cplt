@@ -3122,6 +3122,147 @@ int main(int argc, char **argv) {
         );
     }
 
+    /// #694: user-installed JDKs in `~/Library/Java/JavaVirtualMachines` must be
+    /// discovered by `discover_tools`, readable, executable (`process-exec`),
+    /// mappable (`file-map-executable` for `libjvm.dylib`), and read-only by
+    /// default. Under an overlapping `allow.write` on `~/Library`, `process-exec`
+    /// is stripped by `emit_user_write_exec_denies` (#243) to prevent write-then-exec.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test helper invokes /usr/bin/cc to build Mach-O binary + dylib fixtures
+    fn real_profile_user_java_virtual_machines_reads_execs_maps_and_denies_write() {
+        require_sandbox!();
+        use std::io::Write as _;
+
+        let project = tempfile::Builder::new()
+            .prefix(".cplt-jvms-proj-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .unwrap();
+        let home = tempfile::Builder::new()
+            .prefix(".cplt-jvms-home-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .unwrap();
+        let project_path = fs::canonicalize(project.path()).unwrap();
+        let home_path = fs::canonicalize(home.path()).unwrap();
+
+        let jdk_home =
+            home_path.join("Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home");
+        fs::create_dir_all(jdk_home.join("bin")).unwrap();
+        fs::create_dir_all(jdk_home.join("lib/server")).unwrap();
+        let release_file = jdk_home.join("release");
+        fs::write(&release_file, "JAVA_VERSION=\"21\"\n").unwrap();
+
+        let dylib = jdk_home.join("lib/server/libjvm.dylib");
+        let mut cc_dylib = std::process::Command::new("/usr/bin/cc")
+            .args(["-dynamiclib", "-x", "c", "-", "-o"])
+            .arg(&dylib)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn /usr/bin/cc for dylib");
+        cc_dylib
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"int jdk_probe(void) { return 42; }\n")
+            .unwrap();
+        assert!(
+            cc_dylib.wait().unwrap().success(),
+            "cc -dynamiclib must succeed"
+        );
+
+        let java_bin = jdk_home.join("bin/java");
+        let mut cc_bin = std::process::Command::new("/usr/bin/cc")
+            .args(["-x", "c", "-", "-o"])
+            .arg(&java_bin)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn /usr/bin/cc for java binary");
+        cc_bin
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(
+                b"#include <dlfcn.h>\n\
+                  #include <stdio.h>\n\
+                  int main(int argc, char **argv) {\n\
+                      printf(\"EXEC_OK\\n\");\n\
+                      if (argc > 1) {\n\
+                          void *h = dlopen(argv[1], RTLD_NOW);\n\
+                          int (*fn)(void) = h ? (int (*)(void))dlsym(h, \"jdk_probe\") : 0;\n\
+                          if (fn && fn() == 42) printf(\"MAP_EXEC_OK\\n\");\n\
+                      }\n\
+                      return 0;\n\
+                  }\n",
+            )
+            .unwrap();
+        assert!(cc_bin.wait().unwrap().success(), "cc binary must succeed");
+
+        let discovery = cplt::discover::discover_tools(&home_path, &[]);
+        assert!(
+            discovery
+                .existing_home_tool_dirs
+                .iter()
+                .any(|d| d.dir.path == "Library/Java/JavaVirtualMachines"),
+            "discover_tools must find Library/Java/JavaVirtualMachines"
+        );
+
+        let mut opts = default_opts(&project_path, &home_path);
+        opts.existing_home_tool_dirs = Some(&discovery.existing_home_tool_dirs);
+        let profile = write_real_profile(&opts);
+
+        let jvms = home_path.join("Library/Java/JavaVirtualMachines");
+        let cmd = format!(
+            "grep -q '21' '{rel}' && echo READ_OK; \
+             '{java}' '{dylib}'; \
+             echo pwn > '{jvms}/pwn' 2>/dev/null && echo WRITE_RAN; \
+             echo pwn > '{java}' 2>/dev/null && echo OVERWRITE_RAN; \
+             true",
+            rel = release_file.display(),
+            java = java_bin.display(),
+            dylib = dylib.display(),
+            jvms = jvms.display(),
+        );
+        let (output, _) = run_sandboxed(&profile, &cmd);
+        fs::remove_file(&profile).ok();
+
+        assert!(
+            output.contains("READ_OK"),
+            "reading JDK release must succeed: {output}"
+        );
+        assert!(
+            output.contains("EXEC_OK"),
+            "executing JDK binary must succeed: {output}"
+        );
+        assert!(
+            output.contains("MAP_EXEC_OK"),
+            "dlopen of Mach-O dylib inside JavaVirtualMachines must succeed: {output}"
+        );
+        for forbidden in ["WRITE_RAN", "OVERWRITE_RAN"] {
+            assert!(
+                !output.contains(forbidden),
+                "{forbidden}: JavaVirtualMachines must be read-only by default: {output}"
+            );
+        }
+
+        // Under an overlapping allow.write on ~/Library, process-exec is stripped
+        // (#243) so the writable tree cannot become a write-then-exec primitive.
+        let library_dir = home_path.join("Library");
+        let extra_write = [library_dir];
+        let mut writable_opts = default_opts(&project_path, &home_path);
+        writable_opts.existing_home_tool_dirs = Some(&discovery.existing_home_tool_dirs);
+        writable_opts.extra_write = &extra_write;
+        let writable_profile = write_real_profile(&writable_opts);
+        let writable_cmd = format!(
+            "'{java}' 2>/dev/null && echo EXEC_UNDER_WRITE_RAN; true",
+            java = java_bin.display(),
+        );
+        let (writable_out, _) = run_sandboxed(&writable_profile, &writable_cmd);
+        fs::remove_file(&writable_profile).ok();
+        assert!(
+            !writable_out.contains("EXEC_UNDER_WRITE_RAN"),
+            "overlapping allow.write on ~/Library must strip process-exec on JavaVirtualMachines (#243): {writable_out}"
+        );
+    }
+
     // ── Scratch dir ───────────────────────────────────────────────
 
     #[test]

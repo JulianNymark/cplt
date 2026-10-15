@@ -2886,7 +2886,7 @@ fn write_exec_deny_comes_after_every_broad_exec_allow() {
         "/Users/test/.bun/install",
         "/Users/test/Library/pnpm/package-manager-store",
         "/Users/test/.local/share/pnpm/package-manager-store",
-        // Executable and write-denied: `emit_copilot_pkg_denies` follows.
+        // Executable and write-denied: `emit_copilot_pkg_denies`.
         "/Users/test/Library/Caches/copilot/pkg",
     ];
     const PREFIX: &str = "(allow process-exec (subpath \"";
@@ -3903,6 +3903,7 @@ fn home_tool_dirs_has_all_runtime_entries() {
         ".cargo/bin",
         ".rustup",
         ".sdkman",
+        "Library/Java/JavaVirtualMachines",
         "go/bin",
     ] {
         assert!(
@@ -3951,6 +3952,73 @@ fn home_tool_dirs_has_all_runtime_entries() {
         !paths.contains(&".config/pnpm"),
         ".config/pnpm should NOT be in HOME_TOOL_DIRS (handled by AppDirs)"
     );
+}
+
+#[test]
+fn profile_grants_user_java_virtual_machines_read_and_exec() {
+    let p = generate_profile(&base_profile_options(), &[]);
+    let jvms = "/Users/test/Library/Java/JavaVirtualMachines";
+    for op in ["file-read*", "process-exec", "file-map-executable"] {
+        let rule = format!("(allow {op} (subpath \"{jvms}\"))");
+        assert!(p.contains(&rule), "missing {rule} in profile:\n{p}");
+    }
+    assert!(
+        !p.contains(&format!("(allow file-write* (subpath \"{jvms}\"))")),
+        "{jvms} must remain read-only"
+    );
+
+    let extra_write = [PathBuf::from("/Users/test/Library")];
+    let p_writable = generate_profile(
+        &SandboxConfig {
+            extra_write: &extra_write,
+            ..base_profile_options()
+        },
+        &[],
+    );
+    let exec_allow = p_writable
+        .rfind(&format!("(allow process-exec (subpath \"{jvms}\"))"))
+        .expect("tool dir exec allow must be emitted");
+    let exec_deny = p_writable
+        .rfind("(deny process-exec (subpath \"/Users/test/Library\"))")
+        .expect("allow.write exec deny must be emitted");
+    assert!(
+        exec_deny > exec_allow,
+        "overlapping allow.write must strip process-exec on {jvms} (#243):\n{p_writable}"
+    );
+
+    let fake_home = tempfile::tempdir().unwrap();
+    let jvms_dir = fake_home
+        .path()
+        .join("Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home");
+    std::fs::create_dir_all(&jvms_dir).unwrap();
+    let discovery = cplt::discover::discover_tools(fake_home.path(), &[]);
+    assert!(
+        discovery
+            .existing_home_tool_dirs
+            .iter()
+            .any(|d| d.dir.path == "Library/Java/JavaVirtualMachines"),
+        "discover_tools must record Library/Java/JavaVirtualMachines when present"
+    );
+
+    let mut opts = base_profile_options();
+    opts.home_dir = fake_home.path();
+    opts.existing_home_tool_dirs = Some(&discovery.existing_home_tool_dirs);
+    let policy = generate_policy(&opts);
+    let expected = fake_home.path().join("Library/Java/JavaVirtualMachines");
+    let rule = policy
+        .fs_rules
+        .iter()
+        .find(|r| r.path == expected)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing Landlock rule for {}: {:?}",
+                expected.display(),
+                policy.fs_rules
+            )
+        });
+    assert!(rule.access.read, "Landlock rule must grant read");
+    assert!(rule.access.execute, "Landlock rule must grant execute");
+    assert!(!rule.access.write, "Landlock rule must not grant write");
 }
 
 // ============================================================
