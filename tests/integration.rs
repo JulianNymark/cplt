@@ -472,6 +472,7 @@ mod macos_tests {
             named_roots: &[],
             named_root_git_dirs: &[],
             managed_worktree_root: None,
+            worktree_socket: None,
             existing_home_tool_dirs: None,
             existing_app_dirs: None,
             extra_ports: &[],
@@ -2276,6 +2277,96 @@ int main(int argc, char **argv) {
         );
         assert!(!deeper, "<root>/<name>/sub/.git must stay denied by #531");
         assert!(!ordinary, "an ordinary writable root keeps the nested deny");
+    }
+
+    /// #531 broker: the sandbox connects to the one broker socket it was
+    /// granted, and to no other Unix socket, including a sibling in the same
+    /// directory. Without the grant the connect is refused.
+    #[test]
+    fn real_profile_grants_connect_to_the_broker_socket_only() {
+        require_sandbox!();
+        let home = home_dir();
+        let dir = fs::canonicalize(".")
+            .unwrap()
+            .join(format!(".cplt-brk-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = fs::canonicalize(&dir).unwrap();
+        let granted = dir.join("s");
+        let other = dir.join("o");
+        let _l1 = std::os::unix::net::UnixListener::bind(&granted).unwrap();
+        let _l2 = std::os::unix::net::UnixListener::bind(&other).unwrap();
+
+        let run = |socket: Option<&Path>| {
+            let mut opts = default_opts(&dir, &home);
+            opts.worktree_socket = socket;
+            let profile = write_real_profile(&opts);
+            let probe = format!(
+                "import socket\nfor p in [{g}, {o}]:\n  s = socket.socket(socket.AF_UNIX)\n  \
+                 try:\n    s.connect(p)\n    print('OK', p)\n  except OSError as e:\n    \
+                 print('DENIED', p, e.errno)\n",
+                g = python_path_literal(&granted),
+                o = python_path_literal(&other),
+            );
+            // `-I` keeps the working directory off sys.path: the profile is not
+            // meant to grant that, and the probe is about sockets only.
+            let (output, _) = run_sandboxed(
+                &profile,
+                &python_inline_command(&probe).replacen("python3 -c", "python3 -I -c", 1),
+            );
+            fs::remove_file(&profile).ok();
+            output
+        };
+        let granted_out = run(Some(&granted));
+        let none_out = run(None);
+        fs::remove_dir_all(&dir).ok();
+        let granted_path = granted.display();
+        let other_path = other.display();
+        assert!(
+            granted_out.contains(&format!("OK {granted_path}")),
+            "the granted socket connects: {granted_out}"
+        );
+        assert!(
+            granted_out.contains(&format!("DENIED {other_path}")),
+            "a sibling socket stays closed: {granted_out}"
+        );
+        assert!(
+            !none_out.contains("OK "),
+            "with no grant, nothing connects: {none_out}"
+        );
+    }
+
+    #[test]
+    fn real_profile_staging_deny_beats_overlapping_user_writes() {
+        require_sandbox!();
+        let project = fs::canonicalize(".").unwrap();
+        let temp = tempfile::tempdir_in(&project).unwrap();
+        let base = temp.path().join(".cplt-worktrees");
+        let root = base.join("managed");
+        let staging = base.join(".staging");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("private"), "secret\n").unwrap();
+        let home = home_dir();
+        let writes = [temp.path().to_path_buf()];
+        let mut opts = default_opts(&project, &home);
+        opts.extra_write = &writes;
+        opts.managed_worktree_root = Some(&root);
+        let profile = write_real_profile(&opts);
+        let script = format!(
+            "if cat '{s}/private'; then echo LEAK; else echo READ_DENIED; fi; if touch '{s}/new'; then echo WRITE; else echo WRITE_DENIED; fi; if mv '{b}' '{b}-moved'; then echo MOVED; else echo RENAME_DENIED; fi; touch '{r}/allowed' && echo ROOT_OK",
+            s = staging.display(),
+            b = base.display(),
+            r = root.display()
+        );
+        let (output, _) = run_sandboxed(&profile, &script);
+        fs::remove_file(profile).unwrap();
+        for result in ["READ_DENIED", "WRITE_DENIED", "RENAME_DENIED", "ROOT_OK"] {
+            assert!(output.contains(result), "{output}");
+        }
+        assert_eq!(
+            fs::read_to_string(staging.join("private")).unwrap(),
+            "secret\n"
+        );
     }
 
     #[test]

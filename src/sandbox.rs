@@ -185,6 +185,10 @@ pub struct SandboxConfig<'a> {
     /// `Some` adds the macOS pins that only matter with the key on: the root's
     /// name, and each `<gitdir>/worktrees/<name>/commondir` against rewrite.
     pub managed_worktree_root: Option<&'a Path>,
+    /// The broker socket for `cplt worktree add` (#531), granted outbound as
+    /// one exact path. `Some` only with the managed root on, and only from
+    /// `assemble_sandbox` after the broker has bound it.
+    pub worktree_socket: Option<&'a Path>,
     pub home_dir: &'a Path,
     pub extra_read: &'a [PathBuf],
     pub extra_write: &'a [PathBuf],
@@ -328,6 +332,9 @@ pub struct PreparedSandbox {
     /// launcher with [`Self::set_worktree_root`] after `prepare`; the grant
     /// itself comes from `SandboxConfig::named_roots`.
     worktree_root: Option<PathBuf>,
+    /// Exported to the child as `CPLT_WORKTREE_SOCKET`, set by the launcher
+    /// with [`Self::set_worktree_socket`].
+    worktree_socket: Option<PathBuf>,
     /// Set on the child last, after the sandbox environment (OpenCode v2, #710).
     extra_env: Vec<(String, String)>,
     /// An OpenCode v2 session (#710): no gh handover via OPENCODE_AUTH_CONTENT.
@@ -368,6 +375,22 @@ impl PreparedSandbox {
     /// roots, or the variable would name a directory the agent cannot use.
     pub fn set_worktree_root(&mut self, root: Option<&Path>) {
         self.worktree_root = root.map(Path::to_path_buf);
+    }
+
+    /// Name the broker socket to the child as `CPLT_WORKTREE_SOCKET`. Only
+    /// meaningful with the root set: the profile grants the socket and the
+    /// managed root together.
+    pub fn set_worktree_socket(&mut self, socket: Option<&Path>) {
+        self.worktree_socket = socket.map(Path::to_path_buf);
+    }
+
+    /// Reapply after late agent-specific grants, before capturing the broker's
+    /// read policy. Same-user staging privacy comes from Seatbelt, not mode 0700.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn protect_worktree_staging(&mut self) {
+        if let Some(root) = &self.worktree_root {
+            profile::protect_worktree_staging(&mut self.profile_text, root);
+        }
     }
 
     /// Add an OpenCode v2 session (#710): its rules go at the end of the
@@ -437,6 +460,8 @@ impl PreparedSandbox {
         }
         self.extra_env = session.env;
         self.opencode_v2 = true;
+        #[cfg(target_os = "macos")]
+        self.protect_worktree_staging();
         Ok(())
     }
 
@@ -2075,6 +2100,7 @@ fn prepare_impl(
         npmrc_allowed: env::npmrc_explicitly_allowed(config.home_dir, config.extra_read),
         keychain_substitute: config.keychain_substitute.clone(),
         worktree_root: None,
+        worktree_socket: None,
         extra_env: Vec::new(),
         opencode_v2: false,
     })
@@ -2948,6 +2974,7 @@ fn prepare_impl(
         npmrc_allowed: env::npmrc_explicitly_allowed(config.home_dir, config.extra_read),
         keychain_substitute: config.keychain_substitute.clone(),
         worktree_root: None,
+        worktree_socket: None,
         extra_env: Vec::new(),
         opencode_v2: false,
         policy,
@@ -2992,6 +3019,9 @@ fn validate_config_paths(config: &SandboxConfig) -> Result<(), String> {
     // interpolates it into the managed-root rules as well (#574).
     if let Some(root) = config.managed_worktree_root {
         policy::validate_sbpl_path(root).map_err(|e| format!("Managed worktree root: {e}"))?;
+    }
+    if let Some(socket) = config.worktree_socket {
+        policy::validate_sbpl_path(socket).map_err(|e| format!("Worktree broker socket: {e}"))?;
     }
     if let Some(dir) = config.copilot_install_dir {
         policy::validate_sbpl_path(dir).map_err(|e| format!("Copilot install dir: {e}"))?;
@@ -3247,6 +3277,7 @@ mod tests {
             named_roots: &[],
             named_root_git_dirs: &[],
             managed_worktree_root: None,
+            worktree_socket: None,
             existing_home_tool_dirs: None,
             existing_app_dirs: None,
             extra_ports: &[],
@@ -3286,9 +3317,34 @@ mod tests {
         }
     }
 
-    /// #719 unit 4: an OpenCode v2 session's port joins the connect allowlist
-    /// of the rules the child gets; the host default port does not. `/proc`
-    /// is read only under bubblewrap, and without it v2 is refused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn late_opencode_grants_cannot_reopen_broker_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(temp.path()).unwrap();
+        let mut config = test_config(&home, &[]);
+        let root = home.join(".cplt-worktrees/repo");
+        std::fs::create_dir_all(&root).unwrap();
+        config.managed_worktree_root = Some(&root);
+        let mut sandbox = prepare(&config).unwrap();
+        sandbox.set_worktree_root(Some(&root));
+        let grant = format!(
+            "(allow file-read* file-write* (subpath \"{}\"))\n",
+            home.display()
+        );
+        sandbox
+            .add_opencode_v2(crate::opencode_v2::Session {
+                env: Vec::new(),
+                port: 50123,
+                sbpl_before_denies: String::new(),
+                sbpl: grant.clone(),
+            })
+            .unwrap();
+        let text = describe(&sandbox);
+        assert!(text.rfind(";; Broker staging is private").unwrap() > text.rfind(&grant).unwrap());
+    }
+
+    /// #719: v2's port joins the allowlist; /proc requires bubblewrap.
     #[cfg(target_os = "linux")]
     #[test]
     fn opencode_v2_session_port_is_allowed_and_the_host_port_is_not() {

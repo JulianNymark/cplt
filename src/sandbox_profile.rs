@@ -219,6 +219,7 @@ pub fn generate_profile_with_playwright_socket_dir(
     emit_gpg_signing_rules(&mut sb, &home, config.allow_gpg_signing, config.extra_deny);
     emit_docker_rules(&mut sb, &home, config.allow_docker, config.extra_deny);
     emit_socket_rules(&mut sb, config.extra_socket, config.extra_deny);
+    emit_worktree_broker(&mut sb, config.worktree_socket);
     emit_network_rules(
         &mut sb,
         &home,
@@ -293,6 +294,9 @@ pub fn generate_profile_with_playwright_socket_dir(
     // MUST stay last: see `emit_exec_write_denies`. An exec grant that could be
     // reopened for writing by a later allow is a write-then-exec path.
     emit_exec_write_denies(&mut sb, config.extra_exec);
+    if let Some(root) = config.managed_worktree_root {
+        protect_worktree_staging(&mut sb, root);
+    }
 
     sb
 }
@@ -3052,6 +3056,55 @@ const DOCKER_SOCKET_PATHS: &[&str] = &[
     "Library/Application Support/rancher-desktop/lima/docker.sock", // Rancher Desktop
 ];
 
+/// `cplt worktree add` (#531): connect to the broker's one socket, nothing
+/// else. The path is the exact one the broker bound, which lives in a random
+/// short private directory whose name and contents the sandbox cannot write,
+/// so the session cannot be pointed at another session's socket. Outbound
+/// only: the broker listens in the parent, the sandbox never binds.
+fn emit_worktree_broker(sb: &mut String, socket: Option<&Path>) {
+    let Some(socket) = socket else {
+        return;
+    };
+    sbpl!(
+        sb,
+        ";; Managed worktree broker socket (cplt worktree add, #531)"
+    );
+    sbpl!(
+        sb,
+        "(allow network-outbound (remote unix-socket (path-literal \"{}\")))",
+        socket.display()
+    );
+    if let Some(dir) = socket.parent() {
+        // The temp directory is otherwise writable. Pin the directory itself
+        // too, so renaming it cannot replace the exact socket grant's target.
+        sbpl!(sb, "(deny file-write* (subpath \"{}\"))", dir.display());
+    }
+    sbpl!(sb);
+}
+
+/// A temp HOME or user write grant may cover the broker base. Deny staging
+/// explicitly and pin its ancestors without denying managed-root descendants.
+/// The broker child adds access only to its random request directory afterwards.
+pub(super) fn protect_worktree_staging(sb: &mut String, root: &Path) {
+    // prepare validates the managed-root spelling; non-existent paths are also
+    // used by pure profile tests. Real launches already created the base.
+    let base = root.parent().expect("managed root has a base");
+    let base = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    sbpl!(sb, ";; Broker staging is private even below user grants");
+    sbpl!(
+        sb,
+        "(deny file-read* file-write* (subpath \"{}/.staging\"))",
+        base.display()
+    );
+    for ancestor in base.ancestors().filter(|p| p.parent().is_some()) {
+        sbpl!(
+            sb,
+            "(deny file-write* (literal \"{}\"))",
+            ancestor.display()
+        );
+    }
+}
+
 fn emit_socket_rules(sb: &mut String, allow_socket: &[PathBuf], extra_deny: &[PathBuf]) {
     if allow_socket.is_empty() {
         return;
@@ -4225,6 +4278,7 @@ mod tests {
             named_roots: &[],
             named_root_git_dirs: &[],
             managed_worktree_root: None,
+            worktree_socket: None,
             existing_home_tool_dirs: None,
             existing_app_dirs: None,
             extra_ports: &[],

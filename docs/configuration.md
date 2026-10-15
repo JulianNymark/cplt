@@ -447,11 +447,61 @@ cplt config set sandbox.allow_git_worktrees true           # every repository
 cplt config set --local sandbox.allow_git_worktrees true   # this checkout only
 ```
 
-Inside the sandbox:
+Inside the sandbox, create a worktree with the managed command:
 
 ```bash
-git worktree add "$CPLT_WORKTREE_ROOT/<name>" -b <branch>
+cplt worktree add <name> <ref>                         # detached at <ref>; prints the path
+git -C "$CPLT_WORKTREE_ROOT/<name>" switch -c <branch>  # only if you want a branch
 ```
+
+`cplt worktree add` checks out `<ref>` (a branch, tag or commit in the local
+repository) with HEAD detached. The broker runs Git under the session's read
+policy, checks the private checkout, and publishes it atomically. It:
+
+- never fetches from a remote and never runs a hook, a filter driver or a
+  config value from the repository. A `filter.*` entry in the repository's or
+  your global git config refuses the command because private checkout cannot
+  reproduce filtered content. Private config, not this preflight check, prevents
+  execution. Git attributes can still transform ordinary files;
+- preserves tracked protected files exactly as recorded in the launch checkout's
+  HEAD, including `.cplt.toml`, `.github/hooks` and nested agent configuration.
+  Adding, removing, changing or renaming any protected file refuses the request,
+  as does changing its executable mode or checkout bytes. Prepare worktrees with
+  different protected content outside cplt. Ordinary tracked files may differ;
+- refuses a symlink that leads out of the worktree, a nested repository or bare
+  repository in the tree, and a name that already exists. An existing worktree
+  is never replaced;
+- also refuses dangling symlinks and symlink targets with `..` after a named
+  component, matching the launch/exit checks;
+- creates no branch, so a refused or failed request leaves no ref behind.
+
+`<name>` is letters, digits, `.`, `_` and `-`, starting with a letter or digit,
+at most 64 characters. Plain `git worktree add` inside the sandbox still works
+as before, but git runs it directly and none of the checks above apply.
+
+The command works only in a session cplt started, on macOS. The worktrees it
+creates outlive the session, like any other in the root.
+The broker requires a launch HEAD commit whose protected bytes and executable
+modes match the checkout. Symlinked protected paths or ancestors, filesystem
+aliases of protected names, and protected files larger than 1 MiB are refused.
+Ordinary Unicode names remain allowed. Tree queries are capped at 1 MiB and
+200,000 entries. Protected names and their declared ancestors must use the exact
+spelling in `PROTECTED_IN_ROOT`, even if a case or Unicode alias is tracked.
+The launch scan follows only tracked HEAD paths and their ancestors. Local or
+ignored protected config and dependency trees are not approved or copied, and
+do not disable the broker. Tracked protected files must still match disk, and
+tracked aliases are refused. Every entry of the staged requested checkout is
+checked before publication. An unavailable launch snapshot disables the broker with a
+warning and leaves `CPLT_WORKTREE_SOCKET` unset; the session and managed root
+remain available. Prepare worktrees outside cplt in that case. No partial
+protected-file snapshot is accepted. A global `filter.*` configuration, including
+Git LFS, can also make this convenience unavailable or refuse requests even
+when the requested tree does not use the filter.
+
+Requests share a serial queue. A client timeout does not cancel a queued request;
+check `$CPLT_WORKTREE_ROOT/<name>` before retrying because it may still publish.
+Private staging cleanup runs after the
+60-second operation budget and can extend shutdown time.
 
 What you get:
 
